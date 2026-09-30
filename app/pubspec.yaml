@@ -1,0 +1,25 @@
+name: mttl_hub
+description: MTTL Hub — control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud).
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  http: ^1.2.2
+  mqtt_client: ^10.5.1
+  shared_preferences: ^2.3.2
+  google_fonts: ^6.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
