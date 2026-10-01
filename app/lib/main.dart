@@ -3,16 +3,17 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
 import 'i18n.dart';
+import 'screens/energy_screen.dart';
+import 'screens/events_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/placeholder_screen.dart';
+import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
+import 'widgets/common.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  final state = AppState();
-  await state.init();
-  runApp(MttlApp(state: state));
+  runApp(MttlApp(state: AppState()));
 }
 
 class MttlApp extends StatefulWidget {
@@ -25,6 +26,7 @@ class MttlApp extends StatefulWidget {
 
 class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
   late String _sig;
+  bool _booted = false;
 
   AppState get s => widget.state;
 
@@ -34,6 +36,12 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _sig = _signature();
     s.addListener(_onState);
+    _boot();
+  }
+
+  Future<void> _boot() async {
+    await Future.wait([s.init(), Future.delayed(const Duration(milliseconds: 1100))]);
+    if (mounted) setState(() => _booted = true);
   }
 
   @override
@@ -43,7 +51,6 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // Rebuild the whole app only when the theme or language actually changes.
   String _signature() => '${s.themePref.index}-${s.langPref.index}';
 
   void _onState() {
@@ -75,20 +82,19 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
       case LangPref.en:
         return 'en';
       case LangPref.system:
-        final l = WidgetsBinding.instance.platformDispatcher.locale.languageCode;
-        return l == 'en' ? 'en' : (l == 'ar' ? 'ar' : 'ar');
+        return WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'en' ? 'en' : 'ar';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final dark = _isDark();
+    final dark = _booted ? _isDark() : true;
     final lang = _lang();
     C.use(dark);
     Tr.lang = lang;
     return MaterialApp(
       key: ValueKey('$dark-$lang'),
-      title: 'MTTL Hub',
+      title: 'Fisha',
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       locale: Locale(lang),
@@ -98,14 +104,89 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: Shell(state: s),
+      home: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 500),
+        child: _booted ? Shell(key: const ValueKey('shell'), state: s) : const BootScreen(key: ValueKey('boot')),
+      ),
     );
   }
 }
 
-class Shell extends StatelessWidget {
+class BootScreen extends StatefulWidget {
+  const BootScreen({super.key});
+
+  @override
+  State<BootScreen> createState() => _BootScreenState();
+}
+
+class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..forward();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1117),
+      body: Center(
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (_, child) {
+            final v = Curves.easeOutBack.transform(_c.value.clamp(0.0, 1.0));
+            return Opacity(opacity: _c.value, child: Transform.scale(scale: 0.7 + 0.3 * v, child: child));
+          },
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const BrandMark(size: 120),
+            const SizedBox(height: 8),
+            Text(t('app_name'), style: const TextStyle(color: Color(0xFFF2B544), fontSize: 30, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            const Text('By: ahmadalhelly', style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 12)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class Shell extends StatefulWidget {
   final AppState state;
   const Shell({super.key, required this.state});
+
+  @override
+  State<Shell> createState() => _ShellState();
+}
+
+class _ShellState extends State<Shell> {
+  AppState get state => widget.state;
+
+  @override
+  void initState() {
+    super.initState();
+    state.addListener(_onState);
+  }
+
+  @override
+  void dispose() {
+    state.removeListener(_onState);
+    super.dispose();
+  }
+
+  void _onState() {
+    if (!mounted) return;
+    final err = state.lastError;
+    if (err != null) {
+      state.clearError();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
+    final alert = state.takeAlert();
+    if (alert != null && const {'temp', 'load', 'automation', 'missed', 'cycle', 'auto_off'}.contains(alert.type)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(eventText(state, alert))));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,9 +194,9 @@ class Shell extends StatelessWidget {
       listenable: state,
       builder: (context, _) {
         final pages = [
-          HomeScreen(state: state, onOpenSettings: () => state.setTab(3)),
-          PlaceholderScreen(title: t('nav_sched'), note: t('ph_sched')),
-          PlaceholderScreen(title: t('nav_energy'), note: t('ph_energy')),
+          HomeScreen(state: state),
+          SchedulesScreen(state: state),
+          EnergyScreen(state: state),
           SettingsScreen(state: state),
         ];
         return Scaffold(
