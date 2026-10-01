@@ -22,6 +22,10 @@ String provErrorText(String code) {
   if (code == 'no_ap') return t('prov_no_ap');
   if (code == 'join_failed') return t('prov_join');
   if (code == 'no_dial') return t('prov_no_dial');
+  if (code == 'still_setup') {
+    return _tr('المشترك استلم الإعدادات بس لسه في وضع الإعداد. افصله من الكهربا 10 ثواني ورجّعه، وهو هيتصل بالـ Hub لوحده.',
+        'The strip took the settings but is still in setup mode. Unplug it for 10 seconds and plug it back in; it will dial the hub by itself.');
+  }
   if (code.startsWith('strip_said:')) return t('prov_said', {'x': code.substring(11)});
   if (code == 'no answer on 30300') return t('prov_said', {'x': code});
   return code.isEmpty ? t('add_timeout') : code;
@@ -111,9 +115,12 @@ class _AddStripScreenState extends State<AddStripScreen> {
     if (!mounted || (_step != _Step.running && _step != _Step.waiting)) return;
     final st = s.provState;
     if (_sawActive && st == 'error') return _finish(_Step.error, provErrorText(s.provMsg));
-    if (_sawActive && st == 'connected') return _finish(_Step.done, '');
+    // second guard: only the strip the user picked counts as success
+    if (_sawActive && st == 'connected' && (_chosen == null || s.provMsg.toUpperCase().endsWith(_chosen!.id.toUpperCase()))) {
+      return _finish(_Step.done, '');
+    }
     if (st == 'waiting' && _step != _Step.waiting) setState(() => _step = _Step.waiting);
-    if (_startedAt != null && DateTime.now().difference(_startedAt!) > const Duration(seconds: 150)) {
+    if (_startedAt != null && DateTime.now().difference(_startedAt!) > const Duration(seconds: 180)) {
       _finish(_Step.error, t('add_timeout'));
     }
   }
