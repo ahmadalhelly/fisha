@@ -19,8 +19,10 @@ Observed on fw 0.1.54-1.0.105: only channels 1–4 (USB ports are not switchable
 
 ## Hub HTTP — port 8080
 - `GET /api/state`, `POST /api/onoff {"mac","outlet":0-4,"on"}`, `GET /api/health`, `GET /api/raw?cmd=up:...` (debug)
+- v1.1: `POST /api/label {"mac","outlet":0-4,"label"}` (0 = strip), `POST /api/lock {"mac","outlet":1-4,"locked"}`, `POST /api/provision {}`
+- v1.1 state adds `hub_fw`, `provision{state,msg}`, strip `label`, outlet `label` + `locked`
 
 ## Hub ⇄ cloud — MQTT over TLS
 Base topic `mttl/<HUB_ID>/` (HUB_ID = ESP32 MAC, no colons)
 - `status` retained `online|offline` (LWT) · `info` retained `{"hub","fw","ip","web_port"}` · `state` retained (= /api/state)
-- `cmd` ← `{"id","mac","outlet","on"}` or `{"id","action":"refresh"}` · `cmd/ack` → `{"id","ok","error"}`
+- `cmd` ← `{"id","mac","outlet","on"}`, `{"id","action":"refresh"}`, `{"id","action":"label",...}`, `{"id","action":"lock",...}`, `{"id","action":"provision"}` · `cmd/ack` → `{"id","ok","error"}`
