@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../i18n.dart';
 import '../models.dart';
 import '../screens/home_screen.dart';
 import '../theme.dart';
@@ -23,20 +24,26 @@ class StripCard extends StatelessWidget {
           Row(
             children: [
               if (dragHandle != null) dragHandle!,
-              Flexible(
-                child: Text(state.stripName(s),
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(state.stripName(s),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    ),
+                    const SizedBox(width: 8),
+                    _badge(s.online),
+                  ],
+                ),
               ),
               const SizedBox(width: 8),
-              _badge(s.online),
-              const Spacer(),
-              Text('${s.livePower.toStringAsFixed(1)} W',
-                  textDirection: TextDirection.ltr, style: mono(14, color: C.accent)),
+              Text('${s.livePower.toStringAsFixed(1)} W', textDirection: TextDirection.ltr, style: mono(14, color: C.accent)),
               IconButton(
-                tooltip: 'إعدادات المشترك',
-                icon: const Icon(Icons.settings_outlined, color: C.muted, size: 20),
-                onPressed: () => _openSettings(context),
+                tooltip: t('strip_settings'),
+                icon: Icon(Icons.settings_outlined, color: C.muted, size: 20),
+                onPressed: () => openStripSettings(context, state, s.mac),
               ),
             ],
           ),
@@ -65,10 +72,10 @@ class StripCard extends StatelessWidget {
                     backgroundColor: C.accentBg,
                     foregroundColor: C.accent,
                     minimumSize: const Size(0, 44),
-                    side: const BorderSide(color: C.tileOnBorder),
+                    side: BorderSide(color: C.tileOnBorder),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  child: const Text('شغّل الكل', style: TextStyle(fontWeight: FontWeight.w600)),
+                  child: Text(t('all_on'), style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
               ),
               const SizedBox(width: 10),
@@ -78,10 +85,10 @@ class StripCard extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: C.textSoft,
                     minimumSize: const Size(0, 44),
-                    side: const BorderSide(color: C.border),
+                    side: BorderSide(color: C.border),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  child: const Text('اقفل الكل', style: TextStyle(fontWeight: FontWeight.w600)),
+                  child: Text(t('all_off'), style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -98,74 +105,89 @@ class StripCard extends StatelessWidget {
           Container(
               width: 6, height: 6, decoration: BoxDecoration(color: online ? C.green : C.faint, shape: BoxShape.circle)),
           const SizedBox(width: 5),
-          Text(online ? 'متصل' : 'غير متصل', style: TextStyle(fontSize: 11, color: online ? C.greenText : C.muted)),
-        ]),
-      );
-
-  void _openSettings(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => ListenableBuilder(
-        listenable: state,
-        builder: (ctx, _) {
-          final s = state.allStrips.firstWhere((x) => x.mac == strip.mac, orElse: () => strip);
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(state.stripName(s), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-                  const Text('إعدادات المشترك', style: TextStyle(color: C.muted)),
-                  const SizedBox(height: 14),
-                  _row(Icons.edit_outlined, 'تغيير اسم المشترك', null, () async {
-                    final v = await askName(ctx, 'اسم المشترك', state.stripName(s));
-                    if (v != null) state.renameStrip(s, v);
-                  }),
-                  for (final o in s.outlets)
-                    _row(Icons.label_outline, 'اسم المخرج ${o.n}', state.outletName(s, o.n), () async {
-                      final v = await askName(ctx, 'اسم المخرج ${o.n}', state.outletName(s, o.n));
-                      if (v != null) state.renameOutlet(s, o.n, v);
-                    }),
-                  const Divider(color: C.border, height: 24),
-                  _info('الفيرموير', s.fw.isEmpty ? '—' : s.fw),
-                  _info('الفولت', s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
-                  _info('قوة الإشارة', s.rssi == null ? '—' : '${s.rssi} dBm'),
-                  if (state.showMac) _info('MAC', s.mac),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _row(IconData icon, String title, String? sub, VoidCallback onTap) => ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
-          child: Icon(icon, color: C.accent, size: 20),
-        ),
-        title: Text(title),
-        subtitle: sub == null ? null : Text(sub, style: const TextStyle(color: C.muted)),
-        onTap: onTap,
-      );
-
-  Widget _info(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(children: [
-          Text(k, style: const TextStyle(color: C.muted)),
-          const Spacer(),
-          Text(v, textDirection: TextDirection.ltr, style: mono(13, color: C.textSoft, weight: FontWeight.w500)),
+          Text(online ? t('online') : t('offline'), style: TextStyle(fontSize: 11, color: online ? C.greenText : C.muted)),
         ]),
       );
 }
+
+/// Bottom sheet with names, child lock and device info. Reads the live strip on every rebuild.
+void openStripSettings(BuildContext context, AppState state, String mac) {
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => ListenableBuilder(
+      listenable: state,
+      builder: (ctx, _) {
+        final s = state.live(mac);
+        if (s == null) return const SizedBox(height: 120);
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.85),
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+              children: [
+                Text(state.stripName(s), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                Text(t('strip_settings'), style: TextStyle(color: C.muted)),
+                const SizedBox(height: 14),
+                _row(Icons.edit_outlined, t('rename_strip'), null, () async {
+                  final v = await askName(ctx, t('strip_name'), state.stripName(s));
+                  if (v != null) state.rename(s, 0, v);
+                }),
+                const SizedBox(height: 8),
+                Text(t('outlets'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
+                for (final o in s.outlets) ...[
+                  _row(Icons.label_outline, t('outlet_name', {'n': o.n}), state.outletName(s, o.n), () async {
+                    final v = await askName(ctx, t('outlet_name', {'n': o.n}), state.outletName(s, o.n));
+                    if (v != null) state.rename(s, o.n, v);
+                  }),
+                  SwitchListTile(
+                    contentPadding: const EdgeInsetsDirectional.only(start: 52),
+                    dense: true,
+                    value: o.locked,
+                    onChanged: (v) => state.setLock(s, o.n, v),
+                    activeTrackColor: C.accent,
+                    title: Text(t('child_lock')),
+                    subtitle: Text(t('child_lock_sub'), style: TextStyle(color: C.muted, fontSize: 12)),
+                  ),
+                ],
+                Divider(color: C.border, height: 24),
+                Text(t('device'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
+                _info(t('fw'), s.fw.isEmpty ? '—' : s.fw),
+                _info(t('voltage'), s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
+                _info(t('rssi'), s.rssi == null ? '—' : '${s.rssi} dBm'),
+                if (state.showMac) _info('MAC', s.mac),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+Widget _row(IconData icon, String title, String? sub, VoidCallback onTap) => ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+        child: Icon(icon, color: C.accent, size: 20),
+      ),
+      title: Text(title),
+      subtitle: sub == null ? null : Text(sub, style: TextStyle(color: C.muted)),
+      onTap: onTap,
+    );
+
+Widget _info(String k, String v) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Text(k, style: TextStyle(color: C.muted)),
+        const Spacer(),
+        Text(v, textDirection: TextDirection.ltr, style: mono(13, color: C.textSoft, weight: FontWeight.w500)),
+      ]),
+    );
 
 class _OutletTile extends StatelessWidget {
   final AppState state;
@@ -188,8 +210,8 @@ class _OutletTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: pending ? null : () => state.setOutlet(strip.mac, outlet.n, !on),
         onLongPress: () async {
-          final v = await askName(context, 'اسم المخرج ${outlet.n}', name);
-          if (v != null) state.renameOutlet(strip, outlet.n, v);
+          final v = await askName(context, t('outlet_name', {'n': outlet.n}), name);
+          if (v != null) state.rename(strip, outlet.n, v);
         },
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -200,9 +222,13 @@ class _OutletTile extends StatelessWidget {
               Row(
                 children: [
                   Icon(Icons.power_outlined, color: on ? C.accent : C.faint, size: 24),
+                  if (outlet.locked) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.lock_outline, color: C.muted, size: 15, semanticLabel: t('child_lock')),
+                  ],
                   const Spacer(),
                   if (pending)
-                    const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent))
+                    SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent))
                   else
                     SizedBox(
                       height: 28,
@@ -223,14 +249,14 @@ class _OutletTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  Text(name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Row(
                     children: [
-                      Text(on ? '${outlet.powerW.toStringAsFixed(1)} W' : 'مقفول',
+                      Text(on ? '${outlet.powerW.toStringAsFixed(1)} W' : t('off'),
                           textDirection: TextDirection.ltr,
-                          style: on ? mono(12, color: C.accent, weight: FontWeight.w500) : const TextStyle(fontSize: 12, color: C.muted)),
+                          style: on ? mono(12, color: C.accent, weight: FontWeight.w500) : TextStyle(fontSize: 12, color: C.muted)),
                       const SizedBox(width: 8),
                       Text('${outlet.tempC}°C',
                           textDirection: TextDirection.ltr, style: mono(12, color: _tempColor(outlet.tempC), weight: FontWeight.w500)),
@@ -245,5 +271,5 @@ class _OutletTile extends StatelessWidget {
     );
   }
 
-  Color _tempColor(int t) => t >= 60 ? C.danger : (t >= 45 ? C.accent : C.muted);
+  Color _tempColor(int c) => c >= 60 ? C.danger : (c >= 45 ? C.accent : C.muted);
 }
