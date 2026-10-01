@@ -32,23 +32,21 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate Android platform files
-        run: |
-          flutter create --platforms=android --org com.mttlhub --project-name mttl_hub .
-          M=android/app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.INTERNET' "$M" || sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application android:usesCleartextTraffic="true"|' "$M"
-          sed -i 's|android:label="mttl_hub"|android:label="MTTL Hub"|' "$M"
-          cat "$M"
-
       - name: Analyze, test, build
         run: |
           set -o pipefail
           {
             flutter --version
+            flutter create --platforms=android --org com.mttlhub --project-name mttl_hub .
+            pip install --quiet --break-system-packages pillow || pip install --quiet pillow
+            python3 tool/configure_android.py
             flutter pub get
+            dart run flutter_launcher_icons
+            dart run flutter_native_splash:create
             flutter analyze --no-fatal-infos --no-fatal-warnings
             flutter test
-            flutter build apk --release
+            flutter build apk --release --build-name=1.0.0 --build-number=${{ github.run_number }}
+            cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-1.0.0-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 
       - name: Publish APK as a release
@@ -56,18 +54,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: MTTL Hub build ${{ github.run_number }}
+          name: Fisha 1.0.0 (build ${{ github.run_number }})
           make_latest: true
-          files: app/build/app/outputs/flutter-apk/app-release.apk
+          files: Fisha-1.0.0-${{ github.run_number }}.apk
           body: "Commit ${{ github.sha }}"
 
       - name: Save build log to the ci-logs branch
         if: always()
         working-directory: .
         run: |
-          [ -f build.log ] || echo "no build log (failed before build step)" > build.log
-          echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > STATUS.txt
-          cp build.log STATUS.txt /tmp/
+          [ -f build.log ] || echo "no build log" > build.log
+          tail -c 60000 build.log > /tmp/build.log
+          echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > /tmp/STATUS.txt
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
           git checkout --orphan ci-logs-tmp
