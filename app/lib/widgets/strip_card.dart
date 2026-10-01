@@ -148,6 +148,7 @@ void openStripSettings(BuildContext context, AppState state, String mac) {
                     value: o.locked,
                     onChanged: (v) => state.setLock(s, o.n, v),
                     activeTrackColor: C.accent,
+                    secondary: null,
                     title: Text(t('child_lock')),
                     subtitle: Text(t('child_lock_sub'), style: TextStyle(color: C.muted, fontSize: 12)),
                   ),

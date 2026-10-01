@@ -1,5 +1,5 @@
 /*
-  MTTL Hub v1.0-alpha — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
+  MTTL Hub v1.1 — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
   Board: ESP32 Dev Module (ESP32-WROOM-32)  |  Core: esp32 by Espressif 2.x or 3.x
   No external libraries needed.
 
@@ -9,6 +9,9 @@
                 POST /api/onoff  {"mac":"...","outlet":0-4,"on":true}   (0 = all)
                 GET  /api/health
                 GET  /api/raw?cmd=up:getinfo:all   (debug: send a raw line to the first strip)
+                POST /api/label     {"mac":"...","outlet":0-4,"label":"..."}   (0 = the strip itself; "" resets)
+                POST /api/lock      {"mac":"...","outlet":1-4,"locked":true}   (child lock: physical button is reverted)
+                POST /api/provision {}   (hub joins TONLY_TAP_* and points the strip at itself; watch "provision" in /api/state)
   - Serial    : type any "up:..." line in Serial Monitor (Newline) to send it to the first strip
   - OTA       : Arduino IDE -> Tools -> Port -> mttl-hub (network)
   - MQTT/TLS  : outbound to the cloud broker (remote control from anywhere, no port forwarding)
@@ -16,12 +19,15 @@
                 mttl/<HUB_ID>/info     retained  {"hub","fw","ip","web_port"}
                 mttl/<HUB_ID>/state    retained  same JSON as GET /api/state
                 mttl/<HUB_ID>/cmd      <- {"id":"x1","mac":"...","outlet":0-4,"on":true} | {"id":"x2","action":"refresh"}
+                                          {"id","action":"label","mac","outlet","label"} | {"id","action":"lock","mac","outlet","locked"}
+                                          {"id","action":"provision"}
                 mttl/<HUB_ID>/cmd/ack  -> {"id":"x1","ok":true,"error":""}
 */
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
+#include <Preferences.h>
 #include "mqtt_client.h"
 #include "esp_idf_version.h"
 #include <vector>
@@ -41,7 +47,7 @@ const char* MQTT_URI  = "mqtts://t0eb1112.ala.eu-central-1.emqxsl.com:8883";
 const char* MQTT_USER = "ESP32_hub";
 const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";   // the password you set for ESP32_hub in EMQX
 // ============================================
-const char* FW_VERSION = "1.0-alpha";
+const char* FW_VERSION = "1.1";
 
 // EMQX Serverless CA (DigiCert Global Root G2, valid until 2038) — public certificate
 static const char MQTT_CA[] = R"PEM(
@@ -82,6 +88,8 @@ struct Strip {
   WiFiClient c;
   bool used = false, identified = false, hasRssi = false;
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
+  String label, olabel[4];                        // user names, stored in NVS
+  uint8_t lockMask = 0, lockState = 0;            // child lock: which outlets, and the state they are held at
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
@@ -89,6 +97,10 @@ struct Strip {
 };
 
 Strip strips[MAX_STRIPS];
+Preferences cfg;
+volatile bool provRequested = false;
+uint32_t provAt = 0;
+String provState = "idle", provMsg = "";
 WiFiServer stripServer(STRIP_PORT);
 WebServer web(WEB_PORT);
 uint32_t lastPoll = 0, pollCount = 0;
@@ -114,6 +126,30 @@ bool isHex(const String& s) {
   if (!s.length()) return false;
   for (char ch : s) if (!isxdigit((unsigned char)ch)) return false;
   return true;
+}
+
+String jsonEsc(const String& v) {
+  String o;
+  o.reserve(v.length() + 4);
+  for (size_t i = 0; i < v.length(); i++) {
+    char c = v[i];
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if ((uint8_t)c < 0x20) o += ' ';
+    else o += c;
+  }
+  return o;
+}
+
+void loadStripCfg(Strip& s) {
+  s.label = cfg.getString(("n" + s.mac).c_str(), "");
+  for (int k = 0; k < 4; k++) s.olabel[k] = cfg.getString(("n" + s.mac + String(k + 1)).c_str(), "");
+  s.lockMask = cfg.getUChar(("l" + s.mac).c_str(), 0);
+  s.lockState = cfg.getUChar(("s" + s.mac).c_str(), 0);
+}
+
+void saveLocks(Strip& s) {
+  cfg.putUChar(("l" + s.mac).c_str(), s.lockMask);
+  cfg.putUChar(("s" + s.mac).c_str(), s.lockState);
 }
 
 void sendLine(Strip& s, const String& line) {
@@ -162,6 +198,11 @@ bool tryParseInfo(Strip& s) {
   for (int i = 0; i < 4; i++) s.o[i] = tmp[i];
   s.pendingInfo = "";
   s.infoSeq++;
+  for (int k = 0; k < 4; k++) {                          // child lock: put a locked outlet back where it belongs
+    if (!(s.lockMask & (1 << k))) continue;
+    bool want = s.lockState & (1 << k);
+    if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
+  }
   return true;
 }
 
@@ -182,6 +223,7 @@ void handleLine(Strip& s, const String& line) {
     for (int i = 0; i < MAX_STRIPS; i++)                    // a re-dial replaces the old session
       if (&strips[i] != &s && strips[i].used && strips[i].mac == mac) dropStrip(strips[i], "replaced");
     s.mac = mac; s.model = f[0]; s.fw = f[3]; s.identified = true;
+    loadStripCfg(s);
     Serial.printf("[*] strip %s online  model=%s fw=%s\n", mac.c_str(), s.model.c_str(), s.fw.c_str());
     sendLine(s, "up:getinfo:all");
     return;
@@ -201,7 +243,19 @@ void handleLine(Strip& s, const String& line) {
   if (body.length()) {
     std::vector<String> f = split(body, ':');
     int ch = f.size() == 2 ? f[0].toInt() : -1;
-    if (ch >= 1 && ch <= 4) s.o[ch - 1].on = (f[1] == "on");
+    bool isEvent = l.startsWith("up:event:");
+    if (ch >= 1 && ch <= 4) {
+      bool on = (f[1] == "on");
+      if (isEvent && (s.lockMask & (1 << (ch - 1)))) {       // physical button on a locked outlet: undo it
+        bool want = s.lockState & (1 << (ch - 1));
+        if (on != want) sendLine(s, "up:onoff:" + String(ch) + ":" + (want ? "on" : "off"));
+        Serial.printf("[lock] outlet %d is locked, reverted\n", ch);
+      } else {
+        s.o[ch - 1].on = on;
+      }
+    } else if (isEvent && ch == 0 && s.lockMask) {
+      sendLine(s, "up:getinfo:all");                           // master button: the next getinfo re-applies locks
+    }
   }
 }
 
@@ -303,6 +357,11 @@ void serialRaw() {
 
 // Switch one outlet (1-4) or all (0), then confirm with a fresh getinfo.
 bool setOutlets(Strip& s, int outlet, bool on) {
+  uint8_t before = s.lockState;
+  for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {   // app commands move the held state
+    if (on) s.lockState |= (1 << (ch - 1)); else s.lockState &= ~(1 << (ch - 1));
+  }
+  if (s.lockState != before && s.lockMask) saveLocks(s);
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {   // no up:onoff:0 — loop 1..4
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     pumpFor(120);
@@ -356,10 +415,12 @@ String stripJson(const Strip& s) {
     if (i) outs += ",";
     outs += "{\"n\":" + String(i + 1) + ",\"on\":" + (o.on ? "true" : "false") +
             ",\"power_w\":" + String(o.powerW, 2) + ",\"energy_kwh\":" + String(o.energyKwh, 3) +
-            ",\"temp_c\":" + String(o.tempC) + "}";
+            ",\"temp_c\":" + String(o.tempC) + ",\"label\":\"" + jsonEsc(s.olabel[i]) +
+            "\",\"locked\":" + ((s.lockMask & (1 << i)) ? "true" : "false") + "}";
   }
   outs += "]";
-  String j = "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"model\":\"" + s.model +
+  String j = "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"label\":\"" + jsonEsc(s.label) +
+             "\",\"model\":\"" + s.model +
              "\",\"fw\":\"" + s.fw + "\",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
              ",\"power_w\":" + String(pw, 2) + ",\"energy_kwh\":" + String(en, 3) +
              ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
@@ -370,7 +431,9 @@ String stripJson(const Strip& s) {
 }
 
 String buildStateJson() {
-  String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"devices\":[";
+  String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) +
+             ",\"hub_fw\":\"" + FW_VERSION + "\",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) +
+             "\"},\"devices\":[";
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
     if (!strips[i].used || !strips[i].identified) continue;
@@ -415,6 +478,147 @@ void handleRaw() {
   pumpFor(1500);                                   // collect whatever the strip answers
   String j = "{\"sent\":\"" + cmd + "\",\"last_rx\":\"" + s.lastLine + "\"}";
   web.send(200, "application/json", j);
+}
+
+// ---------- names, child lock, provisioning (shared by HTTP and MQTT) ----------
+String applyLabel(const String& macIn, int outlet, const String& label) {
+  String mac = macIn; mac.toUpperCase();
+  int idx = mac.length() ? findStrip(mac) : firstStrip();
+  if (idx < 0) return "device offline";
+  if (outlet < 0 || outlet > 4) return "bad outlet";
+  if (label.length() > 96) return "label too long";
+  Strip& s = strips[idx];
+  String key = outlet == 0 ? "n" + s.mac : "n" + s.mac + String(outlet);
+  if (label.length()) cfg.putString(key.c_str(), label); else cfg.remove(key.c_str());
+  if (outlet == 0) s.label = label; else s.olabel[outlet - 1] = label;
+  return "";
+}
+
+String applyLock(const String& macIn, int outlet, bool locked) {
+  String mac = macIn; mac.toUpperCase();
+  int idx = mac.length() ? findStrip(mac) : firstStrip();
+  if (idx < 0) return "device offline";
+  if (outlet < 1 || outlet > 4) return "bad outlet";
+  Strip& s = strips[idx];
+  uint8_t bit = 1 << (outlet - 1);
+  if (locked) {
+    s.lockMask |= bit;
+    if (s.o[outlet - 1].on) s.lockState |= bit; else s.lockState &= ~bit;   // hold the current state
+  } else {
+    s.lockMask &= ~bit;
+  }
+  saveLocks(s);
+  return "";
+}
+
+void requestProvision() {
+  provRequested = true;
+  provAt = millis();
+  provState = "queued";
+  provMsg = "";
+}
+
+bool setupCmd(const String& cmd, const char* expect, String& reply) {
+  WiFiClient c;
+  reply = "";
+  if (!c.connect(IPAddress(192, 168, 1, 1), 30300, 5000)) { reply = "no answer on 30300"; return false; }
+  c.print(cmd);
+  c.print("\r\n");
+  uint32_t t0 = millis();
+  bool gotLine = false;
+  while (!gotLine && millis() - t0 < 6000) {
+    while (c.available()) {
+      char ch = c.read();
+      if (ch == '\n') { gotLine = true; break; }
+      if (ch != '\r' && ch != 0) reply += ch;
+    }
+    if (!gotLine && !c.connected()) break;
+    delay(10);
+  }
+  c.stop();
+  Serial.printf("[prov] >> %s  << %s\n", cmd.c_str(), reply.c_str());
+  return expect == nullptr || reply.indexOf(expect) >= 0;
+}
+
+void connectWiFi();
+
+void provFail(const String& msg) {
+  provState = "error";
+  provMsg = msg;
+  Serial.printf("[prov] error: %s\n", msg.c_str());
+}
+
+void runProvision() {
+  provRequested = false;
+  provState = "running";
+  provMsg = "بدوّر على شبكة المشترك";
+  String hubIp = WiFi.localIP().toString();
+  if (strchr(WIFI_SSID, ':') || strchr(WIFI_PASS, ':')) { provFail("اسم الواي فاي أو الباسورد فيه ':' والمشترك مش بيقبلها"); return; }
+
+  int n = WiFi.scanNetworks();
+  String ap;
+  int best = -1000;
+  for (int i = 0; i < n; i++) {
+    String ss = WiFi.SSID(i);
+    if ((ss.startsWith("TONLY_TAP_") || ss.startsWith("ONLY_TAP_")) && WiFi.RSSI(i) > best) { ap = ss; best = WiFi.RSSI(i); }
+  }
+  WiFi.scanDelete();
+  if (!ap.length()) { provFail("مش لاقي شبكة TONLY_TAP. دوس على زرار المشترك 10 ثواني لحد ما يرمش بسرعة وجرب تاني"); return; }
+  String pass = "LGU_" + ap.substring(ap.lastIndexOf('_') + 1);
+  Serial.printf("[prov] joining %s (%d dBm)\n", ap.c_str(), best);
+
+  for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "provisioning");
+  WiFi.disconnect();
+  delay(300);
+  WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP on the strip's AP
+  WiFi.begin(ap.c_str(), pass.c_str());
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(250);
+
+  bool ok = false;
+  String r;
+  if (WiFi.status() != WL_CONNECTED) {
+    r = "مقدرتش أدخل على شبكة " + ap;
+  } else {
+    delay(500);
+    ok = setupCmd("up:ip:" + hubIp, "ip_ok", r) &&
+         setupCmd("up:connect:" + String(WIFI_SSID) + ":" + WIFI_PASS, "connect_ok", r);
+    if (ok) setupCmd("up:reboot:0", nullptr, r);
+    else r = "المشترك رد بـ: " + r;
+  }
+
+  WiFi.disconnect();
+  delay(300);
+  connectWiFi();                                     // back home (static IP again)
+  if (ok) {
+    provState = "done";
+    provMsg = "المشترك اتظبط وهيتصل بالـ Hub خلال ثواني";
+    Serial.println("[prov] done");
+  } else {
+    provFail(r);
+  }
+}
+
+void handleLabel() {
+  if (!guard()) return;
+  String b = web.arg("plain");
+  String err = applyLabel(jsonValue(b, "mac"), jsonValue(b, "outlet").toInt(), jsonValue(b, "label"));
+  web.send(err.length() ? 400 : 200, "application/json", err.length() ? "{\"ok\":false,\"error\":\"" + err + "\"}" : "{\"ok\":true}");
+}
+
+void handleLock() {
+  if (!guard()) return;
+  String b = web.arg("plain");
+  String l = jsonValue(b, "locked");
+  String err = applyLock(jsonValue(b, "mac"), jsonValue(b, "outlet").toInt(), l == "true" || l == "1");
+  web.send(err.length() ? 400 : 200, "application/json", err.length() ? "{\"ok\":false,\"error\":\"" + err + "\"}" : "{\"ok\":true}");
+}
+
+void handleProvision() {
+  if (!guard()) return;
+  if (provState == "running" || provRequested) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"already running\"}"); return; }
+  requestProvision();
+  web.send(200, "application/json", "{\"ok\":true,\"started\":true}");
 }
 
 void handleHealth() {
@@ -583,6 +787,16 @@ void mqttProcess() {
         waitForInfo(s, seq, 2000);
       }
       ok = true;
+    } else if (action == "label") {
+      err = applyLabel(jsonValue(body, "mac"), jsonValue(body, "outlet").toInt(), jsonValue(body, "label"));
+      ok = !err.length();
+    } else if (action == "lock") {
+      String l = jsonValue(body, "locked");
+      err = applyLock(jsonValue(body, "mac"), jsonValue(body, "outlet").toInt(), l == "true" || l == "1");
+      ok = !err.length();
+    } else if (action == "provision") {
+      if (provState == "running" || provRequested) err = "already running";
+      else { requestProvision(); provAt = millis() + 1200; ok = true; }   // give the ack time to leave first
     } else {
       String mac = jsonValue(body, "mac"); mac.toUpperCase();
       String outStr = jsonValue(body, "outlet"), onStr = jsonValue(body, "on");
@@ -599,7 +813,11 @@ void mqttProcess() {
     mqttPub(tAck, "{\"id\":\"" + id + "\",\"ok\":" + (ok ? "true" : "false") + ",\"error\":\"" + err + "\"}", 1, false);
     publishState();
   }
-  if (mqttUp && (relaySignature() != lastRelaySig || millis() - lastStatePub > STATE_EVERY_MS)) publishState();
+  static String lastProv;
+  if (mqttUp && (relaySignature() != lastRelaySig || provState != lastProv || millis() - lastStatePub > STATE_EVERY_MS)) {
+    lastProv = provState;
+    publishState();
+  }
 }
 
 // ---------- WiFi ----------
@@ -622,7 +840,8 @@ void connectWiFi() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== MTTL Hub v1.0-alpha ===");
+  Serial.println("\n=== MTTL Hub v1.1 ===");
+  cfg.begin("mttl", false);
   connectWiFi();
 
   stripServer.begin();
@@ -636,6 +855,9 @@ void setup() {
   web.on("/api/onoff", HTTP_POST, handleOnOff);
   web.on("/api/health", HTTP_GET, handleHealth);
   web.on("/api/raw", HTTP_GET, handleRaw);
+  web.on("/api/label", HTTP_POST, handleLabel);
+  web.on("/api/lock", HTTP_POST, handleLock);
+  web.on("/api/provision", HTTP_POST, handleProvision);
   web.onNotFound([]() { web.send(404, "application/json", "{\"error\":\"not found\"}"); });
   web.begin();
 
@@ -667,5 +889,6 @@ void loop() {
   pollStrips();
   serialRaw();
   mqttProcess();
+  if (provRequested && (int32_t)(millis() - provAt) > 400) runProvision();
   delay(2);
 }
