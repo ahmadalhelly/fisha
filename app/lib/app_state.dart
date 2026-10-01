@@ -70,22 +70,42 @@ class HubSettings {
 class CmdResult {
   final bool ok;
   final String? error;
-  const CmdResult(this.ok, [this.error]);
+  final Map<String, dynamic>? data;
+  const CmdResult(this.ok, [this.error, this.data]);
 }
 
 class AppState extends ChangeNotifier {
+  static const ssePort = 8081;
+
   SharedPreferences? _prefs;
   HubSettings settings = HubSettings();
+  bool ready = false;
 
   // live data
   List<Strip> _strips = [];
+  List<HubTimer> timers = [];
   ConnMode mode = ConnMode.offline;
   bool mqttConnected = false;
   bool hubOnline = false;
+  bool sseLive = false;
+  bool hubTimeOk = false;
   String? hubFw;
+  int tempMax = 70;
+  bool tempProtect = true;
   String provState = 'idle';
   String provMsg = '';
   String? lastError;
+  DateTime? lastUpdate;
+
+  // events
+  final List<HubEvent> events = [];
+  final Set<String> _eventKeys = {};
+  HubEvent? lastAlert;
+  int unread = 0;
+
+  // caches
+  List<Schedule> schedules = [];
+  List<Automation> automations = [];
 
   // preferences
   ViewMode viewMode = ViewMode.list;
@@ -93,23 +113,27 @@ class AppState extends ChangeNotifier {
   ThemePref themePref = ThemePref.system;
   LangPref langPref = LangPref.system;
   bool showMac = false;
+  double tariff = 1.0;
   String query = '';
   int tab = 0;
   List<String> _order = [];
-  Map<String, String> _names = {}; // phone-side fallback names (hub fw < 1.1)
+  Map<String, String> _names = {}; // phone-side fallback names (very old hub firmware)
 
   // internals
   final Map<String, Map<int, bool>> _pending = {};
-  final Map<String, Completer<bool>> _acks = {};
-  String? _lastAckError;
-  Timer? _localTimer;
+  final Map<String, Completer<Map<String, dynamic>>> _acks = {};
+  Timer? _pollTimer;
   Timer? _mqttRetry;
   MqttServerClient? _mqtt;
   StreamSubscription? _mqttSub;
+  http.Client? _sseClient;
+  bool _sseRunning = false;
   DateTime? _lastLocalOk;
   bool _polling = false;
   int _seq = 0;
+  int _gen = 0; // bumps on restart so old loops stop
 
+  bool get hubV2 => hubFw != null && !hubFw!.startsWith('1.');
   bool get hubHasConfig => hubFw != null && hubFw != '1.0-alpha';
 
   // ---------- lifecycle ----------
@@ -122,11 +146,13 @@ class AppState extends ChangeNotifier {
         settings = HubSettings.fromJson(jsonDecode(s) as Map<String, dynamic>);
       } catch (_) {}
     }
-    viewMode = ViewMode.values[(p.getInt('viewMode') ?? 0).clamp(0, ViewMode.values.length - 1)];
-    sortMode = SortMode.values[(p.getInt('sortMode') ?? 0).clamp(0, SortMode.values.length - 1)];
-    themePref = ThemePref.values[(p.getInt('themePref') ?? 0).clamp(0, ThemePref.values.length - 1)];
-    langPref = LangPref.values[(p.getInt('langPref') ?? 0).clamp(0, LangPref.values.length - 1)];
+    int idx(String k, int len) => (p.getInt(k) ?? 0).clamp(0, len - 1);
+    viewMode = ViewMode.values[idx('viewMode', ViewMode.values.length)];
+    sortMode = SortMode.values[idx('sortMode', SortMode.values.length)];
+    themePref = ThemePref.values[idx('themePref', ThemePref.values.length)];
+    langPref = LangPref.values[idx('langPref', LangPref.values.length)];
     showMac = p.getBool('showMac') ?? false;
+    tariff = p.getDouble('tariff') ?? 1.0;
     _order = p.getStringList('order') ?? [];
     final n = p.getString('names');
     if (n != null) {
@@ -134,15 +160,26 @@ class AppState extends ChangeNotifier {
         _names = Map<String, String>.from(jsonDecode(n) as Map);
       } catch (_) {}
     }
+    ready = true;
     await restart();
   }
 
   @override
   void dispose() {
-    _localTimer?.cancel();
-    _mqttRetry?.cancel();
-    _stopMqtt();
+    _stopAll();
     super.dispose();
+  }
+
+  void _stopAll() {
+    _gen++;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _mqttRetry?.cancel();
+    _sseRunning = false;
+    _sseClient?.close();
+    _sseClient = null;
+    sseLive = false;
+    _stopMqtt();
   }
 
   Future<void> saveSettings(HubSettings s) async {
@@ -152,33 +189,39 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> restart() async {
-    _localTimer?.cancel();
-    _localTimer = null;
-    _mqttRetry?.cancel();
-    _stopMqtt();
+    _stopAll();
     _strips = [];
+    timers = [];
     _lastLocalOk = null;
     mode = ConnMode.offline;
     hubOnline = false;
     notifyListeners();
+    final gen = _gen;
     if (settings.hasLocal) {
       _pollLocal();
-      _localTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollLocal());
+      _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+        if (!sseLive) _pollLocal();
+        _updateMode();
+      });
+      _runSse(gen);
     }
     if (settings.hasCloud) _startMqtt();
+    Future.delayed(const Duration(seconds: 3), () {
+      if (gen == _gen) loadEvents();
+    });
   }
 
-  // ---------- local REST ----------
+  // ---------- local: REST + Server-Sent Events ----------
   Uri _localUri(String path) => Uri.parse('http://${settings.localHost}:${settings.localPort}$path');
 
   bool get _localFresh =>
-      _lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 6);
+      _lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7);
 
   Future<void> _pollLocal() async {
     if (_polling || settings.localHost.isEmpty) return;
     _polling = true;
     try {
-      final r = await http.get(_localUri('/api/state')).timeout(const Duration(milliseconds: 1500));
+      final r = await http.get(_localUri('/api/state')).timeout(const Duration(milliseconds: 1800));
       if (r.statusCode == 200) {
         _lastLocalOk = DateTime.now();
         _applyState(utf8.decode(r.bodyBytes), fromLocal: true);
@@ -188,6 +231,67 @@ class AppState extends ChangeNotifier {
     } finally {
       _polling = false;
       _updateMode();
+    }
+  }
+
+  Future<void> _runSse(int gen) async {
+    if (_sseRunning) return;
+    _sseRunning = true;
+    var backoff = 2;
+    while (_sseRunning && gen == _gen && settings.hasLocal) {
+      final client = http.Client();
+      _sseClient = client;
+      try {
+        final req = http.Request('GET', Uri.parse('http://${settings.localHost}:$ssePort/events'));
+        req.headers['Accept'] = 'text/event-stream';
+        final resp = await client.send(req).timeout(const Duration(seconds: 4));
+        if (resp.statusCode != 200) throw const HttpException('sse');
+        sseLive = true;
+        backoff = 2;
+        _lastLocalOk = DateTime.now();
+        _updateMode();
+        notifyListeners();
+        var event = 'message';
+        final data = StringBuffer();
+        final lines =
+            resp.stream.transform(utf8.decoder).transform(const LineSplitter()).timeout(const Duration(seconds: 25));
+        await for (final line in lines) {
+          if (gen != _gen) break;
+          _lastLocalOk = DateTime.now();
+          if (line.isEmpty) {
+            if (data.isNotEmpty) _onSse(event, data.toString());
+            event = 'message';
+            data.clear();
+          } else if (line.startsWith(':')) {
+            continue;
+          } else if (line.startsWith('event:')) {
+            event = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (data.isNotEmpty) data.write('\n');
+            data.write(line.substring(5).trimLeft());
+          }
+        }
+      } catch (_) {
+        // hub older than v2.0, or not on this Wi-Fi
+      }
+      client.close();
+      if (sseLive) {
+        sseLive = false;
+        notifyListeners();
+      }
+      _updateMode();
+      if (!_sseRunning || gen != _gen) break;
+      await Future.delayed(Duration(seconds: backoff));
+      backoff = backoff >= 20 ? 20 : backoff * 2;
+    }
+    if (gen == _gen) _sseRunning = false;
+  }
+
+  void _onSse(String event, String data) {
+    if (event == 'state') {
+      _applyState(data, fromLocal: true);
+    } else if (event == 'event') {
+      _addEventJson(data);
     }
   }
 
@@ -251,7 +355,6 @@ class AppState extends ChangeNotifier {
         _onMqtt(m.topic.toString(), text);
       }
     });
-    // subscribe only after listening, so retained state/info/status are not missed
     c.subscribe('$_base/#', MqttQos.atLeastOnce);
   }
 
@@ -276,25 +379,19 @@ class AppState extends ChangeNotifier {
       hubOnline = text.trim() == 'online';
       _updateMode();
       notifyListeners();
+    } else if (topic == '$_base/event') {
+      _addEventJson(text);
     } else if (topic == '$_base/info') {
       try {
         final j = jsonDecode(text) as Map<String, dynamic>;
         hubFw = j['fw']?.toString() ?? hubFw;
-        final ip = (j['ip'] ?? '').toString();
-        if (ip.isNotEmpty && settings.localHost.isEmpty) {
-          settings.localHost = ip;
-          _prefs?.setString('settings', jsonEncode(settings.toJson()));
-          _localTimer ??= Timer.periodic(const Duration(seconds: 2), (_) => _pollLocal());
-        }
         notifyListeners();
       } catch (_) {}
     } else if (topic == '$_base/cmd/ack') {
       try {
         final j = jsonDecode(text) as Map<String, dynamic>;
-        final id = (j['id'] ?? '').toString();
-        _lastAckError = (j['error'] ?? '').toString();
-        final done = _acks.remove(id);
-        if (done != null && !done.isCompleted) done.complete(j['ok'] == true);
+        final done = _acks.remove((j['id'] ?? '').toString());
+        if (done != null && !done.isCompleted) done.complete(j);
       } catch (_) {}
     }
   }
@@ -306,11 +403,19 @@ class AppState extends ChangeNotifier {
       final j = jsonDecode(body) as Map<String, dynamic>;
       final fw = j['hub_fw'];
       if (fw != null) hubFw = fw.toString();
+      hubTimeOk = j['time_ok'] == true;
       final pv = j['provision'];
       if (pv is Map) {
         provState = (pv['state'] ?? 'idle').toString();
         provMsg = (pv['msg'] ?? '').toString();
       }
+      final cfg = j['config'];
+      if (cfg is Map) {
+        tempMax = (cfg['temp_max'] as num?)?.toInt() ?? tempMax;
+        tempProtect = cfg['temp_protect'] != false;
+      }
+      final tm = j['timers'];
+      timers = tm is List ? tm.whereType<Map<String, dynamic>>().map(HubTimer.fromJson).toList() : [];
       final devs = j['devices'];
       if (devs is! List) return;
       final list = <Strip>[];
@@ -326,6 +431,7 @@ class AppState extends ChangeNotifier {
         if (!_order.contains(s.mac)) _order.add(s.mac);
       }
       if (!fromLocal) hubOnline = true;
+      lastUpdate = DateTime.now();
       notifyListeners();
     } catch (_) {}
   }
@@ -380,35 +486,60 @@ class AppState extends ChangeNotifier {
   }
 
   bool isPending(String mac, int n) => _pending[mac]?.containsKey(n) ?? false;
+  List<HubTimer> timersFor(String mac, [int? outlet]) =>
+      timers.where((x) => x.mac == mac && (outlet == null || x.outlet == outlet || x.outlet == 0)).toList();
+  Strip? live(String mac) {
+    for (final s in _strips) {
+      if (s.mac == mac) return s;
+    }
+    return null;
+  }
 
-  // ---------- commands (local REST when on the same Wi-Fi, otherwise MQTT) ----------
-  Future<CmdResult> _hubCommand(String path, Map<String, dynamic> body, {String? action}) async {
+  // ---------- hub API: local REST when on the same Wi-Fi, otherwise MQTT ----------
+  Future<CmdResult> api(String action, [Map<String, dynamic> body = const {}]) async {
     try {
       if (_localFresh) {
         final r = await http
-            .post(_localUri(path), headers: {'Content-Type': 'application/json; charset=utf-8'}, body: jsonEncode(body))
-            .timeout(const Duration(seconds: 8));
+            .post(_localUri('/api/$action'),
+                headers: {'Content-Type': 'application/json; charset=utf-8'}, body: jsonEncode(body))
+            .timeout(const Duration(seconds: 9));
         final j = jsonDecode(utf8.decode(r.bodyBytes));
-        final ok = r.statusCode == 200 && j is Map && j['ok'] == true;
-        return CmdResult(ok, ok ? null : ((j is Map ? j['error']?.toString() : null) ?? t('err_not_confirmed')));
+        if (j is! Map<String, dynamic>) return CmdResult(false, t('err_failed'));
+        final ok = j['ok'] == true;
+        final data = j['data'];
+        return CmdResult(ok, ok ? null : (j['error']?.toString() ?? t('err_not_confirmed')),
+            data is Map<String, dynamic> ? data : null);
       }
       if (mqttConnected && _mqtt != null) {
         final id = 'a${DateTime.now().millisecondsSinceEpoch}${_seq++}';
-        final done = Completer<bool>();
+        final done = Completer<Map<String, dynamic>>();
         _acks[id] = done;
-        final msg = <String, dynamic>{'id': id, ...body};
-        if (action != null) msg['action'] = action;
+        final msg = <String, dynamic>{'id': id, 'path': '/api/$action', ...body};
         final b = MqttClientPayloadBuilder()..addUTF8String(jsonEncode(msg));
         _mqtt!.publishMessage('$_base/cmd', MqttQos.atLeastOnce, b.payload!);
-        final ok = await done.future.timeout(const Duration(seconds: 10), onTimeout: () => false);
+        final j = await done.future.timeout(const Duration(seconds: 12), onTimeout: () => <String, dynamic>{});
         _acks.remove(id);
-        return CmdResult(ok, ok ? null : ((_lastAckError?.isNotEmpty ?? false) ? _lastAckError : t('err_no_ack')));
+        if (j.isEmpty) return CmdResult(false, t('err_no_ack'));
+        final ok = j['ok'] == true;
+        final data = j['data'];
+        final err = (j['error'] ?? '').toString();
+        return CmdResult(ok, ok ? null : (err.isNotEmpty ? err : t('err_not_confirmed')),
+            data is Map<String, dynamic> ? data : null);
       }
       return CmdResult(false, t('err_no_conn'));
     } catch (_) {
       return CmdResult(false, t('err_failed'));
     }
   }
+
+  void _fail(CmdResult r) {
+    if (!r.ok) {
+      lastError = r.error;
+      notifyListeners();
+    }
+  }
+
+  void clearError() => lastError = null;
 
   Future<void> setOutlet(String mac, int outlet, bool on) async {
     final targets = outlet == 0 ? [1, 2, 3, 4] : [outlet];
@@ -420,9 +551,7 @@ class AppState extends ChangeNotifier {
     final before = _strips;
     _strips = _strips.map((s) => s.mac == mac ? s.withOutlets(outlet, on) : s).toList();
     notifyListeners();
-
-    final r = await _hubCommand('/api/onoff', {'mac': mac, 'outlet': outlet, 'on': on});
-
+    final r = await api('onoff', {'mac': mac, 'outlet': outlet, 'on': on});
     for (final x in targets) {
       p.remove(x);
     }
@@ -431,32 +560,29 @@ class AppState extends ChangeNotifier {
       lastError = r.error;
     }
     notifyListeners();
-    if (_localFresh) _pollLocal();
+    if (_localFresh && !sseLive) _pollLocal();
+  }
+
+  /// Turns off every outlet of a strip except the protected ones.
+  Future<void> offExceptProtected(Strip s) async {
+    for (final o in s.outlets) {
+      if (o.on && !o.protected) await setOutlet(s.mac, o.n, false);
+    }
   }
 
   Future<void> refresh() async {
+    if (_localFresh) {
+      if (!sseLive) await _pollLocal();
+      return;
+    }
     if (settings.hasLocal) {
       await _pollLocal();
       if (_localFresh) return;
     }
-    if (mqttConnected && _mqtt != null) {
-      final b = MqttClientPayloadBuilder()
-        ..addUTF8String(jsonEncode({'id': 'r${DateTime.now().millisecondsSinceEpoch}', 'action': 'refresh'}));
-      _mqtt!.publishMessage('$_base/cmd', MqttQos.atLeastOnce, b.payload!);
-      await Future.delayed(const Duration(milliseconds: 800));
-    }
+    if (mqttConnected) await api('refresh');
   }
 
-  void clearError() => lastError = null;
-
-  // ---------- names (on the hub for fw >= 1.1, else on the phone) ----------
-  Strip? _find(String mac) {
-    for (final s in _strips) {
-      if (s.mac == mac) return s;
-    }
-    return null;
-  }
-
+  // ---------- names / flags ----------
   String _shortId(String mac) => mac.length >= 4 ? mac.substring(mac.length - 4) : mac;
 
   String stripName(Strip s) {
@@ -465,27 +591,28 @@ class AppState extends ChangeNotifier {
   }
 
   String outletName(Strip s, int n) {
+    if (n == 0) return t('whole_strip');
     for (final o in s.outlets) {
       if (o.n == n && o.label.isNotEmpty) return o.label;
     }
     return _names['o:${s.mac}:$n'] ?? t('default_outlet', {'n': n});
   }
 
-  /// outlet 0 = the strip itself
+  String nameForMac(String mac, int outlet) {
+    final s = live(mac);
+    if (s == null) return outlet == 0 ? t('whole_strip') : t('default_outlet', {'n': outlet});
+    return outlet == 0 ? stripName(s) : '${stripName(s)} · ${outletName(s, outlet)}';
+  }
+
   Future<void> rename(Strip s, int outlet, String value) async {
     final v = value.replaceAll('"', '').replaceAll('\\', '').trim();
     if (hubHasConfig) {
       final before = _strips;
       _strips = _strips.map((x) => x.mac == s.mac ? x.withLabel(outlet, v) : x).toList();
       notifyListeners();
-      final r = await _hubCommand('/api/label', {'mac': s.mac, 'outlet': outlet, 'label': v}, action: 'label');
-      if (!r.ok) {
-        _strips = before;
-        lastError = r.error;
-      } else {
-        _names.remove(outlet == 0 ? 's:${s.mac}' : 'o:${s.mac}:$outlet');
-        await _prefs?.setString('names', jsonEncode(_names));
-      }
+      final r = await api('label', {'mac': s.mac, 'outlet': outlet, 'label': v});
+      if (!r.ok) _strips = before;
+      _fail(r);
       notifyListeners();
       return;
     }
@@ -499,29 +626,144 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setLock(Strip s, int outlet, bool locked) async {
-    if (!hubHasConfig) {
-      lastError = t('err_old_fw');
-      notifyListeners();
-      return;
-    }
+  Future<void> _flag(Strip s, int outlet, String action, Map<String, dynamic> body, Outlet Function(Outlet) apply) async {
     final before = _strips;
-    _strips = _strips.map((x) => x.mac == s.mac ? x.withLock(outlet, locked) : x).toList();
+    _strips = _strips.map((x) => x.mac == s.mac ? x.withOutlet(outlet, apply) : x).toList();
     notifyListeners();
-    final r = await _hubCommand('/api/lock', {'mac': s.mac, 'outlet': outlet, 'locked': locked}, action: 'lock');
-    if (!r.ok) {
-      _strips = before;
-      lastError = r.error;
-    }
+    final r = await api(action, {'mac': s.mac, 'outlet': outlet, ...body});
+    if (!r.ok) _strips = before;
+    _fail(r);
     notifyListeners();
   }
 
-  Strip? live(String mac) => _find(mac);
+  Future<void> setLock(Strip s, int outlet, bool v) =>
+      _flag(s, outlet, 'lock', {'locked': v}, (o) => o.copyWith(locked: v));
+  Future<void> setProtected(Strip s, int outlet, bool v) =>
+      _flag(s, outlet, 'protect', {'protected': v}, (o) => o.copyWith(protected: v));
+  Future<void> setAutoOff(Strip s, int outlet, int minutes) =>
+      _flag(s, outlet, 'autooff', {'minutes': minutes}, (o) => o.copyWith(autoOffMin: minutes));
 
-  // ---------- provisioning (add strip) ----------
+  Future<bool> addTimer(String mac, int outlet, String kind, {int delayS = 0, int offS = 10}) async {
+    final r = await api('timer', {'mac': mac, 'outlet': outlet, 'kind': kind, 'delay_s': delayS, 'off_s': offS});
+    _fail(r);
+    return r.ok;
+  }
+
+  Future<void> cancelTimer(int tid) async {
+    timers = timers.where((x) => x.tid != tid).toList();
+    notifyListeners();
+    _fail(await api('timer_cancel', {'tid': tid}));
+  }
+
+  Future<void> setTempProtection({bool? enabled, int? max}) async {
+    if (enabled != null) tempProtect = enabled;
+    if (max != null) tempMax = max;
+    notifyListeners();
+    _fail(await api('config', {'temp_protect': tempProtect, 'temp_max': tempMax}));
+  }
+
+  // ---------- schedules / automations ----------
+  Future<bool> loadSchedules() async {
+    final r = await api('schedules');
+    if (r.ok && r.data != null) {
+      final l = r.data!['schedules'];
+      schedules = l is List ? l.whereType<Map<String, dynamic>>().map(Schedule.fromJson).toList() : [];
+      schedules.sort((a, b) => (a.hh * 60 + a.mm).compareTo(b.hh * 60 + b.mm));
+      notifyListeners();
+    }
+    return r.ok;
+  }
+
+  Future<bool> saveSchedule(Schedule s) async {
+    final r = await api('schedule_save', s.toJson());
+    _fail(r);
+    if (r.ok) await loadSchedules();
+    return r.ok;
+  }
+
+  Future<void> deleteSchedule(int sid) async {
+    schedules = schedules.where((x) => x.sid != sid).toList();
+    notifyListeners();
+    _fail(await api('schedule_delete', {'sid': sid}));
+    await loadSchedules();
+  }
+
+  Future<bool> loadAutomations() async {
+    final r = await api('automations');
+    if (r.ok && r.data != null) {
+      final l = r.data!['automations'];
+      automations = l is List ? l.whereType<Map<String, dynamic>>().map(Automation.fromJson).toList() : [];
+      notifyListeners();
+    }
+    return r.ok;
+  }
+
+  Future<bool> saveAutomation(Automation a) async {
+    final r = await api('automation_save', a.toJson());
+    _fail(r);
+    if (r.ok) await loadAutomations();
+    return r.ok;
+  }
+
+  Future<void> deleteAutomation(int aid) async {
+    automations = automations.where((x) => x.aid != aid).toList();
+    notifyListeners();
+    _fail(await api('automation_delete', {'aid': aid}));
+    await loadAutomations();
+  }
+
+  // ---------- events ----------
+  void _addEventJson(String text) {
+    try {
+      final e = HubEvent.fromJson(jsonDecode(text) as Map<String, dynamic>);
+      if (!_eventKeys.add(e.key)) return;
+      events.insert(0, e);
+      if (events.length > 100) events.removeLast();
+      unread++;
+      lastAlert = e;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> loadEvents() async {
+    if (!hubV2) return;
+    final r = await api('events');
+    if (!r.ok || r.data == null) return;
+    final l = r.data!['events'];
+    if (l is! List) return;
+    for (final m in l.whereType<Map<String, dynamic>>()) {
+      final e = HubEvent.fromJson(m);
+      if (_eventKeys.add(e.key)) events.add(e);
+    }
+    events.sort((a, b) => b.ts.compareTo(a.ts));
+    notifyListeners();
+  }
+
+  void markEventsRead() {
+    unread = 0;
+    notifyListeners();
+  }
+
+  HubEvent? takeAlert() {
+    final a = lastAlert;
+    lastAlert = null;
+    return a;
+  }
+
+  // ---------- energy ----------
+  Future<List<EnergyData>> loadEnergy() async {
+    final out = <EnergyData>[];
+    for (final s in _strips) {
+      final r = await api('energy', {'mac': s.mac});
+      if (r.ok && r.data != null) out.add(EnergyData.fromJson(r.data!));
+    }
+    return out;
+  }
+
+  // ---------- provisioning ----------
   Future<CmdResult> startProvision() async {
     if (!hubHasConfig) return CmdResult(false, t('err_old_fw'));
-    final r = await _hubCommand('/api/provision', {}, action: 'provision');
+    final r = await api('provision');
     if (r.ok) {
       provState = 'queued';
       provMsg = '';
@@ -569,6 +811,12 @@ class AppState extends ChangeNotifier {
   Future<void> setShowMac(bool v) async {
     showMac = v;
     await _prefs?.setBool('showMac', v);
+    notifyListeners();
+  }
+
+  Future<void> setTariff(double v) async {
+    tariff = v;
+    await _prefs?.setDouble('tariff', v);
     notifyListeners();
   }
 
