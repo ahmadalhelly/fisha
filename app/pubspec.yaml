@@ -1,7 +1,7 @@
 name: mttl_hub
 description: MTTL Hub — control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud).
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.4.0
