@@ -1,12 +1,19 @@
-/// Data models matching the hub's JSON (GET /api/state and mttl/<hub>/state).
+/// Data models matching the hub's JSON (GET /api/state, SSE "state", mttl/<hub>/state).
+int _i(Object? v, [int d = 0]) => (v as num?)?.toInt() ?? d;
+double _d(Object? v, [double d = 0]) => (v as num?)?.toDouble() ?? d;
+String _s(Object? v) => (v ?? '').toString();
+
 class Outlet {
   final int n;
   final bool on;
   final double powerW;
   final double energyKwh;
   final int tempC;
-  final String label; // user name stored on the hub ('' = none)
-  final bool locked; // child lock
+  final String label;
+  final bool locked;
+  final bool protected;
+  final int autoOffMin;
+  final int autoOffInS; // -1 = not running
 
   const Outlet({
     required this.n,
@@ -16,19 +23,25 @@ class Outlet {
     required this.tempC,
     this.label = '',
     this.locked = false,
+    this.protected = false,
+    this.autoOffMin = 0,
+    this.autoOffInS = -1,
   });
 
   factory Outlet.fromJson(Map<String, dynamic> j) => Outlet(
-        n: (j['n'] as num?)?.toInt() ?? 0,
+        n: _i(j['n']),
         on: j['on'] == true,
-        powerW: (j['power_w'] as num?)?.toDouble() ?? 0,
-        energyKwh: (j['energy_kwh'] as num?)?.toDouble() ?? 0,
-        tempC: (j['temp_c'] as num?)?.toInt() ?? 0,
-        label: (j['label'] ?? '').toString(),
+        powerW: _d(j['power_w']),
+        energyKwh: _d(j['energy_kwh']),
+        tempC: _i(j['temp_c']),
+        label: _s(j['label']),
         locked: j['locked'] == true,
+        protected: j['protected'] == true,
+        autoOffMin: _i(j['auto_off_min']),
+        autoOffInS: _i(j['auto_off_in_s'], -1),
       );
 
-  Outlet copyWith({bool? on, String? label, bool? locked}) => Outlet(
+  Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, int? autoOffMin}) => Outlet(
         n: n,
         on: on ?? this.on,
         powerW: powerW,
@@ -36,6 +49,9 @@ class Outlet {
         tempC: tempC,
         label: label ?? this.label,
         locked: locked ?? this.locked,
+        protected: protected ?? this.protected,
+        autoOffMin: autoOffMin ?? this.autoOffMin,
+        autoOffInS: autoOffInS,
       );
 }
 
@@ -43,8 +59,6 @@ class Strip {
   final String mac;
   final String fw;
   final bool online;
-  final double powerW;
-  final double energyKwh;
   final double? voltage;
   final int? rssi;
   final String label;
@@ -54,8 +68,6 @@ class Strip {
     required this.mac,
     required this.fw,
     required this.online,
-    required this.powerW,
-    required this.energyKwh,
     required this.voltage,
     required this.rssi,
     required this.outlets,
@@ -72,47 +84,172 @@ class Strip {
     }
     outs.sort((a, b) => a.n.compareTo(b.n));
     return Strip(
-      mac: (j['mac'] ?? '').toString().toUpperCase(),
-      fw: (j['fw'] ?? '').toString(),
+      mac: _s(j['mac']).toUpperCase(),
+      fw: _s(j['fw']),
       online: j['online'] == true,
-      powerW: (j['power_w'] as num?)?.toDouble() ?? 0,
-      energyKwh: (j['energy_kwh'] as num?)?.toDouble() ?? 0,
       voltage: (j['voltage'] as num?)?.toDouble(),
       rssi: (j['rssi'] as num?)?.toInt(),
-      label: (j['label'] ?? '').toString(),
+      label: _s(j['label']),
       outlets: outs,
     );
   }
 
   int get onCount => outlets.where((o) => o.on).length;
-  bool get anyOn => outlets.any((o) => o.on);
   int get lockedCount => outlets.where((o) => o.locked).length;
   int get maxTemp => outlets.isEmpty ? 0 : outlets.map((o) => o.tempC).reduce((a, b) => a > b ? a : b);
   double get livePower => outlets.fold(0.0, (sum, o) => sum + (o.on ? o.powerW : 0));
+  bool get anyProtectedOn => outlets.any((o) => o.protected && o.on);
 
   Strip _with({List<Outlet>? outlets, String? label}) => Strip(
         mac: mac,
         fw: fw,
         online: online,
-        powerW: powerW,
-        energyKwh: energyKwh,
         voltage: voltage,
         rssi: rssi,
         label: label ?? this.label,
         outlets: outlets ?? this.outlets,
       );
 
-  /// A copy with outlet [n] (or all when n == 0) switched to [on] — used for optimistic UI.
   Strip withOutlets(int n, bool on) =>
       _with(outlets: outlets.map((o) => (n == 0 || o.n == n) ? o.copyWith(on: on) : o).toList());
 
   Strip withOutletState(Map<int, bool> overrides) =>
       _with(outlets: outlets.map((o) => overrides.containsKey(o.n) ? o.copyWith(on: overrides[o.n]) : o).toList());
 
-  Strip withLabel(int n, String value) => n == 0
-      ? _with(label: value)
-      : _with(outlets: outlets.map((o) => o.n == n ? o.copyWith(label: value) : o).toList());
+  Strip withLabel(int n, String value) =>
+      n == 0 ? _with(label: value) : _with(outlets: outlets.map((o) => o.n == n ? o.copyWith(label: value) : o).toList());
 
-  Strip withLock(int n, bool locked) =>
-      _with(outlets: outlets.map((o) => o.n == n ? o.copyWith(locked: locked) : o).toList());
+  Strip withOutlet(int n, Outlet Function(Outlet) f) => _with(outlets: outlets.map((o) => o.n == n ? f(o) : o).toList());
+}
+
+class HubTimer {
+  final int tid;
+  final String mac;
+  final int outlet;
+  final String kind; // on | off | cycle
+  final int phase;
+  final int inS;
+  final int offS;
+  const HubTimer({required this.tid, required this.mac, required this.outlet, required this.kind, required this.phase, required this.inS, required this.offS});
+  factory HubTimer.fromJson(Map<String, dynamic> j) => HubTimer(
+        tid: _i(j['tid']),
+        mac: _s(j['mac']).toUpperCase(),
+        outlet: _i(j['outlet']),
+        kind: _s(j['kind']),
+        phase: _i(j['phase']),
+        inS: _i(j['in_s']),
+        offS: _i(j['off_s']),
+      );
+}
+
+class Schedule {
+  int sid;
+  String mac;
+  int outlet; // 0 = whole strip
+  bool on;
+  int days; // bit 0 = Sunday … bit 6 = Saturday; 0 = one-time
+  int hh;
+  int mm;
+  int date; // yyyymmdd for one-time
+  bool enabled;
+  String label;
+  Schedule({this.sid = 0, required this.mac, this.outlet = 1, this.on = true, this.days = 0x3E, this.hh = 8, this.mm = 0, this.date = 0, this.enabled = true, this.label = ''});
+  factory Schedule.fromJson(Map<String, dynamic> j) => Schedule(
+        sid: _i(j['sid']),
+        mac: _s(j['mac']).toUpperCase(),
+        outlet: _i(j['outlet']),
+        on: j['on'] == true,
+        days: _i(j['days']),
+        hh: _i(j['hh']),
+        mm: _i(j['mm']),
+        date: _i(j['date']),
+        enabled: j['enabled'] == true,
+        label: _s(j['label']),
+      );
+  Map<String, dynamic> toJson() => {
+        'sid': sid,
+        'mac': mac,
+        'outlet': outlet,
+        'on': on,
+        'days': days,
+        'hh': hh,
+        'mm': mm,
+        'date': date,
+        'enabled': enabled,
+        'label': label,
+      };
+}
+
+class Automation {
+  int aid;
+  String mac;
+  int outlet;
+  bool above;
+  double watts;
+  int holdS;
+  int act; // 1 notify, 2 off, 3 both
+  bool enabled;
+  String label;
+  Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = ''});
+  factory Automation.fromJson(Map<String, dynamic> j) => Automation(
+        aid: _i(j['aid']),
+        mac: _s(j['mac']).toUpperCase(),
+        outlet: _i(j['outlet'], 1),
+        above: j['above'] == true,
+        watts: _d(j['watts']),
+        holdS: _i(j['hold_s'], 600),
+        act: _i(j['act'], 1),
+        enabled: j['enabled'] == true,
+        label: _s(j['label']),
+      );
+  Map<String, dynamic> toJson() => {
+        'aid': aid,
+        'mac': mac,
+        'outlet': outlet,
+        'above': above,
+        'watts': watts,
+        'hold_s': holdS,
+        'act': act,
+        'enabled': enabled,
+        'label': label,
+      };
+}
+
+class HubEvent {
+  final int ts;
+  final String type;
+  final String mac;
+  final int outlet;
+  final String msg;
+  const HubEvent({required this.ts, required this.type, required this.mac, required this.outlet, required this.msg});
+  factory HubEvent.fromJson(Map<String, dynamic> j) =>
+      HubEvent(ts: _i(j['ts']), type: _s(j['type']), mac: _s(j['mac']).toUpperCase(), outlet: _i(j['outlet']), msg: _s(j['msg']));
+  String get key => '$ts|$type|$mac|$outlet|$msg';
+}
+
+class EnergyDay {
+  final int date; // yyyymmdd
+  final List<int> wh; // per outlet
+  const EnergyDay(this.date, this.wh);
+  int get total => wh.fold(0, (a, b) => a + b);
+}
+
+class EnergyData {
+  final String mac;
+  final int today;
+  final List<int> todayWh;
+  final List<EnergyDay> days; // newest first, excludes today
+  final bool timeOk;
+  const EnergyData({required this.mac, required this.today, required this.todayWh, required this.days, required this.timeOk});
+  factory EnergyData.fromJson(Map<String, dynamic> j) {
+    List<int> ints(Object? v) => v is List ? v.map((e) => (e as num).toInt()).toList() : <int>[0, 0, 0, 0];
+    final days = <EnergyDay>[];
+    final raw = j['days'];
+    if (raw is List) {
+      for (final d in raw) {
+        if (d is Map<String, dynamic>) days.add(EnergyDay(_i(d['date']), ints(d['wh'])));
+      }
+    }
+    return EnergyData(mac: _s(j['mac']).toUpperCase(), today: _i(j['today']), todayWh: ints(j['today_wh']), days: days, timeOk: j['time_ok'] == true);
+  }
 }
