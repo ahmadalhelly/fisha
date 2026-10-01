@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import '../widgets/common.dart';
+
+const appVersion = '1.0.0';
 
 class SettingsScreen extends StatefulWidget {
   final AppState state;
@@ -13,12 +16,11 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final TextEditingController _hub, _host, _port, _user, _pass, _local, _localPort;
+  TextEditingController? _hub, _host, _port, _user, _pass, _local, _localPort;
   bool _obscure = true;
 
-  @override
-  void initState() {
-    super.initState();
+  void _initCtrls() {
+    if (_hub != null || !widget.state.ready) return;
     final s = widget.state.settings;
     _hub = TextEditingController(text: s.hubId);
     _host = TextEditingController(text: s.brokerHost);
@@ -32,31 +34,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort]) {
-      c.dispose();
+      c?.dispose();
     }
     super.dispose();
   }
 
   Future<void> _save() async {
     final s = HubSettings(
-      hubId: _hub.text.trim().toUpperCase(),
-      brokerHost: _host.text.trim(),
-      brokerPort: int.tryParse(_port.text.trim()) ?? 8883,
-      username: _user.text.trim(),
-      password: _pass.text,
-      localHost: _local.text.trim(),
-      localPort: int.tryParse(_localPort.text.trim()) ?? 8080,
+      hubId: _hub!.text.trim().toUpperCase(),
+      brokerHost: _host!.text.trim(),
+      brokerPort: int.tryParse(_port!.text.trim()) ?? 8883,
+      username: _user!.text.trim(),
+      password: _pass!.text,
+      localHost: _local!.text.trim(),
+      localPort: int.tryParse(_localPort!.text.trim()) ?? 8080,
     );
     FocusScope.of(context).unfocus();
     await widget.state.saveSettings(s);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('saved'))));
-    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('saved'))));
   }
 
   @override
   Widget build(BuildContext context) {
     final st = widget.state;
+    _initCtrls();
+    if (_hub == null) return const SizedBox.shrink();
     return SafeArea(
       child: ListenableBuilder(
         listenable: st,
@@ -65,39 +67,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
-            _section(t('sec_look'), [
+            section(t('sec_look'), [
               Text(t('theme'), style: TextStyle(color: C.textSoft)),
-              _segmented<ThemePref>(
+              Segmented<ThemePref>(
                 value: st.themePref,
                 items: {ThemePref.system: t('th_system'), ThemePref.dark: t('th_dark'), ThemePref.light: t('th_light')},
                 onChanged: st.setThemePref,
               ),
-              const SizedBox(height: 4),
               Text(t('language'), style: TextStyle(color: C.textSoft)),
-              _segmented<LangPref>(
+              Segmented<LangPref>(
                 value: st.langPref,
                 items: {LangPref.system: t('th_system'), LangPref.ar: 'العربية', LangPref.en: 'English'},
                 onChanged: st.setLangPref,
               ),
             ]),
             const SizedBox(height: 16),
-            _section(t('conn_status'), [
+            section(t('conn_status'), [
               _status(t('st_local'), st.mode == ConnMode.local),
+              _status(t('st_live'), st.sseLive),
               _status(t('st_cloud'), st.mqttConnected),
               _status(t('st_hub'), st.hubOnline),
               if (st.hubFw != null) _kv(t('hub_fw'), st.hubFw!),
             ]),
             const SizedBox(height: 16),
-            _section(t('sec_local'), [
-              _field(_local, t('f_local'), hint: '192.168.1.110', ltr: true),
-              _field(_localPort, t('f_port'), hint: '8080', ltr: true, number: true),
+            section(t('sec_local'), [
+              _field(_local!, t('f_local'), hint: '192.168.1.110', ltr: true),
+              _field(_localPort!, t('f_port'), hint: '8080', ltr: true, number: true),
             ]),
             const SizedBox(height: 16),
-            _section(t('sec_cloud'), [
-              _field(_hub, t('f_hubid'), hint: '80F3DA40F674', ltr: true),
-              _field(_host, t('f_host'), hint: 'xxxx.emqxsl.com', ltr: true),
-              _field(_port, t('f_port'), hint: '8883', ltr: true, number: true),
-              _field(_user, t('f_user'), hint: 'stripe_app', ltr: true),
+            section(t('sec_cloud'), [
+              _field(_hub!, t('f_hubid'), hint: '80F3DA40F674', ltr: true),
+              _field(_host!, t('f_host'), hint: 'xxxx.emqxsl.com', ltr: true),
+              _field(_port!, t('f_port'), hint: '8883', ltr: true, number: true),
+              _field(_user!, t('f_user'), hint: 'stripe_app', ltr: true),
               TextField(
                 controller: _pass,
                 obscureText: _obscure,
@@ -113,18 +115,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ]),
             const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _save,
-              style: FilledButton.styleFrom(
-                backgroundColor: C.accent,
-                foregroundColor: C.onAccent,
-                minimumSize: const Size(0, 52),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              ),
-              child: Text(t('save_reconnect'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            ),
+            primaryButton(t('save_reconnect'), _save, icon: Icons.sync),
             const SizedBox(height: 16),
-            _section(t('sec_privacy'), [
+            section(t('sec_privacy'), [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: st.showMac,
@@ -134,57 +127,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(t('show_mac_sub'), style: TextStyle(color: C.muted, fontSize: 12)),
               ),
             ]),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _segmented<T>({required T value, required Map<T, String> items, required ValueChanged<T> onChanged}) {
-    return Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14)),
-      child: Row(
-        children: [
-          for (final e in items.entries)
-            Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(11),
-                onTap: () => onChanged(e.key),
-                child: Container(
-                  height: 40,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: e.key == value ? C.accentBg : Colors.transparent,
-                    borderRadius: BorderRadius.circular(11),
-                    border: Border.all(color: e.key == value ? C.tileOnBorder : Colors.transparent),
-                  ),
-                  child: Text(e.value,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: e.key == value ? FontWeight.w600 : FontWeight.w400,
-                        color: e.key == value ? C.accent : C.textSoft,
-                      )),
+            const SizedBox(height: 16),
+            section(t('sec_about'), [
+              Row(children: [
+                const BrandMark(size: 52),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${t('app_name')} · Fisha', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    Text('${t('version')} $appVersion', style: TextStyle(color: C.muted, fontSize: 12)),
+                  ]),
                 ),
-              ),
-            ),
-        ],
+              ]),
+            ]),
+            const SizedBox(height: 20),
+            Center(child: Text(t('by'), style: mono(12, color: C.muted, weight: FontWeight.w500))),
+          ],
+        ),
       ),
     );
   }
-
-  Widget _section(String title, List<Widget> children) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: cardBox(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(title, style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 12),
-            for (final c in children) Padding(padding: const EdgeInsets.only(bottom: 10), child: c),
-          ],
-        ),
-      );
 
   Widget _field(TextEditingController c, String label, {String? hint, bool ltr = false, bool number = false}) => TextField(
         controller: c,
