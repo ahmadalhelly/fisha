@@ -21,7 +21,7 @@ class PlaceholderScreen extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(18),
               decoration: cardBox(),
-              child: Text(note, style: const TextStyle(color: C.textSoft, height: 1.6)),
+              child: Text(note, style: TextStyle(color: C.textSoft, height: 1.6)),
             ),
           ],
         ),
