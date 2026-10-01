@@ -1,18 +1,9 @@
-# MTTL Hub
+# Fisha · فيشة
 
-Local-first controller for LG U+ **MTTL-W01** smart power strips.
+Local-first controller for LG U+ MTTL-W01 smart power strips: an ESP32 hub talks to the strips on your Wi-Fi and relays to the cloud over MQTT; the Android app works on the home network (live push) and from anywhere.
 
-```
-strip ──TCP 10086──► ESP32 hub ──MQTT/TLS──► cloud broker ◄── app (remote)
-                        └── REST :8080 ◄── app (same Wi-Fi)
-```
+- `firmware/mttl_hub/` — ESP32 hub v2.0 (Arduino core 3.x, partition "Minimal SPIFFS"). Fill WIFI_PASS, MQTT_PASS, OTA_PASS.
+- `app/` — Flutter app v1.0. CI builds a signed APK into Releases on every push.
+- `docs/protocol.md` — strip protocol + hub API.
 
-| Folder | What |
-|---|---|
-| `firmware/mttl_hub` | ESP32 hub firmware (Arduino-ESP32 3.x) |
-| `app` | Flutter app (Android). Built by GitHub Actions on every push to `main` |
-| `docs` | Protocol notes |
-
-**Get the app:** Releases → latest → `app-release.apk`.
-
-Build logs of the last CI run are on the `ci-logs` branch.
+By: ahmadalhelly
