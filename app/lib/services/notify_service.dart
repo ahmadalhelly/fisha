@@ -83,7 +83,8 @@ void notifyCallback() {
 }
 
 class _NotifyHandler extends TaskHandler {
-  static const _types = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added', 'test'];
+  static const _types = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added', 'test',
+      'button', 'remote', 'online', 'offline', 'voltage'];
 
   final _notes = FlutterLocalNotificationsPlugin();
   MqttServerClient? _client;
@@ -172,7 +173,7 @@ class _NotifyHandler extends TaskHandler {
     if (ts > 0 && DateTime.fromMillisecondsSinceEpoch(ts * 1000).isBefore(_startedAt.subtract(const Duration(minutes: 2)))) return;
     // same filters the user set in the app (stored on the hub)
     final cfg = _state['config'];
-    final types = cfg is Map ? (cfg['ntypes'] as num?)?.toInt() ?? 0x7FF : 0x7FF;
+    final types = cfg is Map ? (cfg['ntypes'] as num?)?.toInt() ?? 0xFFFFFFFF : 0xFFFFFFFF;
     final bit = _types.indexOf(type);
     if (type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
     final strip = mac.isEmpty ? null : _strip(mac);
@@ -196,8 +197,9 @@ class _NotifyHandler extends TaskHandler {
       }
     }
     final title = type == 'test' ? 'Fisha ✓' : t('nt_$type');
-    final body = [if (who.isNotEmpty) who, if (msg.isNotEmpty && type != 'test') msg].join(' — ');
-    final urgent = type == 'temp' || type == 'load';
+    final shown = msg == 'on' ? t('on_word') : (msg == 'off' ? t('off') : msg);
+    final body = [if (who.isNotEmpty) who, if (shown.isNotEmpty && type != 'test') shown].join(' — ');
+    final urgent = type == 'temp' || type == 'load' || type == 'voltage' || type == 'offline';
     _notes.show(
       id: _id++,
       title: title,
