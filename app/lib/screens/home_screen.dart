@@ -11,6 +11,7 @@ import '../widgets/strip_mini.dart';
 import 'add_strip_screen.dart';
 import 'automations_screen.dart';
 import 'events_screen.dart';
+import 'scenes_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final AppState state;
@@ -126,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _summary(),
       const SizedBox(height: 16),
       Row(children: [
-        Expanded(child: _quick(Icons.bar_chart, t('q_energy'), () => s.setTab(2))),
+        Expanded(child: _quick(Icons.auto_awesome, Tr.isAr ? 'المشاهد' : 'Scenes', () => _push(ScenesScreen(state: s)))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.schedule, t('q_sched'), () => s.setTab(1))),
         const SizedBox(width: 8),
