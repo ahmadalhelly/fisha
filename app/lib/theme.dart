@@ -29,58 +29,55 @@ class C {
   static Color accent2 = const Color(0xFF38BDF8);
   static Color warn = const Color(0xFFFFB547);
 
-  static void use(bool isDark) {
-    dark = isDark;
-    if (isDark) {
-      bg = const Color(0xFF070D19);
-      surface = const Color(0xFF0E1628);
-      surface2 = const Color(0xFF16213A);
-      tile = const Color(0xFF111B2F);
-      border = const Color(0xFF1F2D48);
-      nav = const Color(0xFF0A1221);
-      text = const Color(0xFFE9F2FF);
-      textSoft = const Color(0xFFC2D1E8);
-      muted = const Color(0xFF8798B3);
-      faint = const Color(0xFF4D5C77);
-      accent = const Color(0xFF2EE6B0);
-      accentBg = const Color(0xFF0E2A2B);
-      tileOn = const Color(0xFF0D2524);
-      tileOnBorder = const Color(0xFF1E7D68);
-      onAccent = const Color(0xFF032019);
-      switchOff = const Color(0xFF2A3855);
-      miniOff = const Color(0xFF18233B);
-      green = const Color(0xFF3DDC97);
-      greenBg = const Color(0xFF0E2A20);
-      greenText = const Color(0xFF7BE6B7);
-      blue = const Color(0xFF38BDF8);
-      danger = const Color(0xFFFF6B6B);
-      accent2 = const Color(0xFF38BDF8);
-      warn = const Color(0xFFFFB547);
-    } else {
-      bg = const Color(0xFFF1F6FA);
-      surface = const Color(0xFFFFFFFF);
-      surface2 = const Color(0xFFE8F0F6);
-      tile = const Color(0xFFF5F9FC);
-      border = const Color(0xFFD8E2ED);
-      nav = const Color(0xFFFFFFFF);
-      text = const Color(0xFF0B1424);
-      textSoft = const Color(0xFF2B3A52);
-      muted = const Color(0xFF5A6A82);
-      faint = const Color(0xFF9AA8BC);
-      accent = const Color(0xFF079E7D);
-      accentBg = const Color(0xFFDFF6EF);
-      tileOn = const Color(0xFFE9FAF4);
-      tileOnBorder = const Color(0xFF8AD9C4);
-      onAccent = const Color(0xFFFFFFFF);
-      switchOff = const Color(0xFFC8D4E1);
-      miniOff = const Color(0xFFE2E9F1);
-      green = const Color(0xFF14935E);
-      greenBg = const Color(0xFFE0F5EB);
-      greenText = const Color(0xFF0F7A4D);
-      blue = const Color(0xFF0284C7);
-      danger = const Color(0xFFD94848);
-      accent2 = const Color(0xFF0284C7);
-      warn = const Color(0xFFC77700);
+  static String themeId = 'dark';
+  static void use(bool isDark) => useId(isDark ? 'dark' : 'light');
+
+  static void _set(List<int> v) {
+    bg = Color(v[0]);
+    surface = Color(v[1]);
+    surface2 = Color(v[2]);
+    tile = Color(v[3]);
+    border = Color(v[4]);
+    nav = Color(v[5]);
+    text = Color(v[6]);
+    textSoft = Color(v[7]);
+    muted = Color(v[8]);
+    faint = Color(v[9]);
+    accent = Color(v[10]);
+    accentBg = Color(v[11]);
+    tileOn = Color(v[12]);
+    tileOnBorder = Color(v[13]);
+    onAccent = Color(v[14]);
+    switchOff = Color(v[15]);
+    miniOff = Color(v[16]);
+    green = Color(v[17]);
+    greenBg = Color(v[18]);
+    greenText = Color(v[19]);
+    blue = Color(v[20]);
+    danger = Color(v[21]);
+    accent2 = Color(v[22]);
+    warn = Color(v[23]);
+  }
+
+  /// dark / light / graphite (in between) / saffron (warm light with a saffron tint)
+  static void useId(String id) {
+    themeId = id;
+    dark = id == 'dark' || id == 'graphite';
+    switch (id) {
+      case 'light':
+        _set(const [0xFFF1F6FA, 0xFFFFFFFF, 0xFFE8F0F6, 0xFFF5F9FC, 0xFFD8E2ED, 0xFFFFFFFF, 0xFF0B1424, 0xFF2B3A52, 0xFF5A6A82, 0xFF9AA8BC, 0xFF079E7D, 0xFFDFF6EF,
+          0xFFE9FAF4, 0xFF8AD9C4, 0xFFFFFFFF, 0xFFC8D4E1, 0xFFE2E9F1, 0xFF14935E, 0xFFE0F5EB, 0xFF0F7A4D, 0xFF0284C7, 0xFFD94848, 0xFF0284C7, 0xFFC77700]);
+      case 'graphite':
+        _set(const [0xFF1C1F24, 0xFF25292F, 0xFF30353C, 0xFF2A2E35, 0xFF3B4149, 0xFF202328, 0xFFEEF1F5, 0xFFC9CFD8, 0xFF98A1AD, 0xFF626A75, 0xFF4FD8B8, 0xFF1F3833,
+          0xFF233A35, 0xFF3E8C79, 0xFF0B2A23, 0xFF474E58, 0xFF2C3138, 0xFF5AD39A, 0xFF213A2E, 0xFF8BE3B8, 0xFF7CC4F5, 0xFFFF7A7A, 0xFF7CC4F5, 0xFFF5B95A]);
+      case 'saffron':
+        _set(const [0xFFF8F1E4, 0xFFFFFBF3, 0xFFF2E7D3, 0xFFFBF5EA, 0xFFE8DAC0, 0xFFFFFBF3, 0xFF2A2013, 0xFF4B3B25, 0xFF7E6B4F, 0xFFB7A588, 0xFFC27803, 0xFFF8E7C4,
+          0xFFFCF0D8, 0xFFE5BF73, 0xFFFFFFFF, 0xFFDCCDB2, 0xFFEFE4CF, 0xFF3C8D4E, 0xFFE6F2DF, 0xFF2F7440, 0xFF2C7DA0, 0xFFC6402A, 0xFFB4532A, 0xFFB45309]);
+      default:
+        themeId = 'dark';
+        dark = true;
+        _set(const [0xFF070D19, 0xFF0E1628, 0xFF16213A, 0xFF111B2F, 0xFF1F2D48, 0xFF0A1221, 0xFFE9F2FF, 0xFFC2D1E8, 0xFF8798B3, 0xFF4D5C77, 0xFF2EE6B0, 0xFF0E2A2B,
+          0xFF0D2524, 0xFF1E7D68, 0xFF032019, 0xFF2A3855, 0xFF18233B, 0xFF3DDC97, 0xFF0E2A20, 0xFF7BE6B7, 0xFF38BDF8, 0xFFFF6B6B, 0xFF38BDF8, 0xFFFFB547]);
     }
   }
 }
