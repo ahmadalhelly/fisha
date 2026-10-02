@@ -118,7 +118,8 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(14)),
-                child: Icon(a.isTemp ? Icons.thermostat : (a.above ? Icons.trending_up : Icons.trending_down), color: a.isTemp ? C.danger : C.accent),
+                child: Icon(a.isBoth ? Icons.shield_moon_outlined : (a.isTemp ? Icons.thermostat : (a.above ? Icons.trending_up : Icons.trending_down)),
+                    color: a.metric > 0 ? C.warn : C.accent),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -127,7 +128,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Text(
-                    '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}',
+                    a.isBoth
+                        ? '${t('when_either')} ${a.watts.toStringAsFixed(0)} W ${t('or')} ${a.limit2.toStringAsFixed(0)}°C · ${fmtDuration(a.holdS)}'
+                        : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}',
                     style: TextStyle(fontSize: 12, color: C.textSoft),
                   ),
                   Text('${s.nameForMac(a.mac, a.outlet)} → ${_actText(a.act)}',
@@ -162,7 +165,7 @@ class AutomationEditor extends StatefulWidget {
 class _AutomationEditorState extends State<AutomationEditor> {
   AppState get s => widget.state;
   late Automation a;
-  late final TextEditingController _label, _watts;
+  late final TextEditingController _label, _watts, _limit2;
   bool _saving = false;
 
   @override
@@ -178,21 +181,27 @@ class _AutomationEditorState extends State<AutomationEditor> {
             watts: 1500,
             holdS: 30,
             act: 3,
+            metric: 2,
+            limit2: 60,
           );
     _label = TextEditingController(text: a.label);
     _watts = TextEditingController(text: a.watts.toStringAsFixed(0));
+    _limit2 = TextEditingController(text: a.limit2.toStringAsFixed(0));
   }
 
   @override
   void dispose() {
     _label.dispose();
     _watts.dispose();
+    _limit2.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     a.label = _label.text.replaceAll('"', '').trim();
     a.watts = double.tryParse(_watts.text.trim()) ?? a.watts;
+    a.limit2 = double.tryParse(_limit2.text.trim()) ?? a.limit2;
+    if (a.isBoth) a.above = true;
     setState(() => _saving = true);
     final ok = await s.saveAutomation(a);
     if (!mounted) return;
@@ -246,27 +255,43 @@ class _AutomationEditorState extends State<AutomationEditor> {
           section(t('rule_watch'), [
             Segmented<int>(
               value: a.metric,
-              items: {0: t('metric_power'), 1: t('metric_temp')},
+              items: {0: t('metric_power_s'), 1: t('metric_temp_s'), 2: t('metric_both')},
               onChanged: (v) => setState(() {
                 a.metric = v;
-                if (v == 1) {
-                  a.above = true;
-                  _watts.text = '60';
-                } else {
-                  _watts.text = '1500';
-                }
+                a.above = true;
+                _watts.text = v == 1 ? '60' : '1500';
+                _limit2.text = '60';
               }),
             ),
             if (a.outlet == 0)
-              Text(a.isTemp ? t('rule_strip_temp') : t('rule_strip_power'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
-            Segmented<bool>(
-                value: a.above, items: {false: t('drops_below'), true: t('rises_above')}, onChanged: (v) => setState(() => a.above = v)),
-            TextField(
-              controller: _watts,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textDirection: TextDirection.ltr,
-              decoration: InputDecoration(labelText: a.isTemp ? t('threshold_temp') : t('threshold'), suffixText: a.isTemp ? '°C' : 'W'),
-            ),
+              Text(a.isBoth ? t('rule_strip_both') : (a.isTemp ? t('rule_strip_temp') : t('rule_strip_power')),
+                  style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+            if (a.isBoth)
+              Text(t('rule_both_hint'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5))
+            else
+              Segmented<bool>(
+                  value: a.above, items: {false: t('drops_below'), true: t('rises_above')}, onChanged: (v) => setState(() => a.above = v)),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _watts,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  textDirection: TextDirection.ltr,
+                  decoration: InputDecoration(labelText: a.isTemp ? t('threshold_temp') : t('threshold'), suffixText: a.isTemp ? '°C' : 'W'),
+                ),
+              ),
+              if (a.isBoth) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _limit2,
+                    keyboardType: const TextInputType.number,
+                    textDirection: TextDirection.ltr,
+                    decoration: InputDecoration(labelText: t('threshold_temp'), suffixText: '°C'),
+                  ),
+                ),
+              ],
+            ]),
             Text(t('held_for'), style: TextStyle(color: C.muted, fontSize: 13)),
             DurationPicker(value: a.holdS, maxHours: 17, onChanged: (v) => setState(() => a.holdS = v < 5 ? 5 : v)),
           ]),
