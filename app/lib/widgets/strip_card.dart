@@ -60,6 +60,16 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
   if (choice == 2) await state.setOutlet(s.mac, 0, false);
 }
 
+/// Rated load: the MTTL-W01 is a 16 A strip (about 3500 W in total, and any single outlet may take the full load).
+const double kStripMaxW = 3500;
+const double kOutletMaxW = 3500;
+
+/// Green under half the rating, amber up to 80 %, red above.
+Color loadColor(double watts, double maxW) {
+  final r = watts / maxW;
+  return r >= 0.8 ? C.danger : (r >= 0.5 ? C.warn : C.accent);
+}
+
 /// "1:40 h", "25 min", "40 s"
 String shortDuration(int s) {
   if (s < 60) return '$s ${t('sec')}';
@@ -141,21 +151,33 @@ class StripCard extends StatelessWidget {
                   Row(children: [
                     Flexible(
                       child: Text(
-                        online ? '${t('n_of_4', {'a': s.onCount, 'b': s.outlets.length})} · ${s.maxTemp}°C' : t('offline_kept'),
+                        online ? '${t('n_of_4', {'a': s.onCount, 'b': s.outlets.length})} · ' : t('offline_kept'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 11.5, color: online ? C.muted : C.danger),
                       ),
                     ),
+                    if (online)
+                      Text(
+                        '${s.maxTemp}°C${s.voltage != null ? ' · ${s.voltage!.toStringAsFixed(0)} V' : ''}',
+                        textDirection: TextDirection.ltr,
+                        style: TextStyle(fontSize: 11.5, color: C.muted),
+                      ),
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
                 ]),
               ),
             ),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              AnimatedNumber(value: online ? s.livePower : 0, style: mono(20, color: online ? C.accent : C.faint)),
-              Text('W', style: mono(10, color: C.muted, weight: FontWeight.w500)),
-            ]),
+            Row(
+              textDirection: TextDirection.ltr,
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                AnimatedNumber(value: online ? s.livePower : 0, style: mono(20, color: online ? loadColor(s.livePower, kStripMaxW) : C.faint)),
+                const SizedBox(width: 3),
+                Text('W', style: mono(12, color: C.muted, weight: FontWeight.w500)),
+              ],
+            ),
             IconButton(
               tooltip: t('strip_settings'),
               visualDensity: VisualDensity.compact,
@@ -174,7 +196,7 @@ class StripCard extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: C.dark ? [const Color(0xFF15203A), const Color(0xFF0C1427)] : [const Color(0xFFFFFFFF), const Color(0xFFEAF1F7)],
+                colors: C.dark ? [C.surface2, C.surface] : [C.surface, C.surface2],
               ),
               border: Border.all(color: C.border),
             ),
@@ -223,7 +245,7 @@ class _Socket extends StatelessWidget {
     final on = strip.online && o.on;
     final pending = state.isPending(strip.mac, o.n);
     final badges = badgesFor(state, strip, o, size: 12);
-    final load = on ? (o.powerW / 2000).clamp(0.0, 1.0) : 0.0;
+    final load = on ? (o.powerW / kOutletMaxW).clamp(0.0, 1.0) : 0.0;
     return InkWell(
       borderRadius: BorderRadius.circular(18),
       onTap: pending ? null : () => guardedSwitch(context, state, strip, o, !o.on),
@@ -255,7 +277,7 @@ class _Socket extends StatelessWidget {
           Text(
             on ? '${o.powerW.toStringAsFixed(o.powerW < 10 ? 1 : 0)} W' : (strip.online ? t('off') : '—'),
             textDirection: TextDirection.ltr,
-            style: on ? mono(11, color: C.accent, weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
+            style: on ? mono(11, color: loadColor(o.powerW, kOutletMaxW), weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
           ),
           if (strip.online)
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -280,7 +302,7 @@ class _SocketPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final r = size.width / 2;
-    final ringColor = hot ? C.danger : C.accent;
+    final ringColor = hot ? C.danger : (load >= 0.8 ? C.danger : (load >= 0.5 ? C.warn : C.accent));
     // track
     canvas.drawCircle(c, r - 3, Paint()
       ..style = PaintingStyle.stroke
@@ -305,7 +327,7 @@ class _SocketPainter extends CustomPainter {
           ..shader = SweepGradient(
             startAngle: -math.pi / 2,
             endAngle: -math.pi / 2 + sweep,
-            colors: hot ? [C.warn, C.danger] : [C.accent, C.accent2],
+            colors: hot || load >= 0.8 ? [C.warn, C.danger] : (load >= 0.5 ? [C.accent, C.warn] : [C.accent, C.accent2]),
             transform: const GradientRotation(-math.pi / 2),
           ).createShader(Rect.fromCircle(center: c, radius: r)),
       );
@@ -318,8 +340,8 @@ class _SocketPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: on
-              ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? const Color(0xFF0F2A2C) : const Color(0xFFDDF6EE)]
-              : (dark ? [const Color(0xFF1E2A44), const Color(0xFF131C30)] : [const Color(0xFFFFFFFF), const Color(0xFFE3EAF2)]),
+              ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg]
+              : (dark ? [C.surface2, C.tile] : [C.surface, C.miniOff]),
         ).createShader(Rect.fromCircle(center: c, radius: face)),
     );
     canvas.drawCircle(c, face, Paint()
@@ -327,7 +349,7 @@ class _SocketPainter extends CustomPainter {
       ..strokeWidth = 1
       ..color = on ? ringColor.withValues(alpha: 0.6) : C.border);
     // two pin holes
-    final hole = Paint()..color = on ? (dark ? const Color(0xFF062019) : const Color(0xFF0B5E4B)) : (dark ? const Color(0xFF0A1020) : const Color(0xFFB9C6D4));
+    final hole = Paint()..color = on ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
     canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
     canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
     // earth clips
@@ -340,5 +362,5 @@ class _SocketPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SocketPainter old) => old.on != on || old.load != load || old.hot != hot || old.dark != dark;
+  bool shouldRepaint(covariant _SocketPainter old) => true; // cheap, and picks up theme changes
 }
