@@ -10,7 +10,7 @@ import '../widgets/common.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-/// A scene sets several outlets at once ("Leaving home", "Night"...). Kept on the phone.
+/// A scenario sets several outlets at once ("Leaving home", "Night"...). Kept on the phone.
 class Scene {
   String id;
   String name;
@@ -36,7 +36,7 @@ class SceneStore {
       (await SharedPreferences.getInstance()).setString('scenes', jsonEncode([for (final s in list) s.toJson()]));
 }
 
-/// Runs a scene. Offline strips are skipped; protected outlets are never switched off by a scene.
+/// Runs a scenario. Offline strips are skipped; protected outlets are never switched off by a scenario.
 Future<int> runScene(AppState state, Scene sc) async {
   var done = 0;
   for (final e in sc.actions.entries) {
@@ -103,19 +103,19 @@ class _ScenesScreenState extends State<ScenesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: C.bg,
-      appBar: AppBar(backgroundColor: C.bg, surfaceTintColor: Colors.transparent, title: Text(_tr('المشاهد', 'Scenes'), style: const TextStyle(fontWeight: FontWeight.w700))),
+      appBar: AppBar(backgroundColor: C.bg, surfaceTintColor: Colors.transparent, title: Text(_tr('السيناريوهات', 'Scenarios'), style: const TextStyle(fontWeight: FontWeight.w700))),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _edit(),
         backgroundColor: C.accent,
         foregroundColor: C.onAccent,
         icon: const Icon(Icons.add),
-        label: Text(_tr('مشهد جديد', 'New scene'), style: const TextStyle(fontWeight: FontWeight.w700)),
+        label: Text(_tr('سيناريو جديد', 'New scenario'), style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
           if (_scenes.isEmpty)
-            emptyCard(_tr('المشهد بيشغّل ويقفل كذا مخرج بضغطة واحدة. مثلاً "خارج من البيت" يقفل كل حاجة ما عدا الراوتر، أو "وقت الشغل" يشغّل الكمبيوتر والشاشة واللمبة.',
-                'A scene switches several outlets with one tap. E.g. "Leaving home" turns everything off except the router.'), icon: Icons.auto_awesome),
+            emptyCard(_tr('السيناريو بيشغّل ويقفل كذا مخرج بضغطة واحدة. مثلاً "خارج من البيت" يقفل كل حاجة ما عدا الراوتر، أو "وقت الشغل" يشغّل الكمبيوتر والشاشة واللمبة.',
+                'A scenario switches several outlets with one tap. E.g. "Leaving home" turns everything off except the router.'), icon: Icons.auto_awesome),
           for (final sc in _scenes)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -155,7 +155,7 @@ class _ScenesScreenState extends State<ScenesScreen> {
                 ),
               ),
             ),
-          if (_scenes.isNotEmpty) Text(_tr('اضغط على المشهد لتشغيله، ومطوّلاً لتعديله.', 'Tap a scene to run it, long-press to edit.'), textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 12)),
+          if (_scenes.isNotEmpty) Text(_tr('اضغط على السيناريو لتشغيله، ومطوّلاً لتعديله.', 'Tap a scenario to run it, long-press to edit.'), textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 12)),
         ]),
       ),
     );
@@ -198,7 +198,7 @@ class _SceneEditorState extends State<_SceneEditor> {
       appBar: AppBar(
         backgroundColor: C.bg,
         surfaceTintColor: Colors.transparent,
-        title: Text(widget.initial == null ? _tr('مشهد جديد', 'New scene') : _tr('تعديل المشهد', 'Edit scene'), style: const TextStyle(fontWeight: FontWeight.w700)),
+        title: Text(widget.initial == null ? _tr('سيناريو جديد', 'New scenario') : _tr('تعديل السيناريو', 'Edit scenario'), style: const TextStyle(fontWeight: FontWeight.w700)),
         actions: [
           if (widget.initial != null)
             IconButton(
@@ -209,7 +209,7 @@ class _SceneEditorState extends State<_SceneEditor> {
       ),
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
-          TextField(controller: _name, maxLength: 24, decoration: InputDecoration(labelText: _tr('اسم المشهد', 'Scene name'), hintText: _tr('مثلاً: خارج من البيت', 'e.g. Leaving home'))),
+          TextField(controller: _name, maxLength: 24, decoration: InputDecoration(labelText: _tr('اسم السيناريو', 'Scenario name'), hintText: _tr('مثلاً: خارج من البيت', 'e.g. Leaving home'))),
           Text(_tr('لكل مخرج اختار: تجاهل، تشغيل، أو قفل', 'For each outlet choose: skip, on or off'), style: TextStyle(color: C.muted, fontSize: 12)),
           const SizedBox(height: 10),
           for (final st in s.allStrips) ...[
@@ -246,7 +246,7 @@ class _SceneEditorState extends State<_SceneEditor> {
               ),
           ],
           const SizedBox(height: 6),
-          emptyCard(_tr('المخارج المحمية (زي الراوتر) مش هتتقفل من المشهد حتى لو اخترت "قفل".', 'Protected outlets (like the router) are never switched off by a scene.'), icon: Icons.shield_outlined),
+          emptyCard(_tr('المخارج المحمية (زي الراوتر) مش هتتقفل من السيناريو حتى لو اخترت "قفل".', 'Protected outlets (like the router) are never switched off by a scenario.'), icon: Icons.shield_outlined),
           const SizedBox(height: 16),
           primaryButton(t('save'), _save, icon: Icons.check),
         ]),
