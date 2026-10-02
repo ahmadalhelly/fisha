@@ -24,10 +24,16 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   AppState get s => widget.state;
   Timer? _tick;
+  final _scroll = ScrollController();
+  bool _compact = false;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(() {
+      final c = _scroll.hasClients && _scroll.offset > 230;
+      if (c != _compact) setState(() => _compact = c);
+    });
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {}); // "updated Xs ago"
     });
@@ -36,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _tick?.cancel();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -61,9 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
             const pad = EdgeInsets.fromLTRB(18, 16, 18, 96);
             Widget body;
             if (strips.isEmpty) {
-              body = ListView(padding: pad, children: [header, const SizedBox(height: 16), _empty()]);
+              body = ListView(controller: _scroll, padding: pad, children: [header, const SizedBox(height: 16), _empty()]);
             } else if (s.viewMode == ViewMode.grid) {
-              body = ListView(padding: pad, children: [
+              body = ListView(controller: _scroll, padding: pad, children: [
                 header,
                 const SizedBox(height: 16),
                 GridView.count(
@@ -78,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ]);
             } else if (s.sortMode == SortMode.manual && s.query.trim().isEmpty) {
               body = ReorderableListView.builder(
+                scrollController: _scroll,
                 padding: pad,
                 header: Padding(padding: const EdgeInsets.only(bottom: 16), child: header),
                 buildDefaultDragHandles: false,
@@ -97,13 +105,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               );
             } else {
-              body = ListView(padding: pad, children: [
+              body = ListView(controller: _scroll, padding: pad, children: [
                 header,
                 const SizedBox(height: 16),
                 for (final st in strips) Padding(padding: const EdgeInsets.only(bottom: 14), child: StripCard(state: s, strip: st)),
               ]);
             }
-            return RefreshIndicator(color: C.accent, onRefresh: s.refresh, child: body);
+            return Stack(children: [
+              RefreshIndicator(color: C.accent, onRefresh: s.refresh, child: body),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  ignoring: !_compact,
+                  child: AnimatedSlide(
+                    offset: _compact ? Offset.zero : const Offset(0, -1.2),
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    child: AnimatedOpacity(opacity: _compact ? 1 : 0, duration: const Duration(milliseconds: 200), child: _compactBar()),
+                  ),
+                ),
+              ),
+            ]);
           },
         ),
       ),
@@ -127,7 +151,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _summary(),
       const SizedBox(height: 16),
       Row(children: [
-        Expanded(child: _quick(Icons.auto_awesome, Tr.isAr ? 'المشاهد' : 'Scenes', () => _push(ScenesScreen(state: s)))),
+        Expanded(child: _quick(Icons.auto_awesome, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenesScreen(state: s)))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.schedule, t('q_sched'), () => s.setTab(1))),
         const SizedBox(width: 8),
@@ -157,6 +181,49 @@ class _HomeScreenState extends State<HomeScreen> {
         _sortButton(),
       ]),
     ]);
+  }
+
+  /// The summary shrinks into this bar and stays on top while scrolling.
+  Widget _compactBar() {
+    final (modeColor, modeLabel) = switch (s.mode) {
+      ConnMode.local => (C.green, t('mode_local')),
+      ConnMode.cloud => (C.blue, t('mode_cloud')),
+      ConnMode.offline => (C.danger, t('mode_offline')),
+    };
+    final cap = (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW;
+    Widget chip(IconData icon, String text, {Color? color}) => Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 15, color: color ?? C.muted),
+          const SizedBox(width: 3),
+          Text(text, textDirection: TextDirection.ltr, style: mono(12.5, color: color ?? C.textSoft, weight: FontWeight.w600)),
+        ]);
+    return GestureDetector(
+      onTap: () => _scroll.animateTo(0, duration: const Duration(milliseconds: 350), curve: Curves.easeOutCubic),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: C.surface.withValues(alpha: 0.97),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: C.border),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: C.dark ? 0.35 : 0.12), blurRadius: 18, offset: const Offset(0, 6))],
+        ),
+        child: Row(children: [
+          const BrandMark(size: 24),
+          const SizedBox(width: 6),
+          Row(textDirection: TextDirection.ltr, crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+            AnimatedNumber(value: s.totalPower, style: mono(19, color: loadColor(s.totalPower, cap))),
+            const SizedBox(width: 2),
+            Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
+          ]),
+          const Spacer(),
+          chip(Icons.power_outlined, '${s.onCount}/${s.outletCount}'),
+          const SizedBox(width: 10),
+          chip(Icons.thermostat, s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', color: s.allStrips.isEmpty ? null : tempColor(s.maxTemp)),
+          const SizedBox(width: 10),
+          Tooltip(message: modeLabel, child: PulseDot(color: modeColor, active: s.mode != ConnMode.offline)),
+        ]),
+      ),
+    );
   }
 
   Widget _modePill() {
@@ -199,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
                     children: [
-                      AnimatedNumber(value: s.totalPower, style: mono(42, color: C.accent)),
+                      AnimatedNumber(value: s.totalPower, style: mono(42, color: loadColor(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW))),
                       const SizedBox(width: 6),
                       Text('W', style: mono(16, color: C.muted, weight: FontWeight.w500)),
                     ],
@@ -227,7 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
               Expanded(child: _stat('${s.onCount}/${s.outletCount}', t('stat_on'))),
               const SizedBox(width: 8),
-              Expanded(child: _stat(s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', t('stat_temp'))),
+              Expanded(child: _stat(s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', t('stat_temp'), color: s.allStrips.isEmpty ? null : tempColor(s.maxTemp))),
             ]),
           ]),
         ),
@@ -236,11 +303,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _stat(String value, String label) => Container(
+  Widget _stat(String value, String label, {Color? color}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value, textDirection: TextDirection.ltr, style: mono(17)),
+          Text(value, textDirection: TextDirection.ltr, style: mono(17, color: color)),
           const SizedBox(height: 2),
           Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: C.muted)),
         ]),
