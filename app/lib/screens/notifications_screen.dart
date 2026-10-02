@@ -11,6 +11,10 @@ import '../widgets/common.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
+/// index = bit on the hub; 'test' (10) is not offered as a choice
+const _typeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added', 'test',
+    'button', 'remote', 'online', 'offline', 'voltage'];
+
 /// Phone notifications: the hub pushes them through ntfy, so they arrive even when Fisha is closed.
 class NotificationsScreen extends StatefulWidget {
   final AppState state;
@@ -85,7 +89,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     activeTrackColor: C.accent,
                     value: _native,
                     onChanged: _toggleNative,
-                    title: Text(_tr('إشعارات مباشرة على الموبايل', 'Notifications on this phone'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    title: Text(_tr('إشعارات لحظية على الموبايل', 'Instant notifications on this phone'), style: const TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: Text(
                         _tr('من غير أي تطبيق تاني. Fisha بيفضل شغال في الخلفية بإشعار صغير ثابت، وبيوصلك التنبيه حتى لو قفلت التطبيق أو كنت برا البيت.',
                             'No extra app. Fisha keeps a small service running in the background and alerts you even when it is closed or you are away.'),
@@ -149,13 +153,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 if (on || _native) ...[
                   const SizedBox(height: 14),
                   section(t('notif_types'), [
-                    for (var i = 0; i < AppState.notifyTypeKeys.length; i++)
+                    for (var i = 0; i < _typeKeys.length; i++)
+                      if (_typeKeys[i] != 'test')
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         dense: true,
                         activeTrackColor: C.accent,
                         value: s.notifyTypes & (1 << i) != 0,
-                        title: Text(t('nt_${AppState.notifyTypeKeys[i]}')),
+                        title: Text(t('nt_${_typeKeys[i]}')),
                         onChanged: (v) => s.setNotifyConfig(types: v ? s.notifyTypes | (1 << i) : s.notifyTypes & ~(1 << i)),
                       ),
                   ]),
