@@ -17,7 +17,7 @@ enum ViewMode { list, grid }
 
 enum SortMode { manual, power, name, status }
 
-enum ThemePref { system, dark, light }
+enum ThemePref { system, dark, light, graphite, saffron }
 
 enum LangPref { system, ar, en }
 
@@ -490,11 +490,10 @@ class AppState extends ChangeNotifier {
   int get outletCount => _strips.fold(0, (s, e) => s + e.outlets.length);
   int get onlineCount => _strips.where((s) => s.online).length;
   int get maxTemp => _strips.isEmpty ? 0 : _strips.map((s) => s.maxTemp).reduce((a, b) => a > b ? a : b);
+  /// average of the strips that report a voltage
   double? get voltage {
-    for (final s in _strips) {
-      if (s.voltage != null) return s.voltage;
-    }
-    return null;
+    final v = [for (final s in _strips) if (s.online && s.voltage != null) s.voltage!];
+    return v.isEmpty ? null : v.reduce((a, b) => a + b) / v.length;
   }
 
   bool isPending(String mac, int n) => _pending[mac]?.containsKey(n) ?? false;
