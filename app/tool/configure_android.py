@@ -72,6 +72,18 @@ if "android.permission.INTERNET" not in s:
 if "usesCleartextTraffic" not in s:
     s = re.sub(r"<application\b", '<application android:usesCleartextTraffic="true"', s, count=1)
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NAME}"', s, count=1)
+# native notifications: foreground service + notification permissions
+for perm in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED",
+             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"):
+    tag = f'<uses-permission android:name="android.permission.{perm}"/>'
+    if tag not in s:
+        s = s.replace("<application", tag + "\n    <application", 1)
+if "flutter_foreground_task.service.ForegroundService" not in s:
+    s = s.replace("</application>", '''    <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+    </application>''', 1)
 open(man, "w").write(s)
 
 # gradle signing
@@ -92,6 +104,10 @@ if os.path.exists(kts):
         )
         g = g.replace("    buildTypes {", block + "    buildTypes {", 1)
     g = g.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
+    # flutter_local_notifications needs core library desugaring
+    if "isCoreLibraryDesugaringEnabled" not in g:
+        g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", g, count=1)
+        g += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
     open(kts, "w").write(g)
 elif os.path.exists(groovy):
     g = open(groovy).read()
@@ -109,6 +125,9 @@ elif os.path.exists(groovy):
         g = g.replace("    buildTypes {", block + "    buildTypes {", 1)
     g = g.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release")
     g = g.replace('signingConfig = signingConfigs.debug', 'signingConfig = signingConfigs.release')
+    if "coreLibraryDesugaringEnabled" not in g:
+        g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        coreLibraryDesugaringEnabled true", g, count=1)
+        g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
