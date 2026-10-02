@@ -300,3 +300,70 @@ class BrandMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Image.asset('assets/brand/icon_fg.png', width: size, height: size);
 }
+
+// ---------- duration picker: hours / minutes / seconds drop-downs ----------
+/// Three drop-downs (h, m, s). [value] and [onChanged] are in seconds.
+class DurationPicker extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+  final bool showHours, showSeconds;
+  final int maxHours;
+  const DurationPicker({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.showHours = true,
+    this.showSeconds = true,
+    this.maxHours = 23,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final h = value ~/ 3600, m = (value % 3600) ~/ 60, sec = value % 60;
+    Widget box(String label, int v, int max, ValueChanged<int> set) => Expanded(
+          child: InputDecorator(
+            decoration: InputDecoration(labelText: label, contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4)),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: v.clamp(0, max),
+                isExpanded: true,
+                menuMaxHeight: 320,
+                dropdownColor: C.surface2,
+                items: [for (var i = 0; i <= max; i++) DropdownMenuItem(value: i, child: Text(two(i), textDirection: TextDirection.ltr, style: mono(16)))],
+                onChanged: (x) => set(x ?? 0),
+              ),
+            ),
+          ),
+        );
+    return Row(children: [
+      if (showHours) ...[box(t('dur_h'), h, maxHours, (x) => onChanged(x * 3600 + m * 60 + sec)), const SizedBox(width: 8)],
+      box(t('dur_m'), m, 59, (x) => onChanged(h * 3600 + x * 60 + sec)),
+      if (showSeconds) ...[const SizedBox(width: 8), box(t('dur_s'), sec, 59, (x) => onChanged(h * 3600 + m * 60 + x))],
+    ]);
+  }
+}
+
+/// Dialog with a [DurationPicker]; returns seconds, or null when cancelled.
+Future<int?> durationDialog(BuildContext context, String title, int initial,
+    {bool showHours = true, bool showSeconds = true, int maxHours = 23, int minSeconds = 0, String? hint, String? clearLabel}) {
+  var v = initial;
+  return showDialog<int>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) => AlertDialog(
+        backgroundColor: C.surface,
+        title: Text(title, style: const TextStyle(fontSize: 18)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (hint != null) ...[Text(hint, style: TextStyle(color: C.muted, fontSize: 13, height: 1.5)), const SizedBox(height: 12)],
+          DurationPicker(value: v, showHours: showHours, showSeconds: showSeconds, maxHours: maxHours, onChanged: (x) => setLocal(() => v = x)),
+          if (v < minSeconds) ...[const SizedBox(height: 8), Text(t('dur_min', {'x': fmtDuration(minSeconds)}), style: TextStyle(color: C.danger, fontSize: 12))],
+        ]),
+        actions: [
+          if (clearLabel != null) TextButton(onPressed: () => Navigator.pop(ctx, 0), child: Text(clearLabel, style: TextStyle(color: C.danger))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+          TextButton(onPressed: v < minSeconds ? null : () => Navigator.pop(ctx, v), child: Text(t('save'))),
+        ],
+      ),
+    ),
+  );
+}

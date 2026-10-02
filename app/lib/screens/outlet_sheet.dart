@@ -7,9 +7,6 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/strip_card.dart' show timerText, guardedSwitch;
 
-const _autoOffChoices = [0, 5, 15, 30, 60, 120, 240, 480];
-const _delayChoices = [0, 60, 300, 900, 1800, 3600, 7200, 14400];
-const _cycleOffChoices = [5, 10, 30, 60, 120, 300];
 
 String _autoOffLabel(int m) => m == 0 ? t('auto_off_none') : fmtDuration(m * 60);
 
@@ -119,9 +116,9 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                     !v2
                         ? null
                         : () async {
-                            final m = await pickOne<int>(ctx, t('auto_off'),
-                                _autoOffChoices.map((m) => MapEntry(m, _autoOffLabel(m))).toList(), o.autoOffMin);
-                            if (m != null) state.setAutoOff(s, n, m);
+                            final sec = await durationDialog(ctx, t('auto_off'), (o.autoOffMin == 0 ? 30 : o.autoOffMin) * 60,
+                                showSeconds: false, maxHours: 24, minSeconds: 60, hint: t('auto_off_sub'), clearLabel: t('auto_off_none'));
+                            if (sec != null) state.setAutoOff(s, n, (sec ~/ 60).clamp(0, 1440));
                           }),
                 _tile(Icons.hourglass_bottom, t('countdown'), t('countdown_sub'), !v2 ? null : () => _countdownDialog(ctx, state, s, n)),
                 _tile(
@@ -168,7 +165,7 @@ List<Widget> _timerList(BuildContext ctx, AppState state, List<HubTimer> list) {
 Future<void> _countdownDialog(BuildContext ctx, AppState state, Strip s, int n) async {
   final o = s.outlets.firstWhere((x) => x.n == n);
   var on = !o.on;
-  var delay = 1800;
+  var delay = 30 * 60;
   final ok = await showDialog<bool>(
     context: ctx,
     builder: (dctx) => StatefulBuilder(
@@ -182,19 +179,12 @@ Future<void> _countdownDialog(BuildContext ctx, AppState state, Strip s, int n) 
           const SizedBox(height: 14),
           Text(t('start_after'), style: TextStyle(color: C.muted, fontSize: 13)),
           const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final d in _delayChoices.where((d) => d > 0))
-              ChoiceChip(
-                label: Text(fmtDuration(d)),
-                selected: delay == d,
-                selectedColor: C.accentBg,
-                onSelected: (_) => setLocal(() => delay = d),
-              ),
-          ]),
+          DurationPicker(value: delay, onChanged: (v) => setLocal(() => delay = v)),
+          if (delay < 5) ...[const SizedBox(height: 8), Text(t('dur_min', {'x': fmtDuration(5)}), style: TextStyle(color: C.danger, fontSize: 12))],
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-          TextButton(onPressed: () => Navigator.pop(dctx, true), child: Text(t('save'))),
+          TextButton(onPressed: delay < 5 ? null : () => Navigator.pop(dctx, true), child: Text(t('save'))),
         ],
       ),
     ),
@@ -213,7 +203,8 @@ Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n) asyn
     return;
   }
   var off = 10;
-  var delay = 0;
+  var delay = 300;
+  var later = false;
   final ok = await showDialog<bool>(
     context: ctx,
     builder: (dctx) => StatefulBuilder(
@@ -223,31 +214,22 @@ Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n) asyn
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text(t('cycle_off_for'), style: TextStyle(color: C.muted, fontSize: 13)),
           const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final d in _cycleOffChoices)
-              ChoiceChip(label: Text(fmtDuration(d)), selected: off == d, selectedColor: C.accentBg, onSelected: (_) => setLocal(() => off = d)),
-          ]),
-          const SizedBox(height: 14),
+          DurationPicker(value: off, showHours: false, onChanged: (v) => setLocal(() => off = v)),
+          if (off < 3) ...[const SizedBox(height: 8), Text(t('dur_min', {'x': fmtDuration(3)}), style: TextStyle(color: C.danger, fontSize: 12))],
+          const SizedBox(height: 16),
           Text(t('start_after'), style: TextStyle(color: C.muted, fontSize: 13)),
           const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            for (final d in _delayChoices)
-              ChoiceChip(
-                label: Text(d == 0 ? t('now') : fmtDuration(d)),
-                selected: delay == d,
-                selectedColor: C.accentBg,
-                onSelected: (_) => setLocal(() => delay = d),
-              ),
-          ]),
+          Segmented<bool>(value: later, items: {false: t('now'), true: t('later')}, onChanged: (v) => setLocal(() => later = v)),
+          if (later) ...[const SizedBox(height: 10), DurationPicker(value: delay, onChanged: (v) => setLocal(() => delay = v))],
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-          TextButton(onPressed: () => Navigator.pop(dctx, true), child: Text(t('confirm'))),
+          TextButton(onPressed: off < 3 ? null : () => Navigator.pop(dctx, true), child: Text(t('confirm'))),
         ],
       ),
     ),
   );
-  if (ok == true) await state.addTimer(s.mac, n, 'cycle', delayS: delay, offS: off);
+  if (ok == true) await state.addTimer(s.mac, n, 'cycle', delayS: later ? delay : 0, offS: off);
 }
 
 Widget _tile(IconData icon, String title, String? sub, VoidCallback? onTap) => ListTile(
