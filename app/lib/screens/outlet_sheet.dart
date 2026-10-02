@@ -35,12 +35,6 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 if (!s.online) ...[
                   emptyCard(t('offline_sheet'), icon: Icons.cloud_off),
                   const SizedBox(height: 8),
-                  _tile(Icons.delete_outline, t('forget'), t('forget_sub'), () async {
-                    if (await confirmDialog(ctx, t('forget'), t('forget_confirm'), ok: t('forget'), danger: true)) {
-                      final ok = await state.forget(s.mac);
-                      if (ok && ctx.mounted) Navigator.of(ctx).pop();
-                    }
-                  }),
                 ],
                 _tile(Icons.edit_outlined, t('rename_strip'), null, () async {
                   final v = await askName(ctx, t('strip_name'), state.stripName(s));
@@ -71,6 +65,27 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _info(t('voltage'), s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
                 _info(t('rssi'), s.rssi == null ? '—' : '${s.rssi} dBm'),
                 if (state.showMac) _info('MAC', s.mac),
+                Divider(color: C.border, height: 24),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(color: C.danger.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+                    child: Icon(Icons.delete_outline, color: C.danger, size: 20),
+                  ),
+                  title: Text(t('forget'), style: TextStyle(color: C.danger, fontWeight: FontWeight.w600)),
+                  subtitle: Text(t('forget_sub'), style: TextStyle(color: C.muted, fontSize: 12)),
+                  onTap: () async {
+                    final name = state.stripName(s);
+                    if (!await confirmDialog(ctx, t('forget'), t('forget_confirm', {'x': name}), ok: t('delete'), danger: true)) return;
+                    final ok = await state.forget(s.mac);
+                    if (ok && ctx.mounted) {
+                      Navigator.of(ctx).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${t('forget_ok')}: $name')));
+                    }
+                  },
+                ),
               ],
             ),
           ),
