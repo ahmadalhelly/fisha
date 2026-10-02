@@ -159,7 +159,7 @@ class StripCard extends StatelessWidget {
             IconButton(
               tooltip: t('strip_settings'),
               visualDensity: VisualDensity.compact,
-              icon: Icon(Icons.more_vert, color: C.muted, size: 20),
+              icon: Icon(Icons.tune, color: C.muted, size: 20),
               onPressed: () => openStripSheet(context, state, s.mac),
             ),
           ]),
@@ -257,11 +257,18 @@ class _Socket extends StatelessWidget {
             textDirection: TextDirection.ltr,
             style: on ? mono(11, color: C.accent, weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
           ),
+          if (strip.online)
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.thermostat, size: 11, color: _tempColor(o.tempC)),
+              Text('${o.tempC}°C', textDirection: TextDirection.ltr, style: mono(10.5, color: _tempColor(o.tempC), weight: FontWeight.w500)),
+            ]),
         ]),
       ),
     );
   }
 }
+
+Color _tempColor(int c) => c >= 60 ? C.danger : (c >= 45 ? C.warn : C.muted);
 
 /// Socket face (Schuko style) with a load ring.
 class _SocketPainter extends CustomPainter {
