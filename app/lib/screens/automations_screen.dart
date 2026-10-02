@@ -6,8 +6,6 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-const _holdChoices = [30, 60, 120, 300, 600, 900, 1800, 3600];
-
 String _actText(int a) => a == 3 ? t('act_both') : (a == 2 ? t('act_off') : t('act_notify'));
 
 class AutomationsScreen extends StatefulWidget {
@@ -243,15 +241,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
               decoration: InputDecoration(labelText: t('threshold'), suffixText: 'W'),
             ),
             Text(t('held_for'), style: TextStyle(color: C.muted, fontSize: 13)),
-            Wrap(spacing: 6, runSpacing: 6, children: [
-              for (final h in _holdChoices)
-                ChoiceChip(
-                  label: Text(fmtDuration(h)),
-                  selected: a.holdS == h,
-                  selectedColor: C.accentBg,
-                  onSelected: (_) => setState(() => a.holdS = h),
-                ),
-            ]),
+            DurationPicker(value: a.holdS, maxHours: 17, onChanged: (v) => setState(() => a.holdS = v < 5 ? 5 : v)),
           ]),
           const SizedBox(height: 14),
           section(t('then'), [
