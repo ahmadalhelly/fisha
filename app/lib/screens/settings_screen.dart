@@ -7,7 +7,7 @@ import '../widgets/common.dart';
 import 'firmware_screen.dart';
 import 'notifications_screen.dart';
 
-const appVersion = '1.1.0';
+const appVersion = '1.2.0';
 
 class SettingsScreen extends StatefulWidget {
   final AppState state;
@@ -145,13 +145,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('${t('app_name')} · Fisha', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                     Text('${t('version')} $appVersion', style: TextStyle(color: C.muted, fontSize: 12)),
-                    Text(t('by'), textDirection: TextDirection.ltr, style: TextStyle(color: C.accent, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(t('by'), textDirection: TextDirection.ltr, style: TextStyle(color: C.warn, fontSize: 13, fontWeight: FontWeight.w700)),
                   ]),
                 ),
               ]),
             ]),
-            const SizedBox(height: 20),
-            Center(child: Text(t('by'), style: mono(12, color: C.muted, weight: FontWeight.w500))),
           ],
         ),
       ),
