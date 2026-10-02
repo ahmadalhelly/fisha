@@ -1,0 +1,129 @@
+import 'package:flutter/material.dart';
+
+import '../app_state.dart';
+import '../i18n.dart';
+import '../theme.dart';
+import '../widgets/common.dart';
+
+String _tr(String ar, String en) => Tr.isAr ? ar : en;
+
+/// How the app reaches the hub: on the home Wi-Fi, and through the server when away.
+class ConnectionScreen extends StatefulWidget {
+  final AppState state;
+  const ConnectionScreen({super.key, required this.state});
+
+  @override
+  State<ConnectionScreen> createState() => _ConnectionScreenState();
+}
+
+class _ConnectionScreenState extends State<ConnectionScreen> {
+  late final _s = widget.state.settings;
+  late final _hub = TextEditingController(text: _s.hubId);
+  late final _host = TextEditingController(text: _s.brokerHost);
+  late final _port = TextEditingController(text: '${_s.brokerPort}');
+  late final _user = TextEditingController(text: _s.username);
+  late final _pass = TextEditingController(text: _s.password);
+  late final _local = TextEditingController(text: _s.localHost);
+  late final _localPort = TextEditingController(text: '${_s.localPort}');
+  bool _obscure = true;
+  bool _advanced = false;
+
+  @override
+  void dispose() {
+    for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final s = HubSettings(
+      hubId: _hub.text.trim().toUpperCase(),
+      brokerHost: _host.text.trim(),
+      brokerPort: int.tryParse(_port.text.trim()) ?? 8883,
+      username: _user.text.trim(),
+      password: _pass.text,
+      localHost: _local.text.trim(),
+      localPort: int.tryParse(_localPort.text.trim()) ?? 8080,
+    );
+    FocusScope.of(context).unfocus();
+    await widget.state.saveSettings(s);
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('saved'))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final st = widget.state;
+    return Scaffold(
+      backgroundColor: C.bg,
+      appBar: AppBar(backgroundColor: C.bg, surfaceTintColor: Colors.transparent, title: Text(_tr('الاتصال', 'Connection'), style: const TextStyle(fontWeight: FontWeight.w700))),
+      body: SafeArea(
+        child: ListenableBuilder(
+          listenable: st,
+          builder: (context, _) => ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
+            section(t('conn_status'), [
+              _status(t('st_local'), st.mode == ConnMode.local),
+              _status(t('st_live'), st.sseLive),
+              _status(t('st_cloud'), st.mqttConnected),
+              _status(t('st_hub'), st.hubOnline),
+            ]),
+            const SizedBox(height: 14),
+            section(t('sec_local'), [
+              _field(_local, t('f_local'), hint: '192.168.1.110'),
+            ]),
+            const SizedBox(height: 14),
+            section(t('sec_cloud'), [
+              _field(_user, t('f_user'), hint: 'stripe_app'),
+              TextField(
+                controller: _pass,
+                obscureText: _obscure,
+                textDirection: TextDirection.ltr,
+                decoration: InputDecoration(
+                  labelText: t('f_pass'),
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: C.muted),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () => setState(() => _advanced = !_advanced),
+                child: Row(children: [
+                  Icon(_advanced ? Icons.expand_less : Icons.expand_more, color: C.muted, size: 20),
+                  const SizedBox(width: 4),
+                  Text(_tr('إعدادات متقدمة', 'Advanced'), style: TextStyle(color: C.muted, fontSize: 13)),
+                ]),
+              ),
+              if (_advanced) ...[
+                _field(_hub, t('f_hubid'), hint: '80F3DA40F674'),
+                _field(_host, t('f_host'), hint: 'xxxx.emqxsl.com'),
+                Row(children: [
+                  Expanded(child: _field(_port, '${t('f_port')} (MQTT)', hint: '8883', number: true)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _field(_localPort, '${t('f_port')} (${t('mode_local')})', hint: '8080', number: true)),
+                ]),
+              ],
+            ]),
+            const SizedBox(height: 16),
+            primaryButton(t('save_reconnect'), _save, icon: Icons.sync),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _field(TextEditingController c, String label, {String? hint, bool number = false}) => TextField(
+        controller: c,
+        textDirection: TextDirection.ltr,
+        keyboardType: number ? TextInputType.number : TextInputType.text,
+        autocorrect: false,
+        decoration: InputDecoration(labelText: label, hintText: hint),
+      );
+
+  Widget _status(String label, bool ok) => Row(children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: ok ? C.green : C.faint, shape: BoxShape.circle)),
+        const SizedBox(width: 10),
+        Expanded(child: Text(label)),
+        Text(ok ? t('online') : t('offline'), style: TextStyle(color: ok ? C.greenText : C.muted, fontSize: 12)),
+      ]);
+}
