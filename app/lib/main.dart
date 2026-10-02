@@ -9,10 +9,12 @@ import 'screens/home_screen.dart';
 import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
+import 'services/notify_service.dart';
 import 'widgets/common.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  NotifyService.initPort();
   runApp(MttlApp(state: AppState()));
 }
 
@@ -42,6 +44,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
   Future<void> _boot() async {
     await Future.wait([s.init(), Future.delayed(const Duration(milliseconds: 1100))]);
     if (mounted) setState(() => _booted = true);
+    NotifyService.resume().catchError((_) {});
   }
 
   @override
@@ -64,14 +67,18 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
   @override
   void didChangeLocales(List<Locale>? locales) => setState(() {});
 
-  bool _isDark() {
+  String _themeId() {
     switch (s.themePref) {
       case ThemePref.dark:
-        return true;
+        return 'dark';
       case ThemePref.light:
-        return false;
+        return 'light';
+      case ThemePref.graphite:
+        return 'graphite';
+      case ThemePref.saffron:
+        return 'saffron';
       case ThemePref.system:
-        return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark;
+        return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark ? 'dark' : 'light';
     }
   }
 
@@ -88,12 +95,12 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final dark = _booted ? _isDark() : true;
+    final themeId = _booted ? _themeId() : 'dark';
     final lang = _lang();
-    C.use(dark);
+    C.useId(themeId);
     Tr.lang = lang;
     return MaterialApp(
-      key: ValueKey('$dark-$lang'),
+      key: ValueKey('$themeId-$lang'),
       title: 'Fisha',
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
