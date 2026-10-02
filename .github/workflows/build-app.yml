@@ -56,7 +56,7 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: Fisha 1.0.0 (build ${{ github.run_number }})
           make_latest: true
-          files: Fisha-1.0.0-${{ github.run_number }}.apk
+          files: Fisha-1.1.0-${{ github.run_number }}.apk
           body: "Commit ${{ github.sha }}"
 
       - name: Save build log to the ci-logs branch
