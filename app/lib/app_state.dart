@@ -94,6 +94,9 @@ class AppState extends ChangeNotifier {
   String ntfyTopic = '';
   int notifyTypes = 0x7FF;
   String otaPass = '';
+  String hubSsid = '';
+  String wifiTest = 'idle';
+  String wifiTestSsid = '';
   bool tempProtect = true;
   String provState = 'idle';
   String provMsg = '';
@@ -419,6 +422,9 @@ class AppState extends ChangeNotifier {
         tempProtect = cfg['temp_protect'] != false;
         ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
         notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
+        hubSsid = (cfg['ssid'] ?? hubSsid).toString();
+        wifiTest = (cfg['wifi_test'] ?? wifiTest).toString();
+        wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
       }
       final tm = j['timers'];
       timers = tm is List ? tm.whereType<Map<String, dynamic>>().map(HubTimer.fromJson).toList() : [];
@@ -709,6 +715,18 @@ class AppState extends ChangeNotifier {
     final r = await api('notify', {'test': true});
     _fail(r);
     return r.ok;
+  }
+
+  // ---------- hub Wi-Fi ----------
+  /// Asks the hub to switch to another home network. It tests it first and stays on the old one if it fails.
+  Future<CmdResult> setHubWifi(String ssid, String pass) async {
+    final r = await api('wifi', {'ssid': ssid, 'pass': pass});
+    if (r.ok) {
+      wifiTest = 'queued';
+      wifiTestSsid = ssid;
+      notifyListeners();
+    }
+    return r;
   }
 
   // ---------- hub firmware update (local network only) ----------
