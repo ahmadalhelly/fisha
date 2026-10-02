@@ -285,7 +285,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
                 Expanded(
                   child: TextField(
                     controller: _limit2,
-                    keyboardType: const TextInputType.number,
+                    keyboardType: TextInputType.number,
                     textDirection: TextDirection.ltr,
                     decoration: InputDecoration(labelText: t('threshold_temp'), suffixText: '°C'),
                   ),
