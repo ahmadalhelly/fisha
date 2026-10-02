@@ -89,7 +89,7 @@ const Map<String, List<String>> _s = {
   'auto_off_none': ['مقفول', 'Off'],
   'auto_off_left': ['يقفل بعد {x}', 'Off in {x}'],
   'countdown': ['تايمر', 'Timer'],
-  'countdown_sub': ['يشغّل أو يقفل المخرج بعد المدة اللي تختارها (مرة واحدة)', 'Turns the outlet on or off once, after the time you pick'],
+  'countdown_sub': ['يشغّل أو يقفل المخرج بعد المدة اللي تختارها، مرة واحدة أو يتكرر', 'Turns the outlet on or off after the time you pick, once or repeating'],
   'cycle': ['إعادة تشغيل', 'Reboot'],
   'cycle_sub': ['يقفل المخرج ويرجّعه يشتغل لوحده بعد المدة اللي تحددها', 'Turns off, then back on by itself after the time you set'],
   'cycle_strip': ['إعادة تشغيل المشترك كله', 'Reboot the whole strip'],
