@@ -22,9 +22,19 @@ class _Row {
   _Row(this.name, this.wh);
 }
 
+class _StripUse {
+  final String name;
+  final List<_Row> outlets;
+  _StripUse(this.name, this.outlets);
+  int get wh => outlets.fold(0, (a, r) => a + r.wh);
+}
+
+String _tr(String ar, String en) => Tr.isAr ? ar : en;
+
 class _EnergyScreenState extends State<EnergyScreen> {
   AppState get s => widget.state;
   int _range = 7;
+  bool _byName = false; // sort strips by consumption (default) or by name
   bool _loading = false;
   List<EnergyData> _data = [];
   int _lastTab = -1;
@@ -53,8 +63,8 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return [for (final k in keys.take(_range)) MapEntry(k, map[k]!)];
   }
 
-  List<_Row> _byOutlet() {
-    final rows = <_Row>[];
+  List<_StripUse> _perStrip() {
+    final out = <_StripUse>[];
     for (final e in _data) {
       final strip = s.live(e.mac);
       final per = List<int>.filled(4, 0);
@@ -66,13 +76,13 @@ class _EnergyScreenState extends State<EnergyScreen> {
           per[k] += d.wh[k];
         }
       }
-      for (var k = 0; k < 4; k++) {
-        final name = strip == null ? t('default_outlet', {'n': k + 1}) : '${s.stripName(strip)} · ${s.outletName(strip, k + 1)}';
-        rows.add(_Row(name, per[k]));
-      }
+      final rows = [
+        for (var k = 0; k < 4; k++) _Row(strip == null ? t('default_outlet', {'n': k + 1}) : s.outletName(strip, k + 1), per[k]),
+      ]..sort((a, b) => b.wh.compareTo(a.wh));
+      out.add(_StripUse(strip == null ? e.mac : s.stripName(strip), rows));
     }
-    rows.sort((a, b) => b.wh.compareTo(a.wh));
-    return rows;
+    out.sort(_byName ? (a, b) => a.name.compareTo(b.name) : (a, b) => b.wh.compareTo(a.wh));
+    return out;
   }
 
   Future<void> _editTariff() async {
@@ -146,7 +156,19 @@ class _EnergyScreenState extends State<EnergyScreen> {
                 if (daily.isNotEmpty) ...[
                   section(t('daily_usage'), [SizedBox(height: 180, child: _Bars(daily: daily.reversed.toList()))]),
                   const SizedBox(height: 14),
-                  section(t('by_outlet'), [for (final r in _byOutlet().where((r) => r.wh > 0)) _outletRow(r, totalWh)]),
+                  Row(children: [
+                    Expanded(child: Text(_tr('حسب المشترك', 'By strip'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w700))),
+                    SizedBox(
+                      width: 190,
+                      child: Segmented<bool>(
+                        value: _byName,
+                        items: {false: _tr('الأعلى استهلاكًا', 'Most used'), true: _tr('بالاسم', 'By name')},
+                        onChanged: (v) => setState(() => _byName = v),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+                  for (final st in _perStrip()) ...[_stripCard(st, totalWh), const SizedBox(height: 10)],
                 ],
               ],
             ]),
@@ -170,6 +192,29 @@ class _EnergyScreenState extends State<EnergyScreen> {
           if (foot != null) ...[const SizedBox(height: 4), Text(foot, style: TextStyle(color: C.muted, fontSize: 11))],
         ]),
       );
+
+  Widget _stripCard(_StripUse st, int total) {
+    final kwh = st.wh / 1000;
+    final share = total == 0 ? 0.0 : st.wh / total;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: cardBox(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Expanded(child: Text(st.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
+          Text('${kwh.toStringAsFixed(2)} kWh', textDirection: TextDirection.ltr, style: mono(15, color: C.accent)),
+        ]),
+        const SizedBox(height: 2),
+        Row(children: [
+          Text('${(share * 100).toStringAsFixed(0)}% ${_tr('من الإجمالي', 'of total')}', style: TextStyle(color: C.muted, fontSize: 12)),
+          const Spacer(),
+          Text('${(kwh * s.tariff).toStringAsFixed(2)} ${t('egp')}', style: TextStyle(color: C.muted, fontSize: 12)),
+        ]),
+        const SizedBox(height: 12),
+        for (final r in st.outlets) Padding(padding: const EdgeInsets.only(bottom: 10), child: _outletRow(r, st.wh)),
+      ]),
+    );
+  }
 
   Widget _outletRow(_Row r, int total) {
     final share = total == 0 ? 0.0 : r.wh / total;
