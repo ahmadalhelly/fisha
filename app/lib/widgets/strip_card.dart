@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -5,9 +7,14 @@ import '../i18n.dart';
 import '../models.dart';
 import '../screens/outlet_sheet.dart';
 import '../theme.dart';
+import 'common.dart';
 
 /// Switch an outlet, asking first if it is protected and being turned off.
 Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet o, bool on) async {
+  if (!s.online) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('strip_offline_cmd'))));
+    return;
+  }
   if (!on && o.protected) {
     final ok = await showDialog<bool>(
       context: context,
@@ -30,6 +37,7 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
 }
 
 Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async {
+  if (!s.online) return;
   if (!s.anyProtectedOn) return state.setOutlet(s.mac, 0, false);
   final names = s.outlets.where((o) => o.protected && o.on).map((o) => state.outletName(s, o.n)).join('، ');
   final choice = await showDialog<int>(
@@ -52,6 +60,50 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
   if (choice == 2) await state.setOutlet(s.mac, 0, false);
 }
 
+/// "1:40 h", "25 min", "40 s"
+String shortDuration(int s) {
+  if (s < 60) return '$s ${t('sec')}';
+  if (s < 3600) return '${(s / 60).ceil()} ${t('min')}';
+  final h = s ~/ 3600, m = (s % 3600) ~/ 60;
+  return m == 0 ? '$h ${t('hour')}' : '$h:${two(m)} ${t('hour')}';
+}
+
+String timerText(HubTimer x) {
+  final when = x.inS <= 0 ? t('now') : t('after_x', {'x': shortDuration(x.inS)});
+  final String base;
+  if (x.kind == 'loop') {
+    base = t('timer_loop', {'a': shortDuration(x.onS), 'b': shortDuration(x.offS)}) + ' · ' + (x.phase == 1 ? t('loop_next_off', {'x': when}) : t('loop_next_on', {'x': when}));
+    return base;
+  }
+  if (x.kind == 'cycle') {
+    base = x.phase == 1 ? t('timer_on', {'x': when}) : t('timer_cycle', {'x': when});
+  } else {
+    base = x.kind == 'on' ? t('timer_on', {'x': when}) : t('timer_off', {'x': when});
+  }
+  return x.repeatS > 0 ? '$base · ${t('repeat_every', {'x': shortDuration(x.repeatS)})}' : base;
+}
+
+IconData timerIcon(HubTimer x) => x.kind == 'loop' ? Icons.all_inclusive : (x.kind == 'cycle' ? Icons.restart_alt : Icons.hourglass_bottom);
+
+/// Small icons for everything that is set on an outlet (or on the whole strip when [o] is null).
+List<Widget> badgesFor(AppState state, Strip s, Outlet? o, {double size = 13}) {
+  final n = o?.n ?? 0;
+  final timers = state.timersFor(s.mac).where((x) => x.outlet == n).toList();
+  final icons = <(IconData, Color, String)>[
+    if (o == null ? s.hasSchedule : o.hasSchedule) (Icons.schedule, C.accent2, t('badge_sched')),
+    if (o == null ? s.hasRule : o.hasRule) (Icons.bolt, C.warn, t('badge_rule')),
+    for (final x in timers) (timerIcon(x), C.accent, timerText(x)),
+    if (o != null && o.autoOffMin > 0) (Icons.timer_outlined, C.accent, t('auto_off')),
+    if (o != null && o.protected) (Icons.shield, C.accent, t('protect')),
+    if (o != null && o.locked) (Icons.lock, C.muted, t('child_lock')),
+  ];
+  return [
+    for (final (icon, color, tip) in icons)
+      Tooltip(message: tip, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 1.5), child: Icon(icon, size: size, color: color))),
+  ];
+}
+
+/// A strip drawn as the real thing: one body with four sockets that light up and show their load as a ring.
 class StripCard extends StatelessWidget {
   final AppState state;
   final Strip strip;
@@ -61,188 +113,225 @@ class StripCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = strip;
-    final stripTimers = state.timersFor(s.mac).where((x) => x.outlet == 0).toList();
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: cardBox(),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          if (dragHandle != null) dragHandle!,
-          Expanded(
-            child: Row(children: [
-              Flexible(
-                child: Text(state.stripName(s),
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              ),
-              const SizedBox(width: 8),
-              _badge(s.online),
-            ]),
-          ),
-          const SizedBox(width: 8),
-          Text('${s.livePower.toStringAsFixed(1)} W', textDirection: TextDirection.ltr, style: mono(14, color: C.accent)),
-          IconButton(
-            tooltip: t('strip_settings'),
-            icon: Icon(Icons.tune, color: C.muted, size: 20),
-            onPressed: () => openStripSheet(context, state, s.mac),
-          ),
-        ]),
-        if (state.showMac)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(s.mac, textDirection: TextDirection.ltr, style: mono(11, color: C.faint, weight: FontWeight.w500)),
-          ),
-        if (stripTimers.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(children: [
-              Icon(Icons.hourglass_bottom, size: 14, color: C.accent),
-              const SizedBox(width: 4),
-              Text(timerText(stripTimers.first), style: TextStyle(fontSize: 12, color: C.accent)),
-            ]),
-          ),
-        const SizedBox(height: 6),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.45,
-          children: s.outlets.map((o) => _OutletTile(state: state, strip: s, outlet: o)).toList(),
+    final online = s.online;
+    final stripBadges = badgesFor(state, s, null);
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 300),
+      opacity: online ? 1 : 0.6,
+      child: Container(
+        decoration: BoxDecoration(
+          color: C.surface,
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(color: online && s.onCount > 0 ? C.tileOnBorder.withValues(alpha: 0.6) : C.border),
+          boxShadow: online && s.onCount > 0
+              ? [BoxShadow(color: C.accent.withValues(alpha: C.dark ? 0.08 : 0.12), blurRadius: 24, offset: const Offset(0, 8))]
+              : null,
         ),
-        const SizedBox(height: 12),
-        Row(children: [
-          Expanded(
-            child: FilledButton(
-              onPressed: () => state.setOutlet(s.mac, 0, true),
-              style: FilledButton.styleFrom(
-                backgroundColor: C.accentBg,
-                foregroundColor: C.accent,
-                minimumSize: const Size(0, 44),
-                side: BorderSide(color: C.tileOnBorder),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              child: Text(t('all_on'), style: const TextStyle(fontWeight: FontWeight.w600)),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: () => guardedAllOff(context, state, s),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: C.textSoft,
-                minimumSize: const Size(0, 44),
-                side: BorderSide(color: C.border),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              child: Text(t('all_off'), style: const TextStyle(fontWeight: FontWeight.w600)),
-            ),
-          ),
-        ]),
-      ]),
-    );
-  }
-
-  Widget _badge(bool online) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-        decoration: BoxDecoration(color: online ? C.greenBg : C.surface2, borderRadius: BorderRadius.circular(999)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: online ? C.green : C.faint, shape: BoxShape.circle)),
-          const SizedBox(width: 5),
-          Text(online ? t('online') : t('offline'), style: TextStyle(fontSize: 11, color: online ? C.greenText : C.muted)),
-        ]),
-      );
-}
-
-String timerText(HubTimer x) {
-  final when = x.inS <= 0 ? t('now') : t('after_x', {'x': _short(x.inS)});
-  if (x.kind == 'cycle') return x.phase == 1 ? t('timer_on', {'x': when}) : t('timer_cycle', {'x': when});
-  return x.kind == 'on' ? t('timer_on', {'x': when}) : t('timer_off', {'x': when});
-}
-
-String _short(int s) {
-  if (s < 60) return '$s ${t('sec')}';
-  if (s < 3600) return '${(s / 60).ceil()} ${t('min')}';
-  return '${(s / 3600).toStringAsFixed(1)} ${t('hour')}';
-}
-
-class _OutletTile extends StatelessWidget {
-  final AppState state;
-  final Strip strip;
-  final Outlet outlet;
-  const _OutletTile({required this.state, required this.strip, required this.outlet});
-
-  @override
-  Widget build(BuildContext context) {
-    final on = outlet.on;
-    final pending = state.isPending(strip.mac, outlet.n);
-    final name = state.outletName(strip, outlet.n);
-    final tm = state.timersFor(strip.mac, outlet.n).where((x) => x.outlet == outlet.n).toList();
-    return Material(
-      color: on ? C.tileOn : C.tile,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: BorderSide(color: on ? C.tileOnBorder : C.border)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: pending ? null : () => guardedSwitch(context, state, strip, outlet, !on),
-        onLongPress: () => openOutletSheet(context, state, strip.mac, outlet.n),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(children: [
-                Icon(Icons.power_outlined, color: on ? C.accent : C.faint, size: 24),
-                const SizedBox(width: 2),
-                if (outlet.protected) Icon(Icons.shield_outlined, color: C.accent, size: 15, semanticLabel: t('protect')),
-                if (outlet.locked) Icon(Icons.lock_outline, color: C.muted, size: 15, semanticLabel: t('child_lock')),
-                if (tm.isNotEmpty || outlet.autoOffInS >= 0) Icon(Icons.hourglass_bottom, color: C.accent, size: 15),
-                const Spacer(),
-                if (pending)
-                  SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent))
-                else
-                  SizedBox(
-                    height: 28,
-                    child: FittedBox(
-                      child: Switch(
-                        value: on,
-                        onChanged: (v) => guardedSwitch(context, state, strip, outlet, v),
-                        activeTrackColor: C.accent,
-                        inactiveTrackColor: C.switchOff,
-                        thumbColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.selected) ? C.onAccent : C.muted),
-                        trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
-                      ),
-                    ),
-                  ),
-              ]),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 3),
-                Row(children: [
-                  Text(on ? '${outlet.powerW.toStringAsFixed(1)} W' : t('off'),
-                      textDirection: TextDirection.ltr,
-                      style: on ? mono(12, color: C.accent, weight: FontWeight.w500) : TextStyle(fontSize: 12, color: C.muted)),
-                  const SizedBox(width: 8),
-                  Text('${outlet.tempC}°C', textDirection: TextDirection.ltr, style: mono(12, color: _tempColor(outlet.tempC), weight: FontWeight.w500)),
-                  if (tm.isNotEmpty || outlet.autoOffInS >= 0) ...[
-                    const SizedBox(width: 6),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            if (dragHandle != null) dragHandle!,
+            PulseDot(color: online ? C.green : C.faint, active: online),
+            const SizedBox(width: 4),
+            Expanded(
+              child: InkWell(
+                onTap: () => openStripSheet(context, state, s.mac),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                  Row(children: [
                     Flexible(
                       child: Text(
-                        tm.isNotEmpty ? timerText(tm.first) : t('auto_off_left', {'x': _short(outlet.autoOffInS)}),
+                        online ? '${t('n_of_4', {'a': s.onCount, 'b': s.outlets.length})} · ${s.maxTemp}°C' : t('offline_kept'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: C.accent),
+                        style: TextStyle(fontSize: 11.5, color: online ? C.muted : C.danger),
                       ),
                     ),
-                  ],
+                    if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
+                  ]),
                 ]),
-              ]),
-            ],
+              ),
+            ),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              AnimatedNumber(value: online ? s.livePower : 0, style: mono(20, color: online ? C.accent : C.faint)),
+              Text('W', style: mono(10, color: C.muted, weight: FontWeight.w500)),
+            ]),
+            IconButton(
+              tooltip: t('strip_settings'),
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.more_vert, color: C.muted, size: 20),
+              onPressed: () => openStripSheet(context, state, s.mac),
+            ),
+          ]),
+          if (state.showMac)
+            Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
+          const SizedBox(height: 12),
+          // the strip body
+          Container(
+            padding: const EdgeInsets.fromLTRB(6, 10, 6, 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: C.dark ? [const Color(0xFF15203A), const Color(0xFF0C1427)] : [const Color(0xFFFFFFFF), const Color(0xFFEAF1F7)],
+              ),
+              border: Border.all(color: C.border),
+            ),
+            child: Row(children: [
+              for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
+            ]),
           ),
-        ),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: _pill(context, Icons.power_settings_new, t('all_on'), online ? () => state.setOutlet(s.mac, 0, true) : null, filled: true)),
+            const SizedBox(width: 8),
+            Expanded(child: _pill(context, Icons.power_off_outlined, t('all_off'), online ? () => guardedAllOff(context, state, s) : null)),
+          ]),
+        ]),
       ),
     );
   }
 
-  Color _tempColor(int c) => c >= 60 ? C.danger : (c >= 45 ? C.accent : C.muted);
+  Widget _pill(BuildContext context, IconData icon, String label, VoidCallback? onTap, {bool filled = false}) => Material(
+        color: filled ? C.accentBg : Colors.transparent,
+        shape: StadiumBorder(side: BorderSide(color: filled ? C.tileOnBorder : C.border)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            height: 40,
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(icon, size: 17, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft)),
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft))),
+            ]),
+          ),
+        ),
+      );
+}
+
+class _Socket extends StatelessWidget {
+  final AppState state;
+  final Strip strip;
+  final Outlet outlet;
+  const _Socket({required this.state, required this.strip, required this.outlet});
+
+  @override
+  Widget build(BuildContext context) {
+    final o = outlet;
+    final on = strip.online && o.on;
+    final pending = state.isPending(strip.mac, o.n);
+    final badges = badgesFor(state, strip, o, size: 12);
+    final load = on ? (o.powerW / 2000).clamp(0.0, 1.0) : 0.0;
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: pending ? null : () => guardedSwitch(context, state, strip, o, !o.on),
+      onLongPress: () => openOutletSheet(context, state, strip.mac, o.n),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Column(children: [
+          SizedBox(
+            height: 14,
+            child: FittedBox(fit: BoxFit.scaleDown, child: Row(mainAxisSize: MainAxisSize.min, children: badges)),
+          ),
+          const SizedBox(height: 4),
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: load),
+            duration: const Duration(milliseconds: 700),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => SizedBox(
+              width: 62,
+              height: 62,
+              child: Stack(alignment: Alignment.center, children: [
+                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(on: on, load: v, hot: o.tempC >= 60, dark: C.dark)),
+                if (pending) SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(state.outletName(strip, o.n),
+              maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
+          Text(
+            on ? '${o.powerW.toStringAsFixed(o.powerW < 10 ? 1 : 0)} W' : (strip.online ? t('off') : '—'),
+            textDirection: TextDirection.ltr,
+            style: on ? mono(11, color: C.accent, weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Socket face (Schuko style) with a load ring.
+class _SocketPainter extends CustomPainter {
+  final bool on, hot, dark;
+  final double load;
+  _SocketPainter({required this.on, required this.load, required this.hot, required this.dark});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.width / 2;
+    final ringColor = hot ? C.danger : C.accent;
+    // track
+    canvas.drawCircle(c, r - 3, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..color = C.border);
+    if (on) {
+      // glow
+      canvas.drawCircle(c, r - 6, Paint()
+        ..color = ringColor.withValues(alpha: 0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+      // load arc
+      final sweep = 2 * math.pi * math.max(0.06, load);
+      canvas.drawArc(
+        Rect.fromCircle(center: c, radius: r - 3),
+        -math.pi / 2,
+        sweep,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..strokeCap = StrokeCap.round
+          ..shader = SweepGradient(
+            startAngle: -math.pi / 2,
+            endAngle: -math.pi / 2 + sweep,
+            colors: hot ? [C.warn, C.danger] : [C.accent, C.accent2],
+            transform: const GradientRotation(-math.pi / 2),
+          ).createShader(Rect.fromCircle(center: c, radius: r)),
+      );
+    }
+    // face
+    final face = r - 9;
+    canvas.drawCircle(
+      c,
+      face,
+      Paint()
+        ..shader = RadialGradient(
+          colors: on
+              ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? const Color(0xFF0F2A2C) : const Color(0xFFDDF6EE)]
+              : (dark ? [const Color(0xFF1E2A44), const Color(0xFF131C30)] : [const Color(0xFFFFFFFF), const Color(0xFFE3EAF2)]),
+        ).createShader(Rect.fromCircle(center: c, radius: face)),
+    );
+    canvas.drawCircle(c, face, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = on ? ringColor.withValues(alpha: 0.6) : C.border);
+    // two pin holes
+    final hole = Paint()..color = on ? (dark ? const Color(0xFF062019) : const Color(0xFF0B5E4B)) : (dark ? const Color(0xFF0A1020) : const Color(0xFFB9C6D4));
+    canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
+    canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
+    // earth clips
+    final clip = Paint()
+      ..color = on ? ringColor.withValues(alpha: 0.8) : C.faint
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
+    canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SocketPainter old) => old.on != on || old.load != load || old.hot != hot || old.dark != dark;
 }
