@@ -1,7 +1,7 @@
 name: mttl_hub
 description: Fisha — control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud). By ahmadalhelly.
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ^3.4.0
@@ -33,12 +33,12 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/brand/icon.png"
-  adaptive_icon_background: "#0D1117"
+  adaptive_icon_background: "#070D19"
   adaptive_icon_foreground: "assets/brand/icon_fg.png"
   min_sdk_android: 21
 
 flutter_native_splash:
-  color: "#0D1117"
+  color: "#070D19"
   image: assets/brand/splash.png
   branding: assets/brand/branding.png
   branding_mode: bottom
@@ -46,6 +46,6 @@ flutter_native_splash:
   ios: false
   web: false
   android_12:
-    color: "#0D1117"
+    color: "#070D19"
     image: assets/brand/splash.png
     branding: assets/brand/branding.png

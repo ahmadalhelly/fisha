@@ -14,6 +14,8 @@ class Outlet {
   final bool protected;
   final int autoOffMin;
   final int autoOffInS; // -1 = not running
+  final bool hasSchedule; // an enabled schedule targets this outlet (or the whole strip)
+  final bool hasRule; // an enabled watts/temperature rule watches it
 
   const Outlet({
     required this.n,
@@ -26,6 +28,8 @@ class Outlet {
     this.protected = false,
     this.autoOffMin = 0,
     this.autoOffInS = -1,
+    this.hasSchedule = false,
+    this.hasRule = false,
   });
 
   factory Outlet.fromJson(Map<String, dynamic> j) => Outlet(
@@ -39,6 +43,8 @@ class Outlet {
         protected: j['protected'] == true,
         autoOffMin: _i(j['auto_off_min']),
         autoOffInS: _i(j['auto_off_in_s'], -1),
+        hasSchedule: j['sched'] == true,
+        hasRule: j['rule'] == true,
       );
 
   Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, int? autoOffMin}) => Outlet(
@@ -52,6 +58,8 @@ class Outlet {
         protected: protected ?? this.protected,
         autoOffMin: autoOffMin ?? this.autoOffMin,
         autoOffInS: autoOffInS,
+        hasSchedule: hasSchedule,
+        hasRule: hasRule,
       );
 }
 
@@ -64,6 +72,8 @@ class Strip {
   final String label;
   final List<Outlet> outlets;
   final int notifyMask; // bit 0-3 outlets, bit 4 strip-level events
+  final bool hasSchedule; // whole-strip schedule
+  final bool hasRule; // whole-strip rule
 
   const Strip({
     required this.mac,
@@ -74,6 +84,8 @@ class Strip {
     required this.outlets,
     this.label = '',
     this.notifyMask = 0x1F,
+    this.hasSchedule = false,
+    this.hasRule = false,
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -94,6 +106,8 @@ class Strip {
       label: _s(j['label']),
       outlets: outs,
       notifyMask: _i(j['notify'], 0x1F),
+      hasSchedule: j['sched'] == true,
+      hasRule: j['rule'] == true,
     );
   }
 
@@ -112,6 +126,8 @@ class Strip {
         label: label ?? this.label,
         outlets: outlets ?? this.outlets,
         notifyMask: notifyMask,
+        hasSchedule: hasSchedule,
+        hasRule: hasRule,
       );
 
   Strip withOutlets(int n, bool on) =>
@@ -130,11 +146,14 @@ class HubTimer {
   final int tid;
   final String mac;
   final int outlet;
-  final String kind; // on | off | cycle
+  final String kind; // on | off | cycle | loop
   final int phase;
   final int inS;
   final int offS;
-  const HubTimer({required this.tid, required this.mac, required this.outlet, required this.kind, required this.phase, required this.inS, required this.offS});
+  final int onS;
+  final int repeatS; // 0 = once
+  const HubTimer({required this.tid, required this.mac, required this.outlet, required this.kind, required this.phase, required this.inS, required this.offS, this.onS = 0, this.repeatS = 0});
+  bool get repeating => kind == 'loop' || repeatS > 0;
   factory HubTimer.fromJson(Map<String, dynamic> j) => HubTimer(
         tid: _i(j['tid']),
         mac: _s(j['mac']).toUpperCase(),
@@ -143,6 +162,8 @@ class HubTimer {
         phase: _i(j['phase']),
         inS: _i(j['in_s']),
         offS: _i(j['off_s']),
+        onS: _i(j['on_s']),
+        repeatS: _i(j['repeat_s']),
       );
 }
 
@@ -194,9 +215,11 @@ class Automation {
   int act; // 1 notify, 2 off, 3 both
   bool enabled;
   String label;
-  int metric; // 0 = power (W), 1 = temperature (°C); outlet 0 = whole strip
-  Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = '', this.metric = 0});
+  int metric; // 0 = power (W), 1 = temperature (°C), 2 = either; outlet 0 = whole strip
+  double limit2; // °C limit when metric == 2
+  Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = '', this.metric = 0, this.limit2 = 70});
   bool get isTemp => metric == 1;
+  bool get isBoth => metric == 2;
   factory Automation.fromJson(Map<String, dynamic> j) => Automation(
         aid: _i(j['aid']),
         mac: _s(j['mac']).toUpperCase(),
@@ -208,9 +231,11 @@ class Automation {
         enabled: j['enabled'] == true,
         label: _s(j['label']),
         metric: _i(j['metric']),
+        limit2: _d(j['limit2'], 70),
       );
   Map<String, dynamic> toJson() => {
         'metric': metric,
+        'limit2': limit2,
         'aid': aid,
         'mac': mac,
         'outlet': outlet,
