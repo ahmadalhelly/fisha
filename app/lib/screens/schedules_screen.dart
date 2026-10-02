@@ -96,8 +96,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
           padding: const EdgeInsets.all(16),
           child: Row(children: [
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('${two(sc.hh)}:${two(sc.mm)}',
-                  textDirection: TextDirection.ltr, style: mono(28, color: sc.enabled ? C.text : C.faint)),
+              Text(fmtTime12(sc.hh, sc.mm), style: mono(24, color: sc.enabled ? C.text : C.faint)),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -146,6 +145,9 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
   late Schedule sc;
   late final TextEditingController _label;
   bool _saving = false;
+  // new schedules can be an on + off pair ("تشغيل وإيقاف")
+  int _mode = 0; // 0 = off, 1 = on, 2 = on then off
+  TimeOfDay _offAt = const TimeOfDay(hour: 23, minute: 0);
 
   @override
   void initState() {
@@ -155,6 +157,12 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
         ? Schedule.fromJson(i.toJson())
         : Schedule(mac: s.allStrips.first.mac, outlet: 1, on: false, days: 0x7F, hh: 23, mm: 0);
     _label = TextEditingController(text: sc.label);
+    _mode = sc.on ? 1 : 0;
+    if (i == null) {
+      sc.hh = 18;
+      sc.on = true;
+      _mode = 2;
+    }
   }
 
   @override
@@ -170,7 +178,16 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
     }
     sc.label = _label.text.replaceAll('"', '').trim();
     setState(() => _saving = true);
-    final ok = await s.saveSchedule(sc);
+    sc.on = _mode != 0;
+    var ok = await s.saveSchedule(sc);
+    if (ok && _mode == 2 && widget.initial == null) {
+      final off = Schedule.fromJson(sc.toJson())
+        ..sid = 0
+        ..on = false
+        ..hh = _offAt.hour
+        ..mm = _offAt.minute;
+      ok = await s.saveSchedule(off);
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     if (ok) Navigator.of(context).pop();
@@ -208,7 +225,7 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
           InkWell(
             borderRadius: BorderRadius.circular(22),
             onTap: () async {
-              final p = await showTimePicker(context: context, initialTime: TimeOfDay(hour: sc.hh, minute: sc.mm));
+              final p = await pickTime12(context, TimeOfDay(hour: sc.hh, minute: sc.mm));
               if (p != null) {
                 setState(() {
                   sc.hh = p.hour;
@@ -221,15 +238,43 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
               decoration: cardBox(),
               alignment: Alignment.center,
               child: Column(children: [
-                Text(t('time'), style: TextStyle(color: C.muted, fontSize: 13)),
+                Text(_mode == 2 ? t('on_at') : t('time'), style: TextStyle(color: C.muted, fontSize: 13)),
                 const SizedBox(height: 6),
-                Text('${two(sc.hh)}:${two(sc.mm)}', textDirection: TextDirection.ltr, style: mono(48, color: C.accent)),
+                Text(fmtTime12(sc.hh, sc.mm), style: mono(40, color: C.accent)),
               ]),
             ),
           ),
           const SizedBox(height: 14),
+          if (_mode == 2) ...[
+            InkWell(
+              borderRadius: BorderRadius.circular(22),
+              onTap: () async {
+                final p = await pickTime12(context, _offAt);
+                if (p != null) setState(() => _offAt = p);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                decoration: cardBox(),
+                alignment: Alignment.center,
+                child: Column(children: [
+                  Text(t('off_at'), style: TextStyle(color: C.muted, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Text(fmtTime12(_offAt.hour, _offAt.minute), style: mono(32, color: C.textSoft)),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           section(t('action'), [
-            Segmented<bool>(value: sc.on, items: {true: t('turn_on'), false: t('turn_off')}, onChanged: (v) => setState(() => sc.on = v)),
+            Segmented<int>(
+              value: _mode,
+              items: {
+                1: t('turn_on'),
+                0: t('turn_off'),
+                if (widget.initial == null) 2: t('on_and_off'),
+              },
+              onChanged: (v) => setState(() => _mode = v),
+            ),
           ]),
           const SizedBox(height: 14),
           section(t('sched_target'), [

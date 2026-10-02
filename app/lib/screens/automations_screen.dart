@@ -118,7 +118,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(14)),
-                child: Icon(a.above ? Icons.trending_up : Icons.trending_down, color: C.accent),
+                child: Icon(a.isTemp ? Icons.thermostat : (a.above ? Icons.trending_up : Icons.trending_down), color: a.isTemp ? C.danger : C.accent),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -127,7 +127,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Text(
-                    '${t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} W · ${fmtDuration(a.holdS)}',
+                    '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}',
                     style: TextStyle(fontSize: 12, color: C.textSoft),
                   ),
                   Text('${s.nameForMac(a.mac, a.outlet)} → ${_actText(a.act)}',
@@ -151,7 +151,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
 class AutomationEditor extends StatefulWidget {
   final AppState state;
   final Automation? initial;
-  const AutomationEditor({super.key, required this.state, this.initial});
+  final String? presetMac;
+  final int? presetOutlet;
+  const AutomationEditor({super.key, required this.state, this.initial, this.presetMac, this.presetOutlet});
 
   @override
   State<AutomationEditor> createState() => _AutomationEditorState();
@@ -167,7 +169,16 @@ class _AutomationEditorState extends State<AutomationEditor> {
   void initState() {
     super.initState();
     final i = widget.initial;
-    a = i != null ? Automation.fromJson(i.toJson()) : Automation(mac: s.allStrips.first.mac);
+    a = i != null
+        ? Automation.fromJson(i.toJson())
+        : Automation(
+            mac: widget.presetMac ?? s.allStrips.first.mac,
+            outlet: widget.presetOutlet ?? 1,
+            above: true,
+            watts: 1500,
+            holdS: 30,
+            act: 3,
+          );
     _label = TextEditingController(text: a.label);
     _watts = TextEditingController(text: a.watts.toStringAsFixed(0));
   }
@@ -199,6 +210,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
   Widget build(BuildContext context) {
     final targets = <MapEntry<String, String>>[];
     for (final st in s.allStrips) {
+      targets.add(MapEntry('${st.mac}|0', '${s.stripName(st)} · ${t('whole_strip')}'));
       for (final o in st.outlets) {
         targets.add(MapEntry('${st.mac}|${o.n}', '${s.stripName(st)} · ${s.outletName(st, o.n)}'));
       }
@@ -231,19 +243,35 @@ class _AutomationEditorState extends State<AutomationEditor> {
             ),
           ]),
           const SizedBox(height: 14),
-          section(t('when_power'), [
+          section(t('rule_watch'), [
+            Segmented<int>(
+              value: a.metric,
+              items: {0: t('metric_power'), 1: t('metric_temp')},
+              onChanged: (v) => setState(() {
+                a.metric = v;
+                if (v == 1) {
+                  a.above = true;
+                  _watts.text = '60';
+                } else {
+                  _watts.text = '1500';
+                }
+              }),
+            ),
+            if (a.outlet == 0)
+              Text(a.isTemp ? t('rule_strip_temp') : t('rule_strip_power'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
             Segmented<bool>(
                 value: a.above, items: {false: t('drops_below'), true: t('rises_above')}, onChanged: (v) => setState(() => a.above = v)),
             TextField(
               controller: _watts,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               textDirection: TextDirection.ltr,
-              decoration: InputDecoration(labelText: t('threshold'), suffixText: 'W'),
+              decoration: InputDecoration(labelText: a.isTemp ? t('threshold_temp') : t('threshold'), suffixText: a.isTemp ? '°C' : 'W'),
             ),
             Text(t('held_for'), style: TextStyle(color: C.muted, fontSize: 13)),
             DurationPicker(value: a.holdS, maxHours: 17, onChanged: (v) => setState(() => a.holdS = v < 5 ? 5 : v)),
           ]),
           const SizedBox(height: 14),
+          if (a.outlet == 0) ...[emptyCard(t('rule_strip_protect'), icon: Icons.shield_outlined), const SizedBox(height: 14)],
           section(t('then'), [
             Segmented<int>(
               value: a.act,

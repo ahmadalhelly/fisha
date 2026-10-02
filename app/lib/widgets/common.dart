@@ -367,3 +367,17 @@ Future<int?> durationDialog(BuildContext context, String title, int initial,
     ),
   );
 }
+
+// ---------- 12-hour clock (AM/PM) ----------
+String fmtTime12(int hh, int mm) {
+  final h = hh % 12 == 0 ? 12 : hh % 12;
+  final pm = hh >= 12;
+  return '$h:${two(mm)} ${Tr.isAr ? (pm ? 'م' : 'ص') : (pm ? 'PM' : 'AM')}';
+}
+
+/// Time picker that always shows AM/PM.
+Future<TimeOfDay?> pickTime12(BuildContext context, TimeOfDay initial) => showTimePicker(
+      context: context,
+      initialTime: initial,
+      builder: (ctx, child) => MediaQuery(data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false), child: child!),
+    );

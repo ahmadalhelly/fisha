@@ -4,8 +4,10 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'firmware_screen.dart';
+import 'notifications_screen.dart';
 
-const appVersion = '1.0.0';
+const appVersion = '1.1.0';
 
 class SettingsScreen extends StatefulWidget {
   final AppState state;
@@ -90,6 +92,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (st.hubFw != null) _kv(t('hub_fw'), st.hubFw!),
             ]),
             const SizedBox(height: 16),
+            section(t('sec_hub'), [
+              _nav(Icons.notifications_outlined, t('notif_title'), st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'),
+                  () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => NotificationsScreen(state: st)))),
+              _nav(Icons.system_update_alt, t('fw_title'), '${t('hub_fw')}: ${st.hubFw ?? '—'}',
+                  () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => FirmwareScreen(state: st)))),
+            ]),
+            const SizedBox(height: 16),
             section(t('sec_local'), [
               _field(_local!, t('f_local'), hint: '192.168.1.110', ltr: true),
               _field(_localPort!, t('f_port'), hint: '8080', ltr: true, number: true),
@@ -136,6 +145,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('${t('app_name')} · Fisha', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                     Text('${t('version')} $appVersion', style: TextStyle(color: C.muted, fontSize: 12)),
+                    Text(t('by'), textDirection: TextDirection.ltr, style: TextStyle(color: C.accent, fontSize: 13, fontWeight: FontWeight.w600)),
                   ]),
                 ),
               ]),
@@ -147,6 +157,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
+  Widget _nav(IconData icon, String title, String sub, VoidCallback onTap) => ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+          child: Icon(icon, color: C.accent, size: 20),
+        ),
+        title: Text(title),
+        subtitle: Text(sub, style: TextStyle(color: C.muted, fontSize: 12)),
+        trailing: Icon(Icons.chevron_right, color: C.faint),
+        onTap: onTap,
+      );
 
   Widget _field(TextEditingController c, String label, {String? hint, bool ltr = false, bool number = false}) => TextField(
         controller: c,

@@ -14,7 +14,7 @@
 | strip→hub | `up:onoff:<n>:on|off` ack, `up:event:onoff:<0-4>:on|off` physical button |
 | hub→strip | `up:power_report:1:vol` → `up:power_report:<ch>:<mV>` · `up:query:wifirssi` → `up:query:<rssi>` |
 
-## Hub v2.0
+## Hub v2.2
 - HTTP :8080 — `GET /api/state`, `GET /api/health`, `GET /api/raw?cmd=`, `POST /api/<action>` with a flat JSON body → `{"ok","error","data"}`
 - Live :8081 — `GET /events` (SSE): `event: state` on every change, `event: event` for alerts, `: hb` every 15 s
 - MQTT `mttl/<HUB_ID>/` — `status` (LWT), `info`, `state` (retained), `event`, `cmd` ← `{"id","path":"/api/<action>",...}`, `cmd/ack` → `{"id","ok","error","data"}`
@@ -28,8 +28,13 @@
 | timer | mac, outlet 0-4, kind on/off/cycle, delay_s, off_s | RAM |
 | timer_cancel | tid | — |
 | schedule_save / _delete, schedules | sid, mac, outlet, on, days (bit0 = Sun), hh, mm, date yyyymmdd (days = 0), enabled, label | NVS |
-| automation_save / _delete, automations | aid, mac, outlet, above, watts, hold_s, act (1 log, 2 off, 3 both), enabled, label | NVS |
+| automation_save / _delete, automations | aid, mac, outlet (0 = whole strip), metric (0 W, 1 °C), above, watts (= threshold), hold_s, act (1 log, 2 off, 3 both), enabled, label | NVS |
 | events | — | RAM (last 40) |
 | energy | mac → today_wh[4] + 90 daily buckets | NVS |
 | config | temp_max, temp_protect | NVS |
+| notify | ntfy (topic), types (bitmask: temp, load, auto_off, automation, schedule, missed, timer, cycle, lock, added), mac + mask (bit0-3 outlets, bit4 strip), test | NVS |
+| scan | — → found[{ssid, id, rssi, known}] | — |
 | provision | — (state in /api/state: queued → running → waiting → connected / error: no_ap, join_failed, strip_said:…, no_dial) | — |
+
+- `GET/POST /update` (basic auth admin / OTA_PASS): firmware upload from a browser or the app.
+- Provisioning uses ONE TCP session to 192.168.1.1:30300: `up:ip`, `up:connect`, `up:reboot:0`.

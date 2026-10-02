@@ -144,7 +144,7 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
             const SizedBox(height: 8),
             Text(t('app_name'), style: const TextStyle(color: Color(0xFFF2B544), fontSize: 30, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            const Text('By: ahmadalhelly', style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 12)),
+            const Text('@ahmadalhelly', style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 13, fontWeight: FontWeight.w600)),
           ]),
         ),
       ),

@@ -35,6 +35,26 @@ def brand():
         glyph(ImageDraw.Draw(im), S // 2, S // 2 - 30, sc, CLEAR)
         im.save(os.path.join(out, name))
 
+    # signature at the bottom of the launch screen
+    from PIL import ImageFont
+    font = None
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+        if os.path.exists(path):
+            font = ImageFont.truetype(path, 64)
+            break
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=64)
+        except TypeError:
+            font = ImageFont.load_default()
+    text = "@ahmadalhelly"
+    W, H = 800, 160
+    im = Image.new("RGBA", (W, H), CLEAR)
+    d = ImageDraw.Draw(im)
+    box = d.textbbox((0, 0), text, font=font)
+    d.text(((W - (box[2] - box[0])) // 2 - box[0], (H - (box[3] - box[1])) // 2 - box[1]), text, font=font, fill=(154, 167, 184, 255))
+    im.save(os.path.join(out, "branding.png"))
+
 
 brand()
 

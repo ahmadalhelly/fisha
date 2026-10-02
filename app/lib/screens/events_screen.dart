@@ -59,7 +59,7 @@ class _EventsScreenState extends State<EventsScreen> {
   String _time(int ts) {
     if (ts <= 0) return '';
     final d = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
-    return '${two(d.day)}/${two(d.month)}  ${two(d.hour)}:${two(d.minute)}';
+    return '${two(d.day)}/${two(d.month)}  ${fmtTime12(d.hour, d.minute)}';
   }
 
   @override
@@ -93,7 +93,7 @@ class _EventsScreenState extends State<EventsScreen> {
                         Text(eventText(s, e), style: const TextStyle(height: 1.4)),
                         if (e.ts > 0) ...[
                           const SizedBox(height: 4),
-                          Text(_time(e.ts), textDirection: TextDirection.ltr, style: mono(11, color: C.muted, weight: FontWeight.w500)),
+                          Text(_time(e.ts), style: mono(11, color: C.muted, weight: FontWeight.w500)),
                         ],
                       ]),
                     ),

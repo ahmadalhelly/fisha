@@ -63,6 +63,7 @@ class Strip {
   final int? rssi;
   final String label;
   final List<Outlet> outlets;
+  final int notifyMask; // bit 0-3 outlets, bit 4 strip-level events
 
   const Strip({
     required this.mac,
@@ -72,6 +73,7 @@ class Strip {
     required this.rssi,
     required this.outlets,
     this.label = '',
+    this.notifyMask = 0x1F,
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -91,6 +93,7 @@ class Strip {
       rssi: (j['rssi'] as num?)?.toInt(),
       label: _s(j['label']),
       outlets: outs,
+      notifyMask: _i(j['notify'], 0x1F),
     );
   }
 
@@ -108,6 +111,7 @@ class Strip {
         rssi: rssi,
         label: label ?? this.label,
         outlets: outlets ?? this.outlets,
+        notifyMask: notifyMask,
       );
 
   Strip withOutlets(int n, bool on) =>
@@ -190,7 +194,9 @@ class Automation {
   int act; // 1 notify, 2 off, 3 both
   bool enabled;
   String label;
-  Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = ''});
+  int metric; // 0 = power (W), 1 = temperature (°C); outlet 0 = whole strip
+  Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = '', this.metric = 0});
+  bool get isTemp => metric == 1;
   factory Automation.fromJson(Map<String, dynamic> j) => Automation(
         aid: _i(j['aid']),
         mac: _s(j['mac']).toUpperCase(),
@@ -201,8 +207,10 @@ class Automation {
         act: _i(j['act'], 1),
         enabled: j['enabled'] == true,
         label: _s(j['label']),
+        metric: _i(j['metric']),
       );
   Map<String, dynamic> toJson() => {
+        'metric': metric,
         'aid': aid,
         'mac': mac,
         'outlet': outlet,

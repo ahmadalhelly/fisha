@@ -6,11 +6,12 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/strip_card.dart' show timerText, guardedSwitch;
+import 'automations_screen.dart' show AutomationEditor;
 
 
 String _autoOffLabel(int m) => m == 0 ? t('auto_off_none') : fmtDuration(m * 60);
 
-/// Strip-level sheet: name, every outlet, power-cycle all, device info.
+/// Strip-level sheet: name, every outlet, reboot all, device info.
 void openStripSheet(BuildContext context, AppState state, String mac) {
   showModalBottomSheet(
     context: context,
@@ -36,6 +37,9 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                   if (v != null) state.rename(s, 0, v);
                 }),
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 ? null : () => _cycleDialog(ctx, state, s, 0)),
+                _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
+                _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
+                    (v) => state.setNotifyMask(s, v ? s.notifyMask | 0x10 : s.notifyMask & ~0x10)),
                 const SizedBox(height: 8),
                 Text(t('outlets'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
                 for (final o in s.outlets)
@@ -121,6 +125,9 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                             if (sec != null) state.setAutoOff(s, n, (sec ~/ 60).clamp(0, 1440));
                           }),
                 _tile(Icons.hourglass_bottom, t('countdown'), t('countdown_sub'), !v2 ? null : () => _countdownDialog(ctx, state, s, n)),
+                _tile(Icons.bolt, t('rule_cut'), t('rule_cut_sub'), !v2 ? null : () => _openRule(ctx, state, s.mac, n)),
+                _switchTile(Icons.notifications_outlined, t('notify_outlet'), t('notify_outlet_sub'), s.notifyMask & (1 << (n - 1)) != 0, v2,
+                    (v) => state.setNotifyMask(s, v ? s.notifyMask | (1 << (n - 1)) : s.notifyMask & ~(1 << (n - 1)))),
                 _tile(
                     Icons.restart_alt,
                     t('cycle'),
@@ -143,6 +150,10 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
       },
     ),
   );
+}
+
+void _openRule(BuildContext ctx, AppState state, String mac, int outlet) {
+  Navigator.of(ctx).push(MaterialPageRoute(builder: (_) => AutomationEditor(state: state, presetMac: mac, presetOutlet: outlet)));
 }
 
 List<Widget> _timerList(BuildContext ctx, AppState state, List<HubTimer> list) {

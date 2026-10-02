@@ -91,6 +91,9 @@ class AppState extends ChangeNotifier {
   bool hubTimeOk = false;
   String? hubFw;
   int tempMax = 70;
+  String ntfyTopic = '';
+  int notifyTypes = 0x7FF;
+  String otaPass = '';
   bool tempProtect = true;
   String provState = 'idle';
   String provMsg = '';
@@ -153,6 +156,7 @@ class AppState extends ChangeNotifier {
     langPref = LangPref.values[idx('langPref', LangPref.values.length)];
     showMac = p.getBool('showMac') ?? false;
     tariff = p.getDouble('tariff') ?? 1.0;
+    otaPass = p.getString('otaPass') ?? '';
     _order = p.getStringList('order') ?? [];
     final n = p.getString('names');
     if (n != null) {
@@ -413,6 +417,8 @@ class AppState extends ChangeNotifier {
       if (cfg is Map) {
         tempMax = (cfg['temp_max'] as num?)?.toInt() ?? tempMax;
         tempProtect = cfg['temp_protect'] != false;
+        ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
+        notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
       }
       final tm = j['timers'];
       timers = tm is List ? tm.whereType<Map<String, dynamic>>().map(HubTimer.fromJson).toList() : [];
@@ -660,6 +666,75 @@ class AppState extends ChangeNotifier {
     if (max != null) tempMax = max;
     notifyListeners();
     _fail(await api('config', {'temp_protect': tempProtect, 'temp_max': tempMax}));
+  }
+
+  // ---------- notifications (hub pushes them through ntfy) ----------
+  static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
+
+  Future<bool> setNotifyConfig({String? topic, int? types}) async {
+    if (topic != null) ntfyTopic = topic;
+    if (types != null) notifyTypes = types;
+    notifyListeners();
+    final r = await api('notify', {if (topic != null) 'ntfy': topic, if (types != null) 'types': types});
+    _fail(r);
+    return r.ok;
+  }
+
+  Future<void> setNotifyMask(Strip s, int mask) async {
+    final before = _strips;
+    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, outlets: x.outlets, label: x.label, notifyMask: mask) : x).toList();
+    notifyListeners();
+    final r = await api('notify', {'mac': s.mac, 'mask': mask});
+    if (!r.ok) _strips = before;
+    _fail(r);
+    notifyListeners();
+  }
+
+  Future<bool> testNotify() async {
+    final r = await api('notify', {'test': true});
+    _fail(r);
+    return r.ok;
+  }
+
+  // ---------- hub firmware update (local network only) ----------
+  Future<void> setOtaPass(String v) async {
+    otaPass = v;
+    await _prefs?.setString('otaPass', v);
+  }
+
+  bool get canUpdateFirmware => _localFresh || settings.hasLocal;
+
+  /// Uploads a firmware .bin to the hub's /update page; [progress] gets 0..1. Returns null on success or an error text.
+  Future<String?> uploadFirmware(List<int> bytes, String password, void Function(double) progress) async {
+    if (bytes.length < 100000 || bytes.first != 0xE9) return 'bad_file';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    try {
+      final req = await client.postUrl(_localUri('/update'));
+      req.headers.set(HttpHeaders.authorizationHeader, 'Basic ${base64Encode(utf8.encode('admin:$password'))}');
+      final boundary = '----fisha${DateTime.now().millisecondsSinceEpoch}';
+      req.headers.contentType = ContentType('multipart', 'form-data', parameters: {'boundary': boundary});
+      final head = utf8.encode('--$boundary\r\nContent-Disposition: form-data; name="f"; filename="firmware.bin"\r\n'
+          'Content-Type: application/octet-stream\r\n\r\n');
+      final tail = utf8.encode('\r\n--$boundary--\r\n');
+      req.contentLength = head.length + bytes.length + tail.length;
+      req.add(head);
+      const chunk = 8192;
+      for (var i = 0; i < bytes.length; i += chunk) {
+        req.add(bytes.sublist(i, i + chunk > bytes.length ? bytes.length : i + chunk));
+        await req.flush();
+        progress((i + chunk).clamp(0, bytes.length) / bytes.length);
+      }
+      req.add(tail);
+      final resp = await req.close().timeout(const Duration(seconds: 60));
+      final body = await resp.transform(utf8.decoder).join();
+      if (resp.statusCode == 401) return 'auth';
+      if (resp.statusCode != 200) return body.trim().isEmpty ? 'HTTP ${resp.statusCode}' : body.trim();
+      return null;
+    } catch (e) {
+      return 'net';
+    } finally {
+      client.close(force: true);
+    }
   }
 
   // ---------- schedules / automations ----------
