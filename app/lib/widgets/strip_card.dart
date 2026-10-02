@@ -64,11 +64,25 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
 const double kStripMaxW = 3500;
 const double kOutletMaxW = 3500;
 
-/// Green under half the rating, amber up to 80 %, red above.
-Color loadColor(double watts, double maxW) {
+/// Load bands of the rating: < 15 % green, 15–35 % yellow, 35–60 % orange, above 60 % red.
+/// (A 1400 W hair dryer on a 3500 W strip is orange.)
+const _orange = Color(0xFFFF8A3D);
+int loadLevel(double watts, double maxW) {
   final r = watts / maxW;
-  return r >= 0.8 ? C.danger : (r >= 0.5 ? C.warn : C.accent);
+  return r >= 0.6 ? 3 : (r >= 0.35 ? 2 : (r >= 0.15 ? 1 : 0));
 }
+
+Color levelColor(int level) => switch (level) {
+      3 => C.danger,
+      2 => _orange,
+      1 => C.warn,
+      _ => C.green,
+    };
+
+Color loadColor(double watts, double maxW) => levelColor(loadLevel(watts, maxW));
+
+/// Temperature bands: < 40 °C green, 40–50 yellow, 50–60 orange, 60+ red.
+Color tempColor(int c) => c >= 60 ? C.danger : (c >= 50 ? _orange : (c >= 40 ? C.warn : C.green));
 
 /// "1:40 h", "25 min", "40 s"
 String shortDuration(int s) {
@@ -147,7 +161,8 @@ class StripCard extends StatelessWidget {
               child: InkWell(
                 onTap: () => openStripSheet(context, state, s.mac),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                  Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, height: 1.3)),
+                  const SizedBox(height: 6),
                   Row(children: [
                     Flexible(
                       child: Text(
@@ -158,11 +173,9 @@ class StripCard extends StatelessWidget {
                       ),
                     ),
                     if (online)
-                      Text(
-                        '${s.maxTemp}°C${s.voltage != null ? ' · ${s.voltage!.toStringAsFixed(0)} V' : ''}',
-                        textDirection: TextDirection.ltr,
-                        style: TextStyle(fontSize: 11.5, color: C.muted),
-                      ),
+                      Text('${s.maxTemp}°C', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: tempColor(s.maxTemp), fontWeight: FontWeight.w600)),
+                    if (online && s.voltage != null)
+                      Text(' · ${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: C.muted)),
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
                 ]),
@@ -266,7 +279,7 @@ class _Socket extends StatelessWidget {
               width: 62,
               height: 62,
               child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(on: on, load: v, hot: o.tempC >= 60, dark: C.dark)),
+                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(on: on, load: v, level: loadLevel(o.powerW, kOutletMaxW), hot: o.tempC >= 60, dark: C.dark)),
                 if (pending) SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
               ]),
             ),
@@ -281,8 +294,8 @@ class _Socket extends StatelessWidget {
           ),
           if (strip.online)
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.thermostat, size: 11, color: _tempColor(o.tempC)),
-              Text('${o.tempC}°C', textDirection: TextDirection.ltr, style: mono(10.5, color: _tempColor(o.tempC), weight: FontWeight.w500)),
+              Icon(Icons.thermostat, size: 11, color: tempColor(o.tempC)),
+              Text('${o.tempC}°C', textDirection: TextDirection.ltr, style: mono(10.5, color: tempColor(o.tempC), weight: FontWeight.w500)),
             ]),
         ]),
       ),
@@ -290,19 +303,18 @@ class _Socket extends StatelessWidget {
   }
 }
 
-Color _tempColor(int c) => c >= 60 ? C.danger : (c >= 45 ? C.warn : C.muted);
-
 /// Socket face (Schuko style) with a load ring.
 class _SocketPainter extends CustomPainter {
   final bool on, hot, dark;
   final double load;
-  _SocketPainter({required this.on, required this.load, required this.hot, required this.dark});
+  final int level;
+  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark});
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final r = size.width / 2;
-    final ringColor = hot ? C.danger : (load >= 0.8 ? C.danger : (load >= 0.5 ? C.warn : C.accent));
+    final ringColor = hot ? C.danger : levelColor(level);
     // track
     canvas.drawCircle(c, r - 3, Paint()
       ..style = PaintingStyle.stroke
@@ -314,7 +326,7 @@ class _SocketPainter extends CustomPainter {
         ..color = ringColor.withValues(alpha: 0.22)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
       // load arc
-      final sweep = 2 * math.pi * math.max(0.06, load);
+      final sweep = 2 * math.pi * math.max(0.12, load);
       canvas.drawArc(
         Rect.fromCircle(center: c, radius: r - 3),
         -math.pi / 2,
@@ -327,7 +339,7 @@ class _SocketPainter extends CustomPainter {
           ..shader = SweepGradient(
             startAngle: -math.pi / 2,
             endAngle: -math.pi / 2 + sweep,
-            colors: hot || load >= 0.8 ? [C.warn, C.danger] : (load >= 0.5 ? [C.accent, C.warn] : [C.accent, C.accent2]),
+            colors: [Color.lerp(ringColor, C.surface, 0.35)!, ringColor],
             transform: const GradientRotation(-math.pi / 2),
           ).createShader(Rect.fromCircle(center: c, radius: r)),
       );
