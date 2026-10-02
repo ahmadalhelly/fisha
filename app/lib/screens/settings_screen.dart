@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
+import 'guide_screen.dart';
 import 'notifications_screen.dart';
 import 'wifi_screen.dart';
 
@@ -70,6 +71,11 @@ class SettingsScreen extends StatelessWidget {
                     onChanged: st.setLangPref,
                   ),
                 ),
+              ]),
+              const SizedBox(height: 18),
+              _group(_tr('مساعدة', 'Help'), [
+                _row(context, Icons.menu_book_outlined, C.accent2, _tr('طريقة التوصيل', 'Setup guide'), _tr('من الأول للآخر', 'Start to finish'),
+                    () => _open(context, const GuideScreen()), last: true),
               ]),
               const SizedBox(height: 18),
               _group(t('sec_privacy'), [
