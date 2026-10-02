@@ -20,6 +20,12 @@ String eventText(AppState s, HubEvent e) {
     'cycle' => t('ev_cycle', {'x': m}),
     'lock' => t('ev_lock'),
     'added' => t('ev_added'),
+    'button' => t('ev_button', {'x': m == 'on' ? t('turn_on') : t('turn_off')}),
+    'remote' => t('ev_remote', {'x': m == 'on' ? t('turn_on') : t('turn_off')}),
+    'online' => t('ev_online'),
+    'offline' => t('ev_offline'),
+    'voltage' => t('ev_voltage', {'x': m}),
+    'test' => t('ev_test'),
     _ => '${e.type} $m',
   };
   return who.isEmpty ? body.trim() : '$who — ${body.trim()}';
@@ -35,6 +41,11 @@ IconData _icon(String type) => switch (type) {
       'cycle' => Icons.restart_alt,
       'lock' => Icons.lock_outline,
       'added' => Icons.add_circle_outline,
+      'button' => Icons.touch_app_outlined,
+      'remote' => Icons.phone_android,
+      'online' => Icons.wifi,
+      'offline' => Icons.wifi_off,
+      'voltage' => Icons.electric_bolt,
       _ => Icons.info_outline,
     };
 
