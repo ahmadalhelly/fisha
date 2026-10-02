@@ -45,16 +45,16 @@ jobs:
             dart run flutter_native_splash:create
             flutter analyze --no-fatal-infos --no-fatal-warnings
             flutter test
-            flutter build apk --release --build-name=1.0.0 --build-number=${{ github.run_number }}
-            cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-1.0.0-${{ github.run_number }}.apk
+            flutter build apk --release --build-name=1.1.0 --build-number=${{ github.run_number }}
+            cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-1.1.0-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 
       - name: Publish APK as a release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Fisha 1.0.0 (build ${{ github.run_number }})
+          tag_name: v1.1.0-build-${{ github.run_number }}
+          name: Fisha 1.1.0 (build ${{ github.run_number }})
           make_latest: true
           files: Fisha-1.1.0-${{ github.run_number }}.apk
           body: "Commit ${{ github.sha }}"
