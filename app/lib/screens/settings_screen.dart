@@ -11,7 +11,7 @@ import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-const appVersion = '1.3.0';
+const appVersion = '1.4.0';
 
 /// Settings home: short, grouped, every detail lives one tap deeper.
 class SettingsScreen extends StatelessWidget {
@@ -50,12 +50,17 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 18),
               _group(t('sec_look'), [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-                  child: Segmented<ThemePref>(
-                    value: st.themePref,
-                    items: {ThemePref.system: t('th_system'), ThemePref.dark: t('th_dark'), ThemePref.light: t('th_light')},
-                    onChanged: st.setThemePref,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(10, 14, 10, 8),
+                  child: Row(children: [
+                    for (final (p, label, a, b) in [
+                      (ThemePref.system, t('th_system'), const Color(0xFF070D19), const Color(0xFFF1F6FA)),
+                      (ThemePref.dark, t('th_dark'), const Color(0xFF070D19), const Color(0xFF2EE6B0)),
+                      (ThemePref.graphite, _tr('جرافيت', 'Graphite'), const Color(0xFF25292F), const Color(0xFF4FD8B8)),
+                      (ThemePref.light, t('th_light'), const Color(0xFFF1F6FA), const Color(0xFF079E7D)),
+                      (ThemePref.saffron, _tr('زعفران', 'Saffron'), const Color(0xFFF8F1E4), const Color(0xFFC27803)),
+                    ])
+                      Expanded(child: _swatch(label, a, b, st.themePref == p, () => st.setThemePref(p))),
+                  ]),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 6, 14, 12),
@@ -92,6 +97,30 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _swatch(String label, Color bg, Color accent, bool selected, VoidCallback onTap) => InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: SweepGradient(colors: [bg, bg, accent, bg]),
+                border: Border.all(color: selected ? C.accent : C.border, width: selected ? 3 : 1),
+              ),
+              child: selected ? Icon(Icons.check, size: 18, color: accent) : null,
+            ),
+            const SizedBox(height: 6),
+            Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: selected ? C.accent : C.textSoft, fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
+          ]),
+        ),
+      );
 
   Widget _group(String title, List<Widget> children) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
