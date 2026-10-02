@@ -547,7 +547,22 @@ class AppState extends ChangeNotifier {
 
   void clearError() => lastError = null;
 
+  Future<bool> forget(String mac) async {
+    final r = await api('forget', {'mac': mac});
+    _fail(r);
+    if (r.ok) {
+      _strips = _strips.where((s) => s.mac != mac).toList();
+      notifyListeners();
+    }
+    return r.ok;
+  }
+
   Future<void> setOutlet(String mac, int outlet, bool on) async {
+    if (live(mac)?.online == false) {
+      lastError = t('strip_offline_cmd');
+      notifyListeners();
+      return;
+    }
     final targets = outlet == 0 ? [1, 2, 3, 4] : [outlet];
     final p = _pending.putIfAbsent(mac, () => {});
     if (targets.any(p.containsKey)) return;
@@ -649,8 +664,8 @@ class AppState extends ChangeNotifier {
   Future<void> setAutoOff(Strip s, int outlet, int minutes) =>
       _flag(s, outlet, 'autooff', {'minutes': minutes}, (o) => o.copyWith(autoOffMin: minutes));
 
-  Future<bool> addTimer(String mac, int outlet, String kind, {int delayS = 0, int offS = 10}) async {
-    final r = await api('timer', {'mac': mac, 'outlet': outlet, 'kind': kind, 'delay_s': delayS, 'off_s': offS});
+  Future<bool> addTimer(String mac, int outlet, String kind, {int delayS = 0, int offS = 10, int onS = 0, int repeatS = 0}) async {
+    final r = await api('timer', {'mac': mac, 'outlet': outlet, 'kind': kind, 'delay_s': delayS, 'off_s': offS, 'on_s': onS, 'repeat_s': repeatS});
     _fail(r);
     return r.ok;
   }
@@ -682,7 +697,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> setNotifyMask(Strip s, int mask) async {
     final before = _strips;
-    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, outlets: x.outlets, label: x.label, notifyMask: mask) : x).toList();
+    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
     notifyListeners();
     final r = await api('notify', {'mac': s.mac, 'mask': mask});
     if (!r.ok) _strips = before;
