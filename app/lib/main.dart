@@ -131,7 +131,7 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D1117),
+      backgroundColor: const Color(0xFF070D19),
       body: Center(
         child: AnimatedBuilder(
           animation: _c,
@@ -142,7 +142,7 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const BrandMark(size: 120),
             const SizedBox(height: 8),
-            Text(t('app_name'), style: const TextStyle(color: Color(0xFFF2B544), fontSize: 30, fontWeight: FontWeight.w700)),
+            Text(t('app_name'), style: const TextStyle(color: Color(0xFF2EE6B0), fontSize: 30, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             const Text('@ahmadalhelly', style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 13, fontWeight: FontWeight.w600)),
           ]),

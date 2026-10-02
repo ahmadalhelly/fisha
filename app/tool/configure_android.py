@@ -8,7 +8,7 @@ NAME = "Fisha"
 def brand():
     from PIL import Image, ImageDraw
     S = 1024
-    AMBER, BG, RING, CLEAR = (242, 181, 68, 255), (13, 17, 23, 255), (58, 48, 26, 255), (0, 0, 0, 0)
+    AMBER, BG, RING, CLEAR = (46, 230, 176, 255), (7, 13, 25, 255), (20, 60, 58, 255), (0, 0, 0, 0)
 
     def glyph(d, cx, cy, sc, cut):
         w, h, r = int(300 * sc), int(250 * sc), int(70 * sc)
