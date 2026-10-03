@@ -305,37 +305,78 @@ class StripCard extends StatelessWidget {
               ),
               border: Border.all(color: C.border),
             ),
-            child: Row(children: [
-              for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
+            child: Column(children: [
+              Row(children: [
+                for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
+              ]),
+              const SizedBox(height: 12),
+              _MasterSocket(state: state, strip: s),
             ]),
           ),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _pill(context, Icons.power_settings_new, t('all_on'), online ? () => guardedAllOn(context, state, s) : null, filled: true)),
-            const SizedBox(width: 8),
-            Expanded(child: _pill(context, Icons.power_off_outlined, t('all_off'), online ? () => guardedAllOff(context, state, s) : null)),
-          ]),
         ]),
       ),
     );
   }
+}
 
-  Widget _pill(BuildContext context, IconData icon, String label, VoidCallback? onTap, {bool filled = false}) => Material(
-        color: filled ? C.accentBg : Colors.transparent,
-        shape: StadiumBorder(side: BorderSide(color: filled ? C.tileOnBorder : C.border)),
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: SizedBox(
-            height: 40,
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(icon, size: 17, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft)),
-              const SizedBox(width: 6),
-              Text(label, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft))),
-            ]),
+class _MasterSocket extends StatelessWidget {
+  final AppState state;
+  final Strip strip;
+  const _MasterSocket({required this.state, required this.strip});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = strip;
+    final online = s.online;
+    final allOn = s.onCount == 4;
+    final allOff = s.onCount == 0;
+    final mixed = !allOn && !allOff;
+    final on = online && (allOn || mixed);
+    final pending = state.isPending(s.mac, 0);
+    
+    final load = on ? (s.livePower / kStripMaxW).clamp(0.0, 1.0) : 0.0;
+    final String lbl = allOn ? t('all_on') : (allOff ? t('all_off') : t('n_of_4', {'a': s.onCount, 'b': 4}));
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: pending ? null : () {
+        if (!online) return;
+        if (allOn) guardedAllOff(context, state, s);
+        else state.setOutlet(s.mac, 0, true);
+      },
+      onLongPress: () => openStripSheet(context, state, s.mac),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Column(children: [
+          const SizedBox(height: 2),
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: load),
+            duration: const Duration(milliseconds: 700),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => SizedBox(
+              width: 62,
+              height: 62,
+              child: Stack(alignment: Alignment.center, children: [
+                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(
+                  on: on, load: v, level: loadLevel(s.livePower, kStripMaxW), hot: s.maxTemp >= 60, dark: C.dark,
+                  isMaster: true, mixed: mixed,
+                )),
+                if (pending) SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
+              ]),
+            ),
           ),
-        ),
-      );
+          const SizedBox(height: 6),
+          Text(lbl, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
+          Text(
+            on ? '${s.livePower.toStringAsFixed(s.livePower < 10 ? 1 : 0)} W' : (online ? t('off') : '—'),
+            textDirection: TextDirection.ltr,
+            style: on ? mono(11, color: loadColor(s.livePower, kStripMaxW), weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
+          ),
+          if (online) const SizedBox(height: 11),
+        ]),
+      ),
+    );
+  }
 }
 
 class _Socket extends StatelessWidget {
@@ -397,10 +438,10 @@ class _Socket extends StatelessWidget {
 
 /// Socket face (Schuko style) with a load ring.
 class _SocketPainter extends CustomPainter {
-  final bool on, hot, dark;
+  final bool on, hot, dark, isMaster, mixed;
   final double load;
   final int level;
-  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark});
+  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark, this.isMaster = false, this.mixed = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -438,12 +479,13 @@ class _SocketPainter extends CustomPainter {
     }
     // face
     final face = r - 9;
+    final bool innerOn = on && !mixed;
     canvas.drawCircle(
       c,
       face,
       Paint()
         ..shader = RadialGradient(
-          colors: on
+          colors: innerOn
               ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg]
               : (dark ? [C.surface2, C.tile] : [C.surface, C.miniOff]),
         ).createShader(Rect.fromCircle(center: c, radius: face)),
@@ -451,18 +493,32 @@ class _SocketPainter extends CustomPainter {
     canvas.drawCircle(c, face, Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = on ? ringColor.withValues(alpha: 0.6) : C.border);
-    // two pin holes
-    final hole = Paint()..color = on ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
-    canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
-    canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
-    // earth clips
-    final clip = Paint()
-      ..color = on ? ringColor.withValues(alpha: 0.8) : C.faint
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
-    canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+      ..color = innerOn ? ringColor.withValues(alpha: 0.6) : C.border);
+    
+    final holeColor = innerOn ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
+    
+    if (isMaster) {
+      final iconColor = mixed ? C.accent : holeColor;
+      final iconStr = String.fromCharCode(Icons.power_settings_new.codePoint);
+      final tp = TextPainter(
+        text: TextSpan(text: iconStr, style: TextStyle(fontFamily: Icons.power_settings_new.fontFamily, fontSize: face * 0.9, color: iconColor)),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
+    } else {
+      // two pin holes
+      final hole = Paint()..color = holeColor;
+      canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
+      canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
+      // earth clips
+      final clip = Paint()
+        ..color = innerOn ? ringColor.withValues(alpha: 0.8) : C.faint
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
+      canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+    }
   }
 
   @override
