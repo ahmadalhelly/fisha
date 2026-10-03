@@ -40,37 +40,93 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: s,
-      builder: (context, _) => Scaffold(
-        backgroundColor: C.bg,
-        appBar: AppBar(
+      builder: (context, _) {
+        final grouped = <String, List<Automation>>{};
+        for (final a in s.automations) {
+          grouped.putIfAbsent(a.mac, () => []).add(a);
+        }
+        final macs = <String>[];
+        for (final st in s.allStrips) {
+          if (grouped.containsKey(st.mac)) macs.add(st.mac);
+        }
+        for (final mac in grouped.keys) {
+          if (!macs.contains(mac)) macs.add(mac);
+        }
+
+        return Scaffold(
           backgroundColor: C.bg,
-          surfaceTintColor: Colors.transparent,
-          title: Text(t('auto_title'), style: const TextStyle(fontWeight: FontWeight.w700)),
-        ),
-        floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
-            ? FloatingActionButton.extended(
-                onPressed: () => _edit(),
-                backgroundColor: C.accent,
-                foregroundColor: C.onAccent,
-                icon: const Icon(Icons.add),
-                label: Text(t('auto_new'), style: const TextStyle(fontWeight: FontWeight.w700)),
-              )
-            : null,
-        body: SafeArea(
-          child: RefreshIndicator(
-            color: C.accent,
-            onRefresh: _load,
-            child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
-              if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
-                _tempCard(),
-                const SizedBox(height: 14),
-                if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
-                if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
-                for (final a in s.automations) Padding(padding: const EdgeInsets.only(bottom: 10), child: _card(a)),
-              ],
-            ]),
+          appBar: AppBar(
+            backgroundColor: C.bg,
+            surfaceTintColor: Colors.transparent,
+            title: Text(t('auto_title'), style: const TextStyle(fontWeight: FontWeight.w700)),
           ),
-        ),
+          floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
+              ? FloatingActionButton.extended(
+                  onPressed: () => _edit(),
+                  backgroundColor: C.accent,
+                  foregroundColor: C.onAccent,
+                  icon: const Icon(Icons.add),
+                  label: Text(t('auto_new'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                )
+              : null,
+          body: SafeArea(
+            child: RefreshIndicator(
+              color: C.accent,
+              onRefresh: _load,
+              child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
+                if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
+                  _tempCard(),
+                  const SizedBox(height: 14),
+                  if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
+                  if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
+                  for (final mac in macs) ...[
+                    _stripGroup(mac, grouped[mac]!),
+                    const SizedBox(height: 14),
+                  ],
+                ],
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _stripGroup(String mac, List<Automation> rules) {
+    final strip = s.live(mac);
+    final stripName = strip != null ? s.stripName(strip) : mac;
+    return Container(
+      decoration: cardBox(radius: 20),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    stripName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(10)),
+                  child: Text('${rules.length}', style: mono(12, color: C.muted)),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: C.border),
+          for (var i = 0; i < rules.length; i++) ...[
+            if (i > 0) Divider(height: 1, color: C.border.withValues(alpha: 0.5), indent: 70),
+            _ruleRow(rules[i]),
+          ],
+        ],
       ),
     );
   }
@@ -105,11 +161,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
         ]),
       );
 
-  Widget _card(Automation a) => Material(
-        color: C.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.border)),
+  Widget _ruleRow(Automation a) => Material(
+        color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(20),
           onTap: () => _edit(a),
           child: Padding(
             padding: const EdgeInsets.all(16),

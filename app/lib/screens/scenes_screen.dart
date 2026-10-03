@@ -39,6 +39,7 @@ class SceneStore {
 /// Runs a scenario. Offline strips are skipped; protected outlets are never switched off by a scenario.
 Future<int> runScene(AppState state, Scene sc) async {
   var done = 0;
+  bool? bioPassed;
   for (final e in sc.actions.entries) {
     final p = e.key.split('|');
     if (p.length != 2) continue;
@@ -50,6 +51,12 @@ Future<int> runScene(AppState state, Scene sc) async {
     if (o.on == e.value) {
       done++;
       continue;
+    }
+    if (state.requiresBio(strip.mac, n)) {
+      bioPassed ??= await authenticateBio(
+        _tr('تأكيد بالبصمة لتشغيل السيناريو', 'Authenticate to run scenario'),
+      );
+      if (bioPassed != true) continue;
     }
     await state.setOutlet(strip.mac, n, e.value);
     done++;

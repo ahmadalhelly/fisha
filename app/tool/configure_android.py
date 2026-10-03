@@ -72,9 +72,9 @@ if "android.permission.INTERNET" not in s:
 if "usesCleartextTraffic" not in s:
     s = re.sub(r"<application\b", '<application android:usesCleartextTraffic="true"', s, count=1)
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NAME}"', s, count=1)
-# native notifications: foreground service + notification permissions
+# native notifications: foreground service + notification + biometric permissions
 for perm in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED",
-             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"):
+             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", "USE_BIOMETRIC"):
     tag = f'<uses-permission android:name="android.permission.{perm}"/>'
     if tag not in s:
         s = s.replace("<application", tag + "\n    <application", 1)
@@ -84,7 +84,157 @@ if "flutter_foreground_task.service.ForegroundService" not in s:
             android:foregroundServiceType="dataSync"
             android:exported="false" />
     </application>''', 1)
+if "FishaWidgetProvider" not in s:
+    s = s.replace("</application>", '''    <receiver
+            android:name=".FishaWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/fisha_widget_info" />
+        </receiver>
+    </application>''', 1)
 open(man, "w").write(s)
+
+# patch MainActivity to FlutterFragmentActivity for local_auth
+import glob
+for ma in glob.glob(os.path.join(APP, "android", "app", "src", "main", "kotlin", "**", "MainActivity.kt"), recursive=True):
+    content = open(ma).read()
+    if "FlutterFragmentActivity" not in content:
+        content = content.replace("import io.flutter.embedding.android.FlutterActivity", "import io.flutter.embedding.android.FlutterFragmentActivity")
+        content = content.replace("FlutterActivity()", "FlutterFragmentActivity()")
+        if "FlutterFragmentActivity" not in content:
+            content = re.sub(r'class\s+MainActivity\s*:\s*[^\n{]+', 'class MainActivity: io.flutter.embedding.android.FlutterFragmentActivity()', content)
+        open(ma, "w").write(content)
+
+# generate home_widget Android files
+widget_kt_dir = os.path.join(APP, "android", "app", "src", "main", "kotlin", "com", "mttlhub", "mttl_hub")
+os.makedirs(widget_kt_dir, exist_ok=True)
+open(os.path.join(widget_kt_dir, "FishaWidgetProvider.kt"), "w").write('''package com.mttlhub.mttl_hub
+
+import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.widget.RemoteViews
+import es.antonborras.home_widget.HomeWidgetProvider
+
+class FishaWidgetProvider : HomeWidgetProvider() {
+    override fun onUpdate(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray,
+        widgetData: SharedPreferences
+    ) {
+        for (appWidgetId in appWidgetIds) {
+            val views = RemoteViews(context.packageName, R.layout.widget_layout)
+            views.setTextViewText(R.id.widget_total_w, widgetData.getString("total_w", "0 W"))
+            views.setTextViewText(R.id.widget_outlets_on, widgetData.getString("outlets_on", "0/0"))
+            views.setTextViewText(R.id.widget_hottest_temp, widgetData.getString("hottest_temp", "—"))
+            views.setTextViewText(R.id.widget_conn_mode, widgetData.getString("conn_mode", "—"))
+
+            val intent = Intent(context, MainActivity::class.java)
+            val pendingIntent = PendingIntent.getActivity(
+                context, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            views.setOnClickPendingIntent(R.id.widget_container, pendingIntent)
+
+            appWidgetManager.updateAppWidget(appWidgetId, views)
+        }
+    }
+}
+''')
+
+layout_dir = os.path.join(APP, "android", "app", "src", "main", "res", "layout")
+os.makedirs(layout_dir, exist_ok=True)
+open(os.path.join(layout_dir, "widget_layout.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_bg">
+
+    <TextView
+        android:id="@+id/widget_total_w"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0 W"
+        android:textColor="#2EE6B0"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="4dp">
+
+        <TextView
+            android:id="@+id/widget_outlets_on"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0/0"
+            android:textColor="#C2D1E8"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=" · "
+            android:textColor="#4D5C77"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/widget_hottest_temp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="—"
+            android:textColor="#C2D1E8"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_conn_mode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="—"
+        android:textColor="#8798B3"
+        android:textSize="11sp" />
+
+</LinearLayout>
+''')
+
+drawable_dir = os.path.join(APP, "android", "app", "src", "main", "res", "drawable")
+os.makedirs(drawable_dir, exist_ok=True)
+open(os.path.join(drawable_dir, "widget_bg.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#0E1628"/>
+    <corners android:radius="18dp"/>
+    <stroke android:width="1dp" android:color="#1F2D48"/>
+</shape>
+''')
+
+xml_dir = os.path.join(APP, "android", "app", "src", "main", "res", "xml")
+os.makedirs(xml_dir, exist_ok=True)
+open(os.path.join(xml_dir, "fisha_widget_info.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="140dp"
+    android:minHeight="70dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_layout"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen">
+</appwidget-provider>
+''')
 
 # gradle signing
 kts = os.path.join(APP, "android", "app", "build.gradle.kts")

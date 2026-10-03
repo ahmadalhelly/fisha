@@ -69,6 +69,7 @@ class Strip {
   final bool online;
   final double? voltage;
   final int? rssi;
+  final int? upS;
   final String label;
   final List<Outlet> outlets;
   final int notifyMask; // bit 0-3 outlets, bit 4 strip-level events
@@ -81,6 +82,7 @@ class Strip {
     required this.online,
     required this.voltage,
     required this.rssi,
+    this.upS,
     required this.outlets,
     this.label = '',
     this.notifyMask = 0x1F,
@@ -103,6 +105,7 @@ class Strip {
       online: j['online'] == true,
       voltage: (j['voltage'] as num?)?.toDouble(),
       rssi: (j['rssi'] as num?)?.toInt(),
+      upS: (j['up_s'] as num?)?.toInt(),
       label: _s(j['label']),
       outlets: outs,
       notifyMask: _i(j['notify'], 0x1F),
@@ -123,6 +126,7 @@ class Strip {
         online: online,
         voltage: voltage,
         rssi: rssi,
+        upS: upS,
         label: label ?? this.label,
         outlets: outlets ?? this.outlets,
         notifyMask: notifyMask,
@@ -263,7 +267,8 @@ class HubEvent {
 class EnergyDay {
   final int date; // yyyymmdd
   final List<int> wh; // per outlet
-  const EnergyDay(this.date, this.wh);
+  final int peakW; // -1 = unknown
+  const EnergyDay(this.date, this.wh, [this.peakW = -1]);
   int get total => wh.fold(0, (a, b) => a + b);
 }
 
@@ -273,16 +278,56 @@ class EnergyData {
   final List<int> todayWh;
   final List<EnergyDay> days; // newest first, excludes today
   final bool timeOk;
-  const EnergyData({required this.mac, required this.today, required this.todayWh, required this.days, required this.timeOk});
+  final int todayPeakW; // -1 = unknown
+  const EnergyData({
+    required this.mac,
+    required this.today,
+    required this.todayWh,
+    required this.days,
+    required this.timeOk,
+    this.todayPeakW = -1,
+  });
   factory EnergyData.fromJson(Map<String, dynamic> j) {
     List<int> ints(Object? v) => v is List ? v.map((e) => (e as num).toInt()).toList() : <int>[0, 0, 0, 0];
     final days = <EnergyDay>[];
     final raw = j['days'];
     if (raw is List) {
       for (final d in raw) {
-        if (d is Map<String, dynamic>) days.add(EnergyDay(_i(d['date']), ints(d['wh'])));
+        if (d is Map<String, dynamic>) days.add(EnergyDay(_i(d['date']), ints(d['wh']), _i(d['peak_w'], -1)));
       }
     }
-    return EnergyData(mac: _s(j['mac']).toUpperCase(), today: _i(j['today']), todayWh: ints(j['today_wh']), days: days, timeOk: j['time_ok'] == true);
+    return EnergyData(
+      mac: _s(j['mac']).toUpperCase(),
+      today: _i(j['today']),
+      todayWh: ints(j['today_wh']),
+      days: days,
+      timeOk: j['time_ok'] == true,
+      todayPeakW: _i(j['today_peak_w'], -1),
+    );
   }
+}
+
+class Room {
+  final String id;
+  final String name;
+  final List<String> stripMacs;
+  const Room({required this.id, required this.name, this.stripMacs = const []});
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'strips': stripMacs,
+      };
+
+  factory Room.fromJson(Map<String, dynamic> j) => Room(
+        id: (j['id'] ?? '').toString(),
+        name: (j['name'] ?? '').toString(),
+        stripMacs: (j['strips'] as List?)?.map((e) => e.toString().toUpperCase()).toList() ?? const [],
+      );
+
+  Room copyWith({String? id, String? name, List<String>? stripMacs}) => Room(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        stripMacs: stripMacs ?? this.stripMacs,
+      );
 }

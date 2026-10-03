@@ -181,29 +181,87 @@ class _NotifyHandler extends TaskHandler {
       final mask = (strip['notify'] as num?)?.toInt() ?? 0x1F;
       if (outlet == 0 ? mask & 0x10 == 0 : mask & (1 << (outlet - 1)) == 0) return;
     }
-    var who = '';
+    var stripName = '';
     if (strip != null) {
       final label = (strip['label'] ?? '').toString();
-      who = label.isNotEmpty ? label : t('default_strip', {'id': mac.length > 4 ? mac.substring(mac.length - 4) : mac});
-      if (outlet > 0) {
-        final outs = strip['outlets'];
-        var ol = '';
-        if (outs is List) {
-          for (final o in outs) {
-            if (o is Map && (o['n'] as num?)?.toInt() == outlet) ol = (o['label'] ?? '').toString();
-          }
+      stripName = label.isNotEmpty ? label : t('default_strip', {'id': mac.length > 4 ? mac.substring(mac.length - 4) : mac});
+    } else if (mac.isNotEmpty) {
+      stripName = t('default_strip', {'id': mac.length > 4 ? mac.substring(mac.length - 4) : mac});
+    }
+
+    var outletName = '';
+    if (strip != null && outlet > 0) {
+      final outs = strip['outlets'];
+      var ol = '';
+      if (outs is List) {
+        for (final o in outs) {
+          if (o is Map && (o['n'] as num?)?.toInt() == outlet) ol = (o['label'] ?? '').toString();
         }
-        who += ' · ${ol.isNotEmpty ? ol : t('default_outlet', {'n': outlet})}';
+      }
+      outletName = ol.isNotEmpty ? ol : t('default_outlet', {'n': outlet});
+    } else if (outlet > 0) {
+      outletName = t('default_outlet', {'n': outlet});
+    }
+
+    final isAr = Tr.isAr;
+    final isOn = msg == 'on' || msg == '1';
+    final targetName = outletName.isNotEmpty ? outletName : (stripName.isNotEmpty ? stripName : (isAr ? 'المخرج' : 'Outlet'));
+
+    final String title;
+    final String body;
+
+    if (type == 'button' || type == 'remote') {
+      if (isAr) {
+        title = isOn ? '«$targetName» اتشغّل' : '«$targetName» اتقفل';
+        final source = type == 'button' ? 'من زرار المشترك' : 'من التطبيق';
+        body = stripName.isNotEmpty && stripName != targetName ? '$stripName · $source' : source;
+      } else {
+        title = isOn ? '"$targetName" turned on' : '"$targetName" turned off';
+        final source = type == 'button' ? 'Strip button' : 'From app';
+        body = stripName.isNotEmpty && stripName != targetName ? '$stripName · $source' : source;
+      }
+    } else if (type == 'automation') {
+      final defaultTitle = isAr ? 'أتمتة' : 'Automation';
+      title = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? msg : defaultTitle;
+      final who = [
+        if (stripName.isNotEmpty) stripName,
+        if (outletName.isNotEmpty) outletName,
+      ].join(' · ');
+      body = who.isNotEmpty ? who : (isAr ? 'أتمتة اتنفذت' : 'Automation ran');
+    } else {
+      title = switch (type) {
+        'temp' => isAr ? 'حرارة عالية' : 'High temperature',
+        'load' => isAr ? 'حمل عالي' : 'High load',
+        'auto_off' => isAr ? 'قفل تلقائي' : 'Auto-off',
+        'schedule' => isAr ? 'جدولة اتنفذت' : 'Schedule ran',
+        'missed' => isAr ? 'أمر ما اتنفذش' : 'Command missed',
+        'timer' => isAr ? 'تايمر خلص' : 'Timer finished',
+        'cycle' => isAr ? 'إعادة تشغيل' : 'Reboot',
+        'lock' => isAr ? 'قفل الأطفال' : 'Child lock',
+        'added' => isAr ? 'مشترك جديد' : 'New strip',
+        'online' => isAr ? 'المشترك رجع' : 'Back online',
+        'offline' => isAr ? 'المشترك فصل' : 'Strip offline',
+        'voltage' => isAr ? 'فولت غير طبيعي' : 'Unusual voltage',
+        'test' => 'Fisha ✓',
+        _ => t('nt_$type'),
+      };
+      final who = [
+        if (stripName.isNotEmpty) stripName,
+        if (outletName.isNotEmpty) outletName,
+      ].join(' · ');
+      final extraMsg = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? msg : '';
+      if (who.isNotEmpty) {
+        body = extraMsg.isNotEmpty ? '$who — $extraMsg' : who;
+      } else {
+        body = extraMsg.isNotEmpty ? extraMsg : (type == 'test' ? (isAr ? 'إشعار تجربة من الـ Hub' : 'Test notification from the hub') : title);
       }
     }
-    final title = type == 'test' ? 'Fisha ✓' : t('nt_$type');
-    final shown = msg == 'on' ? t('on_word') : (msg == 'off' ? t('off') : msg);
-    final body = [if (who.isNotEmpty) who, if (shown.isNotEmpty && type != 'test') shown].join(' — ');
+
     final urgent = type == 'temp' || type == 'load' || type == 'voltage' || type == 'offline';
     _notes.show(
       id: _id++,
       title: title,
-      body: body.isEmpty ? (Tr.isAr ? 'إشعار تجربة من الـ Hub' : 'Test notification from the hub') : body,
+      body: body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           urgent ? 'fisha_urgent' : 'fisha_alerts',

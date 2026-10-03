@@ -66,6 +66,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               _status(t('st_live'), st.sseLive),
               _status(t('st_cloud'), st.mqttConnected),
               _status(t('st_hub'), st.hubOnline),
+              if (st.hubUptimeS != null && st.hubUptimeS! > 0)
+                Row(children: [
+                  Container(width: 8, height: 8, decoration: BoxDecoration(color: C.accent, shape: BoxShape.circle)),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(_tr('وقت تشغيل الـ Hub', 'Hub uptime'))),
+                  Text(formatHumanDuration(st.hubUptimeS!), textDirection: TextDirection.ltr, style: mono(12, color: C.textSoft, weight: FontWeight.w500)),
+                ]),
             ]),
             const SizedBox(height: 14),
             section(t('sec_local'), [

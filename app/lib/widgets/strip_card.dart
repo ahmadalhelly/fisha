@@ -9,11 +9,18 @@ import '../screens/outlet_sheet.dart';
 import '../theme.dart';
 import 'common.dart';
 
-/// Switch an outlet, asking first if it is protected and being turned off.
+/// Switch an outlet, asking first if it needs biometric or is protected and being turned off.
 Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet o, bool on) async {
   if (!s.online) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('strip_offline_cmd'))));
     return;
+  }
+  if (state.requiresBio(s.mac, o.n)) {
+    final reason = Tr.isAr
+        ? 'تأكيد البصمة للتحكم في «${state.outletName(s, o.n)}»'
+        : 'Authenticate to switch "${state.outletName(s, o.n)}"';
+    final ok = await authenticateBio(reason);
+    if (!ok) return;
   }
   if (!on && o.protected) {
     final ok = await showDialog<bool>(
@@ -36,10 +43,49 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
   await state.setOutlet(s.mac, o.n, on);
 }
 
+Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
+  if (!s.online) return;
+  final needsBio = s.outlets.any((o) => !o.on && state.requiresBio(s.mac, o.n));
+  bool bioOk = true;
+  if (needsBio) {
+    final reason = Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On';
+    bioOk = await authenticateBio(reason);
+  }
+  if (bioOk) {
+    await state.setOutlet(s.mac, 0, true);
+  } else {
+    for (final o in s.outlets) {
+      if (!o.on && !state.requiresBio(s.mac, o.n)) {
+        await state.setOutlet(s.mac, o.n, true);
+      }
+    }
+  }
+}
+
 Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
-  if (!s.anyProtectedOn) return state.setOutlet(s.mac, 0, false);
-  final names = s.outlets.where((o) => o.protected && o.on).map((o) => state.outletName(s, o.n)).join('، ');
+  final bioOutlets = s.outlets.where((o) => o.on && state.requiresBio(s.mac, o.n)).toList();
+  bool bioOk = true;
+  if (bioOutlets.isNotEmpty) {
+    final reason = Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off';
+    bioOk = await authenticateBio(reason);
+  }
+  final targets = s.outlets.where((o) => o.on && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
+  if (targets.isEmpty) return;
+
+  final protectedOn = targets.where((o) => o.protected).toList();
+  if (protectedOn.isEmpty) {
+    if (bioOk && targets.length == s.onCount) {
+      return state.setOutlet(s.mac, 0, false);
+    } else {
+      for (final o in targets) {
+        await state.setOutlet(s.mac, o.n, false);
+      }
+      return;
+    }
+  }
+
+  final names = protectedOn.map((o) => state.outletName(s, o.n)).join('، ');
   final choice = await showDialog<int>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -56,8 +102,28 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
       ],
     ),
   );
-  if (choice == 1) await state.offExceptProtected(s);
-  if (choice == 2) await state.setOutlet(s.mac, 0, false);
+  if (choice == 1) {
+    for (final o in targets) {
+      if (!o.protected) await state.setOutlet(s.mac, o.n, false);
+    }
+  } else if (choice == 2) {
+    if (bioOk && targets.length == s.onCount) {
+      await state.setOutlet(s.mac, 0, false);
+    } else {
+      for (final o in targets) {
+        await state.setOutlet(s.mac, o.n, false);
+      }
+    }
+  }
+}
+
+/// Wi-Fi bars for rssi ≥ -55 / ≥ -67 / ≥ -75 / < -75 / null
+(IconData, Color) wifiBars(int? rssi) {
+  if (rssi == null) return (Icons.signal_wifi_off, C.faint);
+  if (rssi >= -55) return (Icons.signal_wifi_4_bar, levelColor(0));
+  if (rssi >= -67) return (Icons.network_wifi_3_bar, levelColor(1));
+  if (rssi >= -75) return (Icons.network_wifi_2_bar, levelColor(2));
+  return (Icons.network_wifi_1_bar, levelColor(3));
 }
 
 /// Rated load: the MTTL-W01 is a 16 A strip (about 3500 W in total, and any single outlet may take the full load).
@@ -119,6 +185,7 @@ List<Widget> badgesFor(AppState state, Strip s, Outlet? o, {double size = 13}) {
     for (final x in timers) (timerIcon(x), C.accent, timerText(x)),
     if (o != null && o.autoOffMin > 0) (Icons.timer_outlined, C.accent, t('auto_off')),
     if (o != null && o.protected) (Icons.shield, C.accent, t('protect')),
+    if (o != null && state.requiresBio(s.mac, o.n)) (Icons.fingerprint, C.accent, Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected'),
     if (o != null && o.locked) (Icons.lock, C.muted, t('child_lock')),
   ];
   return [
@@ -161,7 +228,20 @@ class StripCard extends StatelessWidget {
               child: InkWell(
                 onTap: () => openStripSheet(context, state, s.mac),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, height: 1.3)),
+                  Row(children: [
+                    Flexible(
+                      child: Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, height: 1.3)),
+                    ),
+                    const SizedBox(width: 6),
+                    Builder(builder: (_) {
+                      final (icon, color) = wifiBars(s.rssi);
+                      final tip = s.rssi != null ? '${s.rssi} dBm' : (online ? '—' : t('offline'));
+                      return Tooltip(
+                        message: tip,
+                        child: Icon(icon, size: 16, color: color),
+                      );
+                    }),
+                  ]),
                   const SizedBox(height: 6),
                   Row(children: [
                     Flexible(
@@ -174,8 +254,12 @@ class StripCard extends StatelessWidget {
                     ),
                     if (online)
                       Text('${s.maxTemp}°C', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: tempColor(s.maxTemp), fontWeight: FontWeight.w600)),
-                    if (online && s.voltage != null)
-                      Text(' · ${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: C.muted)),
+                    if (online && s.voltage != null) ...[
+                      const SizedBox(width: 8),
+                      Text('·', style: TextStyle(fontSize: 11.5, color: C.faint)),
+                      const SizedBox(width: 8),
+                      Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: C.muted)),
+                    ],
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
                 ]),
@@ -219,7 +303,7 @@ class StripCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Row(children: [
-            Expanded(child: _pill(context, Icons.power_settings_new, t('all_on'), online ? () => state.setOutlet(s.mac, 0, true) : null, filled: true)),
+            Expanded(child: _pill(context, Icons.power_settings_new, t('all_on'), online ? () => guardedAllOn(context, state, s) : null, filled: true)),
             const SizedBox(width: 8),
             Expanded(child: _pill(context, Icons.power_off_outlined, t('all_off'), online ? () => guardedAllOff(context, state, s) : null)),
           ]),

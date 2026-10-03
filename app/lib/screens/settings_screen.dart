@@ -8,11 +8,12 @@ import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
 import 'notifications_screen.dart';
+import 'rooms_screen.dart';
 import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-const appVersion = '1.4.0';
+const appVersion = '1.6.0';
 
 /// Settings home: short, grouped, every detail lives one tap deeper.
 class SettingsScreen extends StatelessWidget {
@@ -20,6 +21,27 @@ class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.state});
 
   void _open(BuildContext context, Widget page) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+
+  Future<void> _editName(BuildContext context, AppState st) async {
+    final ctrl = TextEditingController(text: st.userName);
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        title: Text(_tr('اسمك', 'Your name'), style: const TextStyle(fontSize: 18)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(hintText: _tr('اكتب اسمك عشان الترحيب', 'Enter your name for the greeting')),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: Text(t('save'))),
+        ],
+      ),
+    );
+    if (v != null) await st.setUserName(v);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +59,26 @@ class SettingsScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 28),
             children: [
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 18),
+              _group(_tr('الحساب', 'Account'), [
+                _row(
+                  context,
+                  Icons.person_outline,
+                  C.accent,
+                  _tr('اسمك', 'Your name'),
+                  st.userName.isEmpty ? _tr('غير محدد', 'Not set') : st.userName,
+                  () => _editName(context, st),
+                ),
+                _row(
+                  context,
+                  Icons.meeting_room_outlined,
+                  C.accent2,
+                  _tr('الغرف', 'Rooms'),
+                  _tr('${st.rooms.length} غرف', '${st.rooms.length} rooms'),
+                  () => _open(context, RoomsScreen(state: st)),
+                  last: true,
+                ),
+              ]),
               const SizedBox(height: 18),
               _group(_tr('الـ Hub', 'Hub'), [
                 _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,

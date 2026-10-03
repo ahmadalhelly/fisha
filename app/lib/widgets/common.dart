@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../i18n.dart';
 import '../theme.dart';
@@ -14,6 +15,38 @@ String fmtDuration(int seconds) {
   }
   final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60;
   return m == 0 ? '$h ${t('hour')}' : '$h ${t('hour')} $m ${t('min')}';
+}
+
+/// Human uptime: e.g. "3 ي 4:12 س", "25 د", "45 ث"
+String formatHumanDuration(int s) {
+  if (s <= 0) return '—';
+  final d = s ~/ 86400;
+  final h = (s % 86400) ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final sec = s % 60;
+  if (Tr.isAr) {
+    if (d > 0) return '$d ي $h:${two(m)} س';
+    if (h > 0) return '$h:${two(m)} س';
+    if (m > 0) return '$m د';
+    return '$sec ث';
+  } else {
+    if (d > 0) return '${d}d ${h}:${two(m)}h';
+    if (h > 0) return '${h}:${two(m)}h';
+    if (m > 0) return '${m}m';
+    return '${sec}s';
+  }
+}
+
+Future<bool> authenticateBio(String reason) async {
+  try {
+    final auth = LocalAuthentication();
+    return await auth.authenticate(
+      localizedReason: reason,
+      options: const AuthenticationOptions(stickyAuth: true, biometricOnly: false),
+    );
+  } catch (_) {
+    return false;
+  }
 }
 
 String two(int v) => v.toString().padLeft(2, '0');
@@ -335,11 +368,14 @@ class DurationPicker extends StatelessWidget {
             ),
           ),
         );
-    return Row(children: [
-      if (showHours) ...[box(t('dur_h'), h, maxHours, (x) => onChanged(x * 3600 + m * 60 + sec)), const SizedBox(width: 8)],
-      box(t('dur_m'), m, 59, (x) => onChanged(h * 3600 + x * 60 + sec)),
-      if (showSeconds) ...[const SizedBox(width: 8), box(t('dur_s'), sec, 59, (x) => onChanged(h * 3600 + m * 60 + x))],
-    ]);
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Row(children: [
+        if (showHours) ...[box(t('dur_h'), h, maxHours, (x) => onChanged(x * 3600 + m * 60 + sec)), const SizedBox(width: 8)],
+        box(t('dur_m'), m, 59, (x) => onChanged(h * 3600 + x * 60 + sec)),
+        if (showSeconds) ...[const SizedBox(width: 8), box(t('dur_s'), sec, 59, (x) => onChanged(h * 3600 + m * 60 + x))],
+      ]),
+    );
   }
 }
 

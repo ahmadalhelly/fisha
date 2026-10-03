@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:http/http.dart' as http;
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
@@ -125,6 +126,14 @@ class AppState extends ChangeNotifier {
   List<String> _order = [];
   Map<String, String> _names = {}; // phone-side fallback names (very old hub firmware)
 
+  int? hubUptimeS;
+  String userName = '';
+  List<Room> rooms = [];
+
+  // widget throttling
+  DateTime? _lastWidgetUpdate;
+  Timer? _widgetThrottleTimer;
+
   // internals
   final Map<String, Map<int, bool>> _pending = {};
   final Map<String, Completer<Map<String, dynamic>>> _acks = {};
@@ -160,11 +169,18 @@ class AppState extends ChangeNotifier {
     showMac = p.getBool('showMac') ?? false;
     tariff = p.getDouble('tariff') ?? 1.0;
     otaPass = p.getString('otaPass') ?? '';
+    userName = p.getString('userName') ?? '';
     _order = p.getStringList('order') ?? [];
     final n = p.getString('names');
     if (n != null) {
       try {
         _names = Map<String, String>.from(jsonDecode(n) as Map);
+      } catch (_) {}
+    }
+    final rm = p.getString('rooms');
+    if (rm != null) {
+      try {
+        rooms = (jsonDecode(rm) as List).whereType<Map<String, dynamic>>().map(Room.fromJson).toList();
       } catch (_) {}
     }
     ready = true;
@@ -173,6 +189,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _widgetThrottleTimer?.cancel();
     _stopAll();
     super.dispose();
   }
@@ -206,7 +223,7 @@ class AppState extends ChangeNotifier {
     final gen = _gen;
     if (settings.hasLocal) {
       _pollLocal();
-      _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         if (!sseLive) _pollLocal();
         _updateMode();
       });
@@ -307,6 +324,7 @@ class AppState extends ChangeNotifier {
     if (m != mode) {
       mode = m;
       notifyListeners();
+      updateWidgetThrottled();
     }
   }
 
@@ -411,6 +429,7 @@ class AppState extends ChangeNotifier {
       final fw = j['hub_fw'];
       if (fw != null) hubFw = fw.toString();
       hubTimeOk = j['time_ok'] == true;
+      if (j.containsKey('uptime_s')) hubUptimeS = (j['uptime_s'] as num?)?.toInt() ?? hubUptimeS;
       final pv = j['provision'];
       if (pv is Map) {
         provState = (pv['state'] ?? 'idle').toString();
@@ -445,6 +464,7 @@ class AppState extends ChangeNotifier {
       if (!fromLocal) hubOnline = true;
       lastUpdate = DateTime.now();
       notifyListeners();
+      updateWidgetThrottled();
     } catch (_) {}
   }
 
@@ -702,7 +722,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> setNotifyMask(Strip s, int mask) async {
     final before = _strips;
-    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
+    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, upS: x.upS, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
     notifyListeners();
     final r = await api('notify', {'mac': s.mac, 'mask': mask});
     if (!r.ok) _strips = before;
@@ -935,5 +955,105 @@ class AppState extends ChangeNotifier {
   void setTab(int i) {
     tab = i;
     notifyListeners();
+  }
+
+  Future<void> setUserName(String name) async {
+    userName = name.trim();
+    await _prefs?.setString('userName', userName);
+    notifyListeners();
+  }
+
+  bool requiresBio(String mac, int n) => _prefs?.getBool('bio_${mac.toUpperCase()}_$n') ?? false;
+
+  Future<void> setRequiresBio(String mac, int n, bool val) async {
+    await _prefs?.setBool('bio_${mac.toUpperCase()}_$n', val);
+    notifyListeners();
+  }
+
+  Room? roomForStrip(String mac) {
+    final upper = mac.toUpperCase();
+    for (final r in rooms) {
+      if (r.stripMacs.contains(upper)) return r;
+    }
+    return null;
+  }
+
+  Future<void> saveRooms() async {
+    await _prefs?.setString('rooms', jsonEncode([for (final r in rooms) r.toJson()]));
+    notifyListeners();
+  }
+
+  Future<void> addRoom(String name) async {
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    rooms.add(Room(id: id, name: name.trim()));
+    await saveRooms();
+  }
+
+  Future<void> renameRoom(String id, String newName) async {
+    final i = rooms.indexWhere((r) => r.id == id);
+    if (i >= 0) {
+      rooms[i] = rooms[i].copyWith(name: newName.trim());
+      await saveRooms();
+    }
+  }
+
+  Future<void> deleteRoom(String id) async {
+    rooms.removeWhere((r) => r.id == id);
+    await saveRooms();
+  }
+
+  Future<void> assignStripToRoom(String mac, String? roomId) async {
+    final upper = mac.toUpperCase();
+    for (var i = 0; i < rooms.length; i++) {
+      if (rooms[i].stripMacs.contains(upper)) {
+        final updated = List<String>.from(rooms[i].stripMacs)..remove(upper);
+        rooms[i] = rooms[i].copyWith(stripMacs: updated);
+      }
+    }
+    if (roomId != null && roomId.isNotEmpty) {
+      final i = rooms.indexWhere((r) => r.id == roomId);
+      if (i >= 0) {
+        final updated = List<String>.from(rooms[i].stripMacs);
+        if (!updated.contains(upper)) updated.add(upper);
+        rooms[i] = rooms[i].copyWith(stripMacs: updated);
+      }
+    }
+    await saveRooms();
+  }
+
+  void updateWidgetThrottled() {
+    final now = DateTime.now();
+    if (_lastWidgetUpdate != null && now.difference(_lastWidgetUpdate!) < const Duration(seconds: 15)) {
+      if (_widgetThrottleTimer == null || !_widgetThrottleTimer!.isActive) {
+        final remaining = const Duration(seconds: 15) - now.difference(_lastWidgetUpdate!);
+        _widgetThrottleTimer = Timer(remaining, _updateWidget);
+      }
+      return;
+    }
+    _updateWidget();
+  }
+
+  Future<void> _updateWidget() async {
+    _widgetThrottleTimer?.cancel();
+    _lastWidgetUpdate = DateTime.now();
+    try {
+      final totalW = '${totalPower.toStringAsFixed(0)} W';
+      final outletsOn = '$onCount/$outletCount';
+      final hottest = '$maxTemp°C';
+      final conn = switch (mode) {
+        ConnMode.local => t('mode_local'),
+        ConnMode.cloud => t('mode_cloud'),
+        ConnMode.offline => t('mode_offline'),
+      };
+      await HomeWidget.saveWidgetData<String>('total_w', totalW);
+      await HomeWidget.saveWidgetData<String>('outlets_on', outletsOn);
+      await HomeWidget.saveWidgetData<String>('hottest_temp', hottest);
+      await HomeWidget.saveWidgetData<String>('conn_mode', conn);
+      await HomeWidget.updateWidget(
+        name: 'FishaWidgetProvider',
+        androidName: 'FishaWidgetProvider',
+        qualifiedAndroidName: 'com.mttlhub.mttl_hub.FishaWidgetProvider',
+      );
+    } catch (_) {}
   }
 }

@@ -40,6 +40,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                   final v = await askName(ctx, t('strip_name'), state.stripName(s));
                   if (v != null) state.rename(s, 0, v);
                 }),
+                _tile(Icons.meeting_room_outlined, Tr.isAr ? 'الغرفة' : 'Room', state.roomForStrip(s.mac)?.name ?? (Tr.isAr ? 'بدون غرفة' : 'Unassigned'), () => _pickRoomDialog(ctx, state, s.mac)),
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
@@ -53,6 +54,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                     state.outletName(s, o.n),
                     [
                       o.on ? t('on_word') : t('off'),
+                      if (state.requiresBio(s.mac, o.n)) (Tr.isAr ? 'بصمة' : 'Biometric'),
                       if (o.locked) t('child_lock'),
                       if (o.autoOffMin > 0) '${t('auto_off')} ${_autoOffLabel(o.autoOffMin)}',
                     ].join(' · '),
@@ -61,6 +63,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 ..._timerList(ctx, state, state.timersFor(s.mac)),
                 Divider(color: C.border, height: 24),
                 Text(t('device'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
+                _info(Tr.isAr ? 'متصل من' : 'Connected since', s.online && s.upS != null ? formatHumanDuration(s.upS!) : '—'),
                 _info(t('fw'), s.fw.isEmpty ? '—' : s.fw),
                 _info(t('voltage'), s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
                 _info(t('rssi'), s.rssi == null ? '—' : '${s.rssi} dBm'),
@@ -135,6 +138,13 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                 }),
                 _switchTile(Icons.shield_outlined, t('protect'), t('protect_sub'), o.protected, v2,
                     (v) => state.setProtected(s, n, v)),
+                _switchTile(
+                    Icons.fingerprint,
+                    Tr.isAr ? 'يحتاج بصمة' : 'Require biometric',
+                    Tr.isAr ? 'يطلب بصمة الإصبع قبل التشغيل أو الإيقاف' : 'Authenticate before switching',
+                    state.requiresBio(s.mac, n),
+                    true,
+                    (v) => state.setRequiresBio(s.mac, n, v)),
                 _switchTile(Icons.lock_outline, t('child_lock'), t('child_lock_sub'), o.locked, state.hubHasConfig,
                     (v) => state.setLock(s, n, v)),
                 _tile(
@@ -364,3 +374,45 @@ Widget _info(String k, String v) => Padding(
         Text(v, textDirection: TextDirection.ltr, style: mono(13, color: C.textSoft, weight: FontWeight.w500)),
       ]),
     );
+
+Future<void> _pickRoomDialog(BuildContext ctx, AppState state, String mac) async {
+  if (state.rooms.isEmpty) {
+    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(Tr.isAr ? 'ضيف غرف الأول من الإعدادات' : 'Create rooms first in Settings')));
+    return;
+  }
+  final current = state.roomForStrip(mac);
+  await showDialog<void>(
+    context: ctx,
+    builder: (dCtx) => AlertDialog(
+      backgroundColor: C.surface,
+      title: Text(Tr.isAr ? 'اختيار الغرفة' : 'Select Room', style: const TextStyle(fontSize: 18)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(Tr.isAr ? 'بدون غرفة' : 'Unassigned'),
+              trailing: current == null ? Icon(Icons.check, color: C.accent) : null,
+              onTap: () {
+                state.assignStripToRoom(mac, null);
+                Navigator.pop(dCtx);
+              },
+            ),
+            for (final r in state.rooms)
+              ListTile(
+                title: Text(r.name),
+                trailing: current?.id == r.id ? Icon(Icons.check, color: C.accent) : null,
+                onTap: () {
+                  state.assignStripToRoom(mac, r.id);
+                  Navigator.pop(dCtx);
+                },
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+      ],
+    ),
+  );
+}
