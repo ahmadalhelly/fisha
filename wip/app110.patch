@@ -1,0 +1,512 @@
+diff --git a/app/lib/app_state.dart b/app/lib/app_state.dart
+index 08a891d..8dfd0da 100644
+--- a/app/lib/app_state.dart
++++ b/app/lib/app_state.dart
+@@ -125,6 +125,12 @@ class AppState extends ChangeNotifier {
+   bool hubTimeOk = false;
+   String? hubFw;
+   int tempMax = 70;
++  // whole-strip protections (hub 2.10+)
++  bool vProtect = true, vRestore = true, aProtect = true;
++  int vMax = 250;
++  double aMax = 16;
++  bool hubHasStripProt = false;
++  String hubReset = '';
+   String ntfyTopic = '';
+   int notifyTypes = 0x7FF;
+   String otaPass = '';
+@@ -214,6 +220,10 @@ class AppState extends ChangeNotifier {
+       final e = await GoogleSync.I.signIn();
+       if (e == null) return t('g_cancelled');
+       await setAccount('google', email: e);
++      if (userName.isEmpty) {
++        final dn = GoogleSync.I.displayName;
++        await setUserName(dn != null && dn.trim().isNotEmpty ? dn : e.split('@').first);
++      }
+       _startAutoSync();
+       return null;
+     } catch (_) {
+@@ -267,6 +277,19 @@ class AppState extends ChangeNotifier {
+     await setAccount('local');
+   }
+ 
++  /// Leaves the account (Google or local) and goes back to the welcome screen. Data on this phone stays.
++  Future<void> logout() async {
++    _syncTimer?.cancel();
++    _syncTimer = null;
++    if (accountType == 'google') {
++      await _autoSync();
++      try {
++        await GoogleSync.I.signOut();
++      } catch (_) {}
++    }
++    await setAccount('');
++  }
++
+   void _startAutoSync() {
+     _syncTimer?.cancel();
+     _syncTimer = Timer.periodic(const Duration(minutes: 10), (_) => _autoSync());
+@@ -808,12 +831,21 @@ class AppState extends ChangeNotifier {
+       if (cfg is Map) {
+         tempMax = (cfg['temp_max'] as num?)?.toInt() ?? tempMax;
+         tempProtect = cfg['temp_protect'] != false;
++        if (cfg.containsKey('v_max')) {
++          hubHasStripProt = true;
++          vProtect = cfg['v_protect'] != false;
++          vRestore = cfg['v_restore'] != false;
++          vMax = (cfg['v_max'] as num?)?.toInt() ?? vMax;
++          aProtect = cfg['a_protect'] != false;
++          aMax = (cfg['a_max'] as num?)?.toDouble() ?? aMax;
++        }
+         ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
+         notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
+         hubSsid = (cfg['ssid'] ?? hubSsid).toString();
+         wifiTest = (cfg['wifi_test'] ?? wifiTest).toString();
+         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
+       }
++      if (j['reset'] != null) hubReset = j['reset'].toString();
+       final cl = j['cloud'];
+       if (cl is Map && fromLocal) {
+         hubCloudUp = cl['up'] == true;
+@@ -961,6 +993,8 @@ class AppState extends ChangeNotifier {
+         return t('err_local_only');
+       case 'emqx_not_set':
+         return t('users_need_emqx');
++      case 'busy':
++        return t('err_busy');
+       default:
+         return e;
+     }
+@@ -978,16 +1012,37 @@ class AppState extends ChangeNotifier {
+     return l is List ? l.whereType<Map<String, dynamic>>().map(HubUser.fromJson).toList() : <HubUser>[];
+   }
+ 
+-  Future<CmdResult> setEmqx(String url, String key, String secret) => api('emqx_config', {'url': url, 'key': key, 'secret': secret});
++  /// Hub 2.10 runs server work in the background: start it, then wait for the result.
++  Future<CmdResult> _job(String action, Map<String, dynamic> body) async {
++    final r = await api(action, body);
++    if (!r.ok || r.data?['job'] != true) return r;
++    final until = DateTime.now().add(const Duration(seconds: 80));
++    while (DateTime.now().isBefore(until)) {
++      await Future.delayed(const Duration(milliseconds: 1500));
++      final p = await api('ujob');
++      if (!p.ok) continue;                      // the hub may be busy for a moment
++      final st = p.data?['state'];
++      if (st == 'running') continue;
++      if (st == 'done') {
++        final ok = p.data?['ok'] == true;
++        final d = p.data?['data'];
++        return CmdResult(ok, ok ? null : _errText((p.data?['error'] ?? '').toString()), d is Map<String, dynamic> ? d : null);
++      }
++      return CmdResult(false, t('err_not_confirmed'));
++    }
++    return CmdResult(false, t('err_no_ack'));
++  }
++
++  Future<CmdResult> setEmqx(String url, String key, String secret) => _job('emqx_config', {'url': url, 'key': key, 'secret': secret});
+ 
+   /// Returns the invite code in [CmdResult.data]['code'].
+   Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
+-      api('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
++      _job('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
+ 
+   Future<CmdResult> updateUser(HubUser u) =>
+       api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')});
+ 
+-  Future<CmdResult> revokeUser(String id) => api('user_revoke', {'id': id});
++  Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id});
+ 
+   // ---------- joining someone else's hub ----------
+   static Map<String, dynamic>? decodeInvite(String code) {
+@@ -1183,6 +1238,19 @@ class AppState extends ChangeNotifier {
+     _fail(await api('timer_cancel', {'tid': tid}));
+   }
+ 
++  Future<void> setStripProtection({bool? vOn, bool? vBack, int? vLimit, bool? aOn, double? aLimit}) async {
++    if (vOn != null) vProtect = vOn;
++    if (vBack != null) vRestore = vBack;
++    if (vLimit != null) vMax = vLimit;
++    if (aOn != null) aProtect = aOn;
++    if (aLimit != null) aMax = aLimit;
++    notifyListeners();
++    _fail(await api('config', {'v_protect': vProtect, 'v_restore': vRestore, 'v_max': vMax, 'a_protect': aProtect, 'a_max': aMax}));
++  }
++
++  /// Restarts the ESP32 hub (owner only). It is back in about 15 s.
++  Future<CmdResult> rebootHub() => api('reboot');
++
+   Future<void> setTempProtection({bool? enabled, int? max}) async {
+     if (enabled != null) tempProtect = enabled;
+     if (max != null) tempMax = max;
+diff --git a/app/lib/i18n.dart b/app/lib/i18n.dart
+index 0ff9008..de80938 100644
+--- a/app/lib/i18n.dart
++++ b/app/lib/i18n.dart
+@@ -456,4 +456,41 @@ const Map<String, List<String>> _s = {
+   'leave_title': ['الخروج من الـ Hub المشترك', 'Leave the shared hub'],
+   'leave_body': ['هترجع لإعدادات الاتصال الافتراضية بتاعة الـ Hub بتاعك.', 'You go back to the default connection settings for your own hub.'],
+   'leave_btn': ['خروج', 'Leave'],
++  // hub 2.10
++  'err_busy': ['الـ Hub مشغول بأمر تاني، جرب كمان شوية', 'The hub is busy with another task; try again shortly'],
++  'reboot_title': ['إعادة تشغيل الـ Hub', 'Restart the hub'],
++  'reboot_body': ['الـ Hub هيقفل ويرجع خلال حوالي 15 ثانية. المشتركات هتفضل على حالتها.', 'The hub restarts and is back in about 15 seconds. Strips keep their state.'],
++  'reboot_btn': ['إعادة تشغيل', 'Restart'],
++  'reboot_ok': ['الـ Hub بيعيد التشغيل…', 'The hub is restarting…'],
++  'reboot_last': ['آخر تشغيل: {x}', 'Last start: {x}'],
++  'reset_power': ['بعد رجوع الكهربا', 'after power-up'],
++  'reset_restart': ['إعادة تشغيل عادية', 'normal restart'],
++  'reset_crash': ['بعد عطل في الفيرموير', 'after a firmware crash'],
++  'reset_watchdog': ['الحماية رجّعته بعد ما علّق', 'recovered after a freeze'],
++  'reset_brownout': ['ضعف في الكهربا', 'low supply voltage'],
++  'reset_other': ['سبب تاني', 'other'],
++  'vprot': ['الحماية من ارتفاع الفولت', 'Over-voltage protection'],
++  'vprot_sub': ['لو الفولت عدّى {x} فولت، المشترك كله بيقفل ما عدا المخارج المحمية.', 'Above {x} V the whole strip turns off, except protected outlets.'],
++  'vprot_max': ['أقصى فولت', 'Max voltage'],
++  'vprot_restore': ['يرجع يشغّل لوحده لما الفولت يستقر دقيقة', 'Switch back on once the voltage is normal for a minute'],
++  'aprot': ['الحماية من زيادة التيار', 'Over-current protection'],
++  'aprot_sub': ['لو سحب المشترك كله عدّى {x} أمبير لمدة 3 ثواني، بيقفل ما عدا المخارج المحمية.', 'If the whole strip draws over {x} A for 3 s, it turns off except protected outlets.'],
++  'aprot_max': ['أقصى تيار', 'Max current'],
++  'ev_overvolt': ['فولت عالي ({x}) — المشترك اتقفل', 'High voltage ({x}) — strip turned off'],
++  'ev_overcurrent': ['تيار عالي ({x}) — المشترك اتقفل', 'Over current ({x}) — strip turned off'],
++  // welcome & account
++  'wel_title': ['أهلاً بيك', 'Welcome'],
++  'wel_sub': ['ادخل بحساب جوجل عشان إعداداتك تتحفظ وترجع على أي موبايل، أو ادخل من غير حساب.', 'Sign in with Google to keep your settings on any phone, or continue without an account.'],
++  'wel_google': ['المتابعة بحساب جوجل', 'Continue with Google'],
++  'wel_or': ['أو', 'or'],
++  'wel_local': ['ادخل من غير حساب', 'Continue without an account'],
++  'wel_local_sub': ['كل حاجة بتتحفظ على الموبايل ده بس', 'Everything stays on this phone'],
++  'wel_invite': ['معاك كود دعوة؟', 'Have an invite code?'],
++  'wel_invite_sub': ['ادخل على Hub حد شاركه معاك', "Join a hub someone shared with you"],
++  'wel_secure': ['التحكم بيتم على شبكتك أو عبر اتصال مشفّر', 'Control runs on your network or over an encrypted link'],
++  'acc_profile': ['الملف الشخصي', 'Profile'],
++  'acc_name': ['اسمك', 'Your name'],
++  'acc_no_name': ['من غير اسم', 'No name'],
++  'acc_logout': ['تسجيل الخروج', 'Sign out'],
++  'acc_logout_b': ['هترجع لشاشة الدخول. إعداداتك على الموبايل ده مش هتتمسح.', "You go back to the sign-in screen. Settings on this phone aren't deleted."],
+ };
+diff --git a/app/lib/main.dart b/app/lib/main.dart
+index d688d6e..9175b2b 100644
+--- a/app/lib/main.dart
++++ b/app/lib/main.dart
+@@ -5,7 +5,7 @@ import 'app_state.dart';
+ import 'i18n.dart';
+ import 'screens/energy_screen.dart';
+ import 'screens/events_screen.dart';
+-import 'screens/account_screen.dart';
++import 'screens/welcome_screen.dart';
+ import 'screens/home_screen.dart';
+ import 'screens/schedules_screen.dart';
+ import 'screens/settings_screen.dart';
+@@ -117,7 +117,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
+         child: !_booted
+             ? const BootScreen(key: ValueKey('boot'))
+             : s.accountType.isEmpty
+-                ? AccountScreen(key: const ValueKey('account'), state: s, firstRun: true)
++                ? WelcomeScreen(key: const ValueKey('welcome'), state: s)
+                 : Shell(key: const ValueKey('shell'), state: s),
+       ),
+     );
+diff --git a/app/lib/screens/account_screen.dart b/app/lib/screens/account_screen.dart
+index 1952c56..34e5527 100644
+--- a/app/lib/screens/account_screen.dart
++++ b/app/lib/screens/account_screen.dart
+@@ -58,54 +58,31 @@ class _AccountScreenState extends State<AccountScreen> {
+         _snack(r ?? t('g_synced'));
+       });
+ 
+-  Future<void> _join() async {
+-    final ctrl = TextEditingController();
+-    final code = await showDialog<String>(
++  Future<void> _join() => joinWithInviteDialog(context, s);
++
++  Future<void> _rename() async {
++    final ctrl = TextEditingController(text: s.userName);
++    final v = await showDialog<String>(
+       context: context,
+       builder: (ctx) => AlertDialog(
+         backgroundColor: C.surface,
+-        title: Text(t('join_title'), style: const TextStyle(fontSize: 18)),
+-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+-          Text(t('join_sub'), style: TextStyle(color: C.textSoft, height: 1.5, fontSize: 13)),
+-          const SizedBox(height: 12),
+-          TextField(
+-            controller: ctrl,
+-            minLines: 2,
+-            maxLines: 4,
+-            textDirection: TextDirection.ltr,
+-            autocorrect: false,
+-            decoration: InputDecoration(
+-              hintText: t('join_hint'),
+-              suffixIcon: IconButton(
+-                icon: Icon(Icons.content_paste, color: C.muted),
+-                onPressed: () async {
+-                  final d = await Clipboard.getData(Clipboard.kTextPlain);
+-                  if (d?.text != null) ctrl.text = d!.text!;
+-                },
+-              ),
+-            ),
+-          ),
+-        ]),
++        title: Text(t('acc_name'), style: const TextStyle(fontSize: 18)),
++        content: TextField(controller: ctrl, autofocus: true, maxLength: 30),
+         actions: [
+           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+-          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('join_btn'))),
++          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('save'))),
+         ],
+       ),
+     );
+     ctrl.dispose();
+-    if (code == null || code.trim().isEmpty) return;
+-    final inv = AppState.decodeInvite(code);
+-    if (inv == null) {
+-      _snack(t('join_bad'));
+-      return;
+-    }
+-    if (!mounted) return;
+-    final ok = await confirmDialog(context, t('join_title'), t('join_confirm', {'x': (inv['n'] ?? inv['u']).toString()}));
+-    if (!ok) return;
++    if (v != null && v.trim().isNotEmpty) await s.setUserName(v);
++  }
++
++  Future<void> _logout() async {
++    if (!await confirmDialog(context, t('acc_logout'), t('acc_logout_b'), ok: t('acc_logout'), danger: true)) return;
+     await _run(() async {
+-      await s.joinWithCode(code);
+-      if (s.accountType.isEmpty) await s.setAccount('local');
+-      _snack(t('join_ok'));
++      await s.logout();
++      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+     });
+   }
+ 
+@@ -191,6 +168,29 @@ class _AccountScreenState extends State<AccountScreen> {
+                 Text(t('g_note'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+               ]),
+             ],
++            if (!widget.firstRun) ...[
++              const SizedBox(height: 14),
++              section(t('acc_profile'), [
++                Row(children: [
++                  Expanded(
++                    child: Text(s.userName.isEmpty ? t('acc_no_name') : s.userName,
++                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
++                  ),
++                  TextButton.icon(onPressed: _busy ? null : _rename, icon: const Icon(Icons.edit_outlined, size: 18), label: Text(t('rename'))),
++                ]),
++                OutlinedButton.icon(
++                  onPressed: _busy ? null : _logout,
++                  icon: const Icon(Icons.logout),
++                  label: Text(t('acc_logout')),
++                  style: OutlinedButton.styleFrom(
++                    foregroundColor: C.danger,
++                    side: BorderSide(color: C.border),
++                    minimumSize: const Size(0, 48),
++                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
++                  ),
++                ),
++              ]),
++            ],
+             const SizedBox(height: 14),
+             section(t('share_title'), [
+               if (s.isShared) ...[
+@@ -231,3 +231,55 @@ class _AccountScreenState extends State<AccountScreen> {
+     return '${d.year}-${p(d.month)}-${p(d.day)} ${p(d.hour)}:${p(d.minute)}';
+   }
+ }
++
++/// Paste an invite code and join someone else's hub.
++Future<void> joinWithInviteDialog(BuildContext context, AppState s) async {
++  void snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
++  final ctrl = TextEditingController();
++  final code = await showDialog<String>(
++    context: context,
++    builder: (ctx) => AlertDialog(
++      backgroundColor: C.surface,
++      title: Text(t('join_title'), style: const TextStyle(fontSize: 18)),
++      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++        Text(t('join_sub'), style: TextStyle(color: C.textSoft, height: 1.5, fontSize: 13)),
++        const SizedBox(height: 12),
++        TextField(
++          controller: ctrl,
++          minLines: 2,
++          maxLines: 4,
++          textDirection: TextDirection.ltr,
++          autocorrect: false,
++          decoration: InputDecoration(
++            hintText: t('join_hint'),
++            suffixIcon: IconButton(
++              icon: Icon(Icons.content_paste, color: C.muted),
++              onPressed: () async {
++                final d = await Clipboard.getData(Clipboard.kTextPlain);
++                if (d?.text != null) ctrl.text = d!.text!;
++              },
++            ),
++          ),
++        ),
++      ]),
++      actions: [
++        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
++        TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('join_btn'))),
++      ],
++    ),
++  );
++  ctrl.dispose();
++  if (code == null || code.trim().isEmpty) return;
++  final inv = AppState.decodeInvite(code);
++  if (!context.mounted) return;
++  if (inv == null) {
++    snack(t('join_bad'));
++    return;
++  }
++  final ok = await confirmDialog(context, t('join_title'), t('join_confirm', {'x': (inv['n'] ?? inv['u']).toString()}));
++  if (!ok) return;
++  final messenger = ScaffoldMessenger.of(context);
++  await s.joinWithCode(code);
++  if (s.accountType.isEmpty) await s.setAccount('local');
++  messenger.showSnackBar(SnackBar(content: Text(t('join_ok'))));
++}
+diff --git a/app/lib/screens/automations_screen.dart b/app/lib/screens/automations_screen.dart
+index 6bece4e..2d5e540 100644
+--- a/app/lib/screens/automations_screen.dart
++++ b/app/lib/screens/automations_screen.dart
+@@ -76,6 +76,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
+               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
+                 if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
+                   _tempCard(),
++                  if (s.hubHasStripProt) ...[const SizedBox(height: 14), _stripProtCard()],
+                   const SizedBox(height: 14),
+                   if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
+                   if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
+@@ -131,6 +132,68 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
+     );
+   }
+ 
++  Widget _stripProtCard() => Container(
++        padding: const EdgeInsets.all(16),
++        decoration: cardBox(),
++        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
++          Row(children: [
++            Icon(Icons.bolt, color: C.warn),
++            const SizedBox(width: 10),
++            Expanded(child: Text(t('vprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
++            Switch(value: s.vProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(vOn: v)),
++          ]),
++          Text(t('vprot_sub', {'x': s.vMax}), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
++          Row(children: [
++            Text(t('vprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
++            Expanded(
++              child: Slider(
++                value: s.vMax.toDouble().clamp(225, 270),
++                min: 225,
++                max: 270,
++                divisions: 45,
++                activeColor: C.accent,
++                label: '${s.vMax} V',
++                onChanged: s.vProtect ? (v) => setState(() => s.vMax = v.round()) : null,
++                onChangeEnd: (v) => s.setStripProtection(vLimit: v.round()),
++              ),
++            ),
++            Text('${s.vMax} V', textDirection: TextDirection.ltr, style: mono(14)),
++          ]),
++          SwitchListTile(
++            contentPadding: EdgeInsets.zero,
++            dense: true,
++            value: s.vRestore,
++            activeTrackColor: C.accent,
++            title: Text(t('vprot_restore'), style: const TextStyle(fontSize: 13)),
++            onChanged: s.vProtect ? (v) => s.setStripProtection(vBack: v) : null,
++          ),
++          Divider(height: 22, color: C.border),
++          Row(children: [
++            Icon(Icons.electric_meter_outlined, color: C.danger),
++            const SizedBox(width: 10),
++            Expanded(child: Text(t('aprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
++            Switch(value: s.aProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(aOn: v)),
++          ]),
++          Text(t('aprot_sub', {'x': s.aMax.toStringAsFixed(1)}), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
++          Row(children: [
++            Text(t('aprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
++            Expanded(
++              child: Slider(
++                value: s.aMax.clamp(1, 16),
++                min: 1,
++                max: 16,
++                divisions: 30,
++                activeColor: C.accent,
++                label: '${s.aMax.toStringAsFixed(1)} A',
++                onChanged: s.aProtect ? (v) => setState(() => s.aMax = (v * 2).round() / 2) : null,
++                onChangeEnd: (v) => s.setStripProtection(aLimit: (v * 2).round() / 2),
++              ),
++            ),
++            Text('${s.aMax.toStringAsFixed(1)} A', textDirection: TextDirection.ltr, style: mono(14)),
++          ]),
++        ]),
++      );
++
+   Widget _tempCard() => Container(
+         padding: const EdgeInsets.all(16),
+         decoration: cardBox(),
+diff --git a/app/lib/screens/events_screen.dart b/app/lib/screens/events_screen.dart
+index 067c7a7..86fce6c 100644
+--- a/app/lib/screens/events_screen.dart
++++ b/app/lib/screens/events_screen.dart
+@@ -25,6 +25,8 @@ String eventText(AppState s, HubEvent e) {
+     'online' => t('ev_online'),
+     'offline' => t('ev_offline'),
+     'voltage' => t('ev_voltage', {'x': m}),
++    'overvolt' => t('ev_overvolt', {'x': m}),
++    'overcurrent' => t('ev_overcurrent', {'x': m}),
+     'test' => t('ev_test'),
+     _ => '${e.type} $m',
+   };
+@@ -45,7 +47,8 @@ IconData _icon(String type) => switch (type) {
+       'remote' => Icons.phone_android,
+       'online' => Icons.wifi,
+       'offline' => Icons.wifi_off,
+-      'voltage' => Icons.electric_bolt,
++      'voltage' || 'overvolt' => Icons.electric_bolt,
++      'overcurrent' => Icons.electric_meter_outlined,
+       _ => Icons.info_outline,
+     };
+ 
+diff --git a/app/lib/screens/settings_screen.dart b/app/lib/screens/settings_screen.dart
+index 65f8056..ffa980b 100644
+--- a/app/lib/screens/settings_screen.dart
++++ b/app/lib/screens/settings_screen.dart
+@@ -112,6 +112,9 @@ class SettingsScreen extends StatelessWidget {
+                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
+                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
+                 _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
++                if (!st.isShared)
++                  _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
++                      () => _reboot(context, st)),
+                 _row(context, Icons.settings_backup_restore, C.accent2, t('backup_title'), '', () => _open(context, BackupScreen(state: st)),
+                     last: true),
+               ]),
+@@ -195,6 +198,13 @@ class SettingsScreen extends StatelessWidget {
+         ),
+       );
+ 
++  Future<void> _reboot(BuildContext context, AppState st) async {
++    if (!await confirmDialog(context, t('reboot_title'), t('reboot_body'), ok: t('reboot_btn'), danger: true)) return;
++    final r = await st.rebootHub();
++    if (!context.mounted) return;
++    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.ok ? t('reboot_ok') : (r.error ?? t('err_failed')))));
++  }
++
+   Widget _group(String title, List<Widget> children) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+         Padding(
+           padding: const EdgeInsetsDirectional.only(start: 6, bottom: 8),
+diff --git a/app/lib/services/google_sync.dart b/app/lib/services/google_sync.dart
+index 43495a0..402a3e9 100644
+--- a/app/lib/services/google_sync.dart
++++ b/app/lib/services/google_sync.dart
+@@ -16,6 +16,7 @@ class GoogleSync {
+   GoogleSignInAccount? _acc;
+ 
+   String? get email => _acc?.email;
++  String? get displayName => _acc?.displayName;
+   bool get signedIn => _acc != null;
+ 
+   /// Interactive sign-in. Returns the e-mail, or null if the user cancelled.
