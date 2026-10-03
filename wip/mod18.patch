@@ -1,0 +1,855 @@
+diff --git a/.github/workflows/build-app.yml b/.github/workflows/build-app.yml
+index 9fbeb3c..58003b2 100644
+--- a/.github/workflows/build-app.yml
++++ b/.github/workflows/build-app.yml
+@@ -2,7 +2,7 @@ name: Build Android APK
+ 
+ on:
+   push:
+-    branches: [main, agy/ui-polish-1]
++    branches: [main, fisha-1.8]
+     paths: ['app/**', '.github/workflows/build-app.yml']
+   workflow_dispatch:
+ 
+@@ -92,11 +92,11 @@ jobs:
+             echo "===== LAUNCH TEST (emulator started) =====" >> build.log
+             adb install -r Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
+             adb logcat -c
+-            adb shell am start -n com.mttlhub.mttl_hub/.MainActivity
++            adb shell monkey -p com.fisha.app -c android.intent.category.LAUNCHER 1
+             sleep 25
+             adb logcat -d > launch.log || true
+-            (adb shell pidof com.mttlhub.mttl_hub && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
+-            grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
++            (adb shell pidof com.fisha.app && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
++            grep -A60 -E "FATAL EXCEPTION|Process: com.fisha" launch.log | head -150 >> build.log || true
+             grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
+ 
+       - name: Publish APK as a release
+diff --git a/app/lib/app_state.dart b/app/lib/app_state.dart
+index abf1d1d..08a891d 100644
+--- a/app/lib/app_state.dart
++++ b/app/lib/app_state.dart
+@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
+ 
+ import 'i18n.dart';
+ import 'models.dart';
++import 'services/google_sync.dart';
+ 
+ enum ConnMode { offline, local, cloud }
+ 
+@@ -30,6 +31,12 @@ class HubSettings {
+   String password;
+   String localHost;
+   int localPort;
++  /// password of the hub's own server user (ESP32_hub); the app hands it to the hub on the home Wi-Fi
++  String hubPass;
++  /// set when this phone was invited by the owner: remote-only, limited to what the owner allowed
++  String sharedUser;
++  String sharedName;
++  int sharedRole;
+ 
+   HubSettings({
+     this.hubId = '80F3DA40F674',
+@@ -39,10 +46,15 @@ class HubSettings {
+     this.password = '',
+     this.localHost = '192.168.1.110',
+     this.localPort = 8080,
++    this.hubPass = '',
++    this.sharedUser = '',
++    this.sharedName = '',
++    this.sharedRole = 0,
+   });
+ 
++  bool get isShared => sharedUser.isNotEmpty;
+   bool get hasCloud => hubId.isNotEmpty && brokerHost.isNotEmpty && username.isNotEmpty && password.isNotEmpty;
+-  bool get hasLocal => localHost.isNotEmpty;
++  bool get hasLocal => localHost.isNotEmpty && !isShared;
+ 
+   Map<String, dynamic> toJson() => {
+         'hubId': hubId,
+@@ -52,6 +64,10 @@ class HubSettings {
+         'password': password,
+         'localHost': localHost,
+         'localPort': localPort,
++        'hubPass': hubPass,
++        'sharedUser': sharedUser,
++        'sharedName': sharedName,
++        'sharedRole': sharedRole,
+       };
+ 
+   factory HubSettings.fromJson(Map<String, dynamic> j) {
+@@ -64,6 +80,10 @@ class HubSettings {
+       password: (j['password'] ?? '').toString(),
+       localHost: (j['localHost'] ?? d.localHost).toString(),
+       localPort: (j['localPort'] as num?)?.toInt() ?? d.localPort,
++      hubPass: (j['hubPass'] ?? '').toString(),
++      sharedUser: (j['sharedUser'] ?? '').toString(),
++      sharedName: (j['sharedName'] ?? '').toString(),
++      sharedRole: (j['sharedRole'] as num?)?.toInt() ?? 0,
+     );
+   }
+ }
+@@ -89,6 +109,18 @@ class AppState extends ChangeNotifier {
+   ConnMode mode = ConnMode.offline;
+   bool mqttConnected = false;
+   bool hubOnline = false;
++  // the hub's own link to the server, reported by hub 2.9+ over the home Wi-Fi
++  bool? hubCloudUp;
++  String hubCloudErr = '';
++  bool hubHasPass = true;
++  bool emqxSet = false;
++  int usersCount = 0;
++  DateTime? _passPushedAt;
++  String _passPushedValue = '';
++  // account: '' (not chosen yet) | local | google
++  String accountType = '';
++  String googleEmail = '';
++  DateTime? lastSync;
+   bool sseLive = false;
+   bool hubTimeOk = false;
+   String? hubFw;
+@@ -158,6 +190,99 @@ class AppState extends ChangeNotifier {
+     _loadPrefs();
+     ready = true;
+     await restart();
++    if (accountType == 'google') {
++      GoogleSync.I.restore().then((ok) {
++        if (ok) _startAutoSync();
++      });
++    }
++  }
++
++  // ---------- Google account: optional sign-in + settings sync (Drive appDataFolder) ----------
++  Timer? _syncTimer;
++  String _lastSyncSig = '';
++
++  Future<Map<String, dynamic>> _syncPayload() async {
++    final b = await exportBackup(parts: {'app'});
++    final app = b['app'];
++    if (app is Map) app.remove('lastSync');
++    return b;
++  }
++
++  /// null = signed in; otherwise a message for the user.
++  Future<String?> googleSignIn() async {
++    try {
++      final e = await GoogleSync.I.signIn();
++      if (e == null) return t('g_cancelled');
++      await setAccount('google', email: e);
++      _startAutoSync();
++      return null;
++    } catch (_) {
++      return t('g_failed');
++    }
++  }
++
++  Future<bool> googleHasData() async {
++    try {
++      return await GoogleSync.I.download() != null;
++    } catch (_) {
++      return false;
++    }
++  }
++
++  Future<String?> syncNow() async {
++    try {
++      final b = await _syncPayload();
++      await GoogleSync.I.upload(b);
++      _lastSyncSig = jsonEncode(b['app']);
++      await markSynced();
++      return null;
++    } catch (_) {
++      return t('g_sync_failed');
++    }
++  }
++
++  Future<String?> restoreFromGoogle() async {
++    try {
++      final b = await GoogleSync.I.download();
++      if (b == null) return t('g_no_data');
++      final keepType = accountType, keepEmail = googleEmail;
++      final r = await importBackup(b, parts: {'app'});
++      await setAccount(keepType, email: keepEmail);
++      _lastSyncSig = jsonEncode(b['app']);
++      await markSynced();
++      return r;
++    } catch (_) {
++      return t('g_sync_failed');
++    }
++  }
++
++  Future<void> useLocalAccount() async {
++    _syncTimer?.cancel();
++    _syncTimer = null;
++    if (accountType == 'google') {
++      try {
++        await GoogleSync.I.signOut();
++      } catch (_) {}
++    }
++    await setAccount('local');
++  }
++
++  void _startAutoSync() {
++    _syncTimer?.cancel();
++    _syncTimer = Timer.periodic(const Duration(minutes: 10), (_) => _autoSync());
++    Future.delayed(const Duration(seconds: 20), _autoSync);
++  }
++
++  Future<void> _autoSync() async {
++    if (accountType != 'google') return;
++    try {
++      final b = await _syncPayload();
++      final sig = jsonEncode(b['app']);
++      if (sig == _lastSyncSig) return;
++      await GoogleSync.I.upload(b);
++      _lastSyncSig = sig;
++      await markSynced();
++    } catch (_) {}
+   }
+ 
+   void _loadPrefs() {
+@@ -177,6 +302,10 @@ class AppState extends ChangeNotifier {
+     showMac = p.getBool('showMac') ?? false;
+     tariff = p.getDouble('tariff') ?? 1.0;
+     otaPass = p.getString('otaPass') ?? '';
++    accountType = p.getString('accountType') ?? '';
++    googleEmail = p.getString('googleEmail') ?? '';
++    final ls = p.getString('lastSync');
++    lastSync = ls == null ? null : DateTime.tryParse(ls);
+     userName = p.getString('userName') ?? '';
+     _order = p.getStringList('order') ?? [];
+     final n = p.getString('names');
+@@ -407,6 +536,7 @@ class AppState extends ChangeNotifier {
+ 
+   @override
+   void dispose() {
++    _syncTimer?.cancel();
+     _widgetThrottleTimer?.cancel();
+     _stopAll();
+     super.dispose();
+@@ -425,11 +555,28 @@ class AppState extends ChangeNotifier {
+   }
+ 
+   Future<void> saveSettings(HubSettings s) async {
++    final passChanged = s.hubPass != settings.hubPass;
+     settings = s;
+     await _prefs?.setString('settings', jsonEncode(s.toJson()));
++    if (passChanged) _passPushedValue = '';
+     await restart();
+   }
+ 
++  /// Hands the hub its server password (hub 2.9+, home Wi-Fi only). The hub keeps it and reconnects only if it changed.
++  Future<CmdResult> pushHubPass({bool force = false}) async {
++    final p = settings.hubPass;
++    if (p.isEmpty || settings.isShared) return CmdResult(false, t('cloud_need_pass'));
++    if (!_localFresh) return CmdResult(false, t('err_local_only'));
++    if (!force && _passPushedValue == p && _passPushedAt != null && DateTime.now().difference(_passPushedAt!) < const Duration(minutes: 2)) {
++      return const CmdResult(true);
++    }
++    _passPushedAt = DateTime.now();
++    _passPushedValue = p;
++    return api('cloud', {'pass': p});
++  }
++
++  bool get hubSupportsCloudCfg => hubCloudUp != null;
++
+   Future<void> restart() async {
+     _stopAll();
+     _strips = [];
+@@ -437,6 +584,8 @@ class AppState extends ChangeNotifier {
+     _lastLocalOk = null;
+     mode = ConnMode.offline;
+     hubOnline = false;
++    hubCloudUp = null;
++    hubCloudErr = '';
+     notifyListeners();
+     final gen = _gen;
+     if (settings.hasLocal) {
+@@ -547,7 +696,8 @@ class AppState extends ChangeNotifier {
+   }
+ 
+   // ---------- MQTT ----------
+-  String get _base => 'mttl/${settings.hubId}';
++  String get _base => settings.isShared ? 'mttl/${settings.hubId}/u/${settings.sharedUser}' : 'mttl/${settings.hubId}';
++  String get _statusTopic => 'mttl/${settings.hubId}/status';
+ 
+   Future<void> _startMqtt() async {
+     final clientId = 'app-${DateTime.now().millisecondsSinceEpoch % 1000000000}';
+@@ -599,6 +749,7 @@ class AppState extends ChangeNotifier {
+       }
+     });
+     c.subscribe('$_base/#', MqttQos.atLeastOnce);
++    if (settings.isShared) c.subscribe(_statusTopic, MqttQos.atLeastOnce);
+   }
+ 
+   void _stopMqtt() {
+@@ -618,7 +769,7 @@ class AppState extends ChangeNotifier {
+   void _onMqtt(String topic, String text) {
+     if (topic == '$_base/state') {
+       _applyState(text, fromLocal: false);
+-    } else if (topic == '$_base/status') {
++    } else if (topic == _statusTopic) {
+       hubOnline = text.trim() == 'online';
+       _updateMode();
+       notifyListeners();
+@@ -663,6 +814,27 @@ class AppState extends ChangeNotifier {
+         wifiTest = (cfg['wifi_test'] ?? wifiTest).toString();
+         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
+       }
++      final cl = j['cloud'];
++      if (cl is Map && fromLocal) {
++        hubCloudUp = cl['up'] == true;
++        hubCloudErr = (cl['err'] ?? '').toString();
++        hubHasPass = cl['has_pass'] != false;
++        hubOnline = hubCloudUp!;
++        emqxSet = j['emqx_cfg'] == true;
++        usersCount = (j['users_n'] as num?)?.toInt() ?? usersCount;
++        if (settings.hubPass.isNotEmpty && (hubCloudErr == 'no_pass' || hubCloudErr == 'auth' || _passPushedValue != settings.hubPass)) {
++          Future.microtask(() => pushHubPass());
++        }
++      }
++      final hid = (j['hub'] ?? '').toString().toUpperCase();
++      if (fromLocal && hid.length == 12 && hid != settings.hubId.toUpperCase() && !settings.isShared) {
++        settings.hubId = hid;               // the hub knows its own id; a wrong one breaks the remote link
++        _prefs?.setString('settings', jsonEncode(settings.toJson()));
++        if (settings.hasCloud) {
++          _stopMqtt();
++          _startMqtt();
++        }
++      }
+       final tm = j['timers'];
+       timers = tm is List ? tm.whereType<Map<String, dynamic>>().map(HubTimer.fromJson).toList() : [];
+       final devs = j['devices'];
+@@ -756,7 +928,7 @@ class AppState extends ChangeNotifier {
+         if (j is! Map<String, dynamic>) return CmdResult(false, t('err_failed'));
+         final ok = j['ok'] == true;
+         final data = j['data'];
+-        return CmdResult(ok, ok ? null : (j['error']?.toString() ?? t('err_not_confirmed')),
++        return CmdResult(ok, ok ? null : (j['error'] == null ? t('err_not_confirmed') : _errText(j['error'].toString())),
+             data is Map<String, dynamic> ? data : null);
+       }
+       if (mqttConnected && _mqtt != null) {
+@@ -771,7 +943,7 @@ class AppState extends ChangeNotifier {
+         if (j.isEmpty) return CmdResult(false, t('err_no_ack'));
+         final ok = j['ok'] == true;
+         final data = j['data'];
+-        final err = (j['error'] ?? '').toString();
++        final err = _errText((j['error'] ?? '').toString());
+         return CmdResult(ok, ok ? null : (err.isNotEmpty ? err : t('err_not_confirmed')),
+             data is Map<String, dynamic> ? data : null);
+       }
+@@ -781,6 +953,96 @@ class AppState extends ChangeNotifier {
+     }
+   }
+ 
++  String _errText(String e) {
++    switch (e) {
++      case 'forbidden':
++        return t('err_forbidden');
++      case 'local_only':
++        return t('err_local_only');
++      case 'emqx_not_set':
++        return t('users_need_emqx');
++      default:
++        return e;
++    }
++  }
++
++  // ---------- shared users (owner) ----------
++  Future<List<HubUser>?> loadUsers() async {
++    final r = await api('users');
++    if (!r.ok) {
++      _fail(r);
++      return null;
++    }
++    emqxSet = r.data?['emqx'] == true;
++    final l = r.data?['users'];
++    return l is List ? l.whereType<Map<String, dynamic>>().map(HubUser.fromJson).toList() : <HubUser>[];
++  }
++
++  Future<CmdResult> setEmqx(String url, String key, String secret) => api('emqx_config', {'url': url, 'key': key, 'secret': secret});
++
++  /// Returns the invite code in [CmdResult.data]['code'].
++  Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
++      api('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
++
++  Future<CmdResult> updateUser(HubUser u) =>
++      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')});
++
++  Future<CmdResult> revokeUser(String id) => api('user_revoke', {'id': id});
++
++  // ---------- joining someone else's hub ----------
++  static Map<String, dynamic>? decodeInvite(String code) {
++    try {
++      var c = code.trim().replaceAll(RegExp(r'\s'), '').replaceAll('-', '+').replaceAll('_', '/');
++      while (c.length % 4 != 0) {
++        c += '=';
++      }
++      final j = jsonDecode(utf8.decode(base64.decode(c)));
++      if (j is! Map<String, dynamic> || j['u'] == null || j['pw'] == null || j['hub'] == null || j['h'] == null) return null;
++      return j;
++    } catch (_) {
++      return null;
++    }
++  }
++
++  Future<bool> joinWithCode(String code) async {
++    final j = decodeInvite(code);
++    if (j == null) return false;
++    await saveSettings(HubSettings(
++      hubId: j['hub'].toString().toUpperCase(),
++      brokerHost: j['h'].toString(),
++      brokerPort: (j['p'] as num?)?.toInt() ?? 8883,
++      username: j['u'].toString(),
++      password: j['pw'].toString(),
++      localHost: '',
++      sharedUser: j['u'].toString(),
++      sharedName: (j['n'] ?? '').toString(),
++      sharedRole: (j['r'] as num?)?.toInt() ?? 0,
++    ));
++    return true;
++  }
++
++  /// Back to being the owner of your own hub (default connection settings).
++  Future<void> leaveShared() => saveSettings(HubSettings());
++
++  bool get isShared => settings.isShared;
++  bool get canControl => !settings.isShared || settings.sharedRole >= 1;
++  bool get canAdmin => !settings.isShared || settings.sharedRole >= 2;
++
++  // ---------- account ----------
++  Future<void> setAccount(String type, {String email = ''}) async {
++    accountType = type;
++    googleEmail = email;
++    await _prefs?.setString('accountType', type);
++    await _prefs?.setString('googleEmail', email);
++    notifyListeners();
++  }
++
++  Future<void> markSynced() async {
++    lastSync = DateTime.now();
++    await _prefs?.setString('lastSync', lastSync!.toIso8601String());
++    notifyListeners();
++  }
++
+   void _fail(CmdResult r) {
+     if (!r.ok) {
+       lastError = r.error;
+diff --git a/app/lib/i18n.dart b/app/lib/i18n.dart
+index 926abb1..0ff9008 100644
+--- a/app/lib/i18n.dart
++++ b/app/lib/i18n.dart
+@@ -374,4 +374,86 @@ const Map<String, List<String>> _s = {
+   'backup_err_no_hub': ['الـ Hub غير متصل عشان تستعيد بياناته', 'Hub is offline; cannot restore its data'],
+   'backup_skipped': ['تمت الاستعادة بنجاح (تم تخطي {n} مشترك مش موجودين على الـ Hub)', 'Restored successfully (skipped {n} strip(s) not found on hub)'],
+   'backup_select_part': ['اختار حاجة واحدة على الأقل عشان تعملها نسخة', 'Select at least one item to backup'],
++  // server link (hub 2.9)
++  'f_hub_pass': ['باسورد الـ Hub على السيرفر', 'Hub server password'],
++  'f_hub_pass_sub': ['باسورد اليوزر ESP32_hub في EMQX. التطبيق بيبعته للـ Hub لوحده وإنت على واي فاي البيت، ومش محتاج تكتبه في الكود.', 'Password of the ESP32_hub user in EMQX. The app hands it to the hub on the home Wi-Fi; no need to put it in the code.'],
++  'cloud_need_pass': ['اكتب باسورد الـ Hub على السيرفر الأول', 'Enter the hub server password first'],
++  'cloud_pass_sent': ['اتبعت للـ Hub وهيتصل بالسيرفر خلال ثواني', 'Sent to the hub; it reconnects in a few seconds'],
++  'cloud_pass_later': ['اتحفظ، وهيتبعت للـ Hub أول ما تكون على واي فاي البيت', 'Saved; it goes to the hub as soon as you are on the home Wi-Fi'],
++  'cloud_err_no_pass': ['الـ Hub مفيش معاه باسورد السيرفر. اكتبه تحت واحفظ وإنت على واي فاي البيت.', 'The hub has no server password. Enter it below and save while on the home Wi-Fi.'],
++  'cloud_err_auth': ['السيرفر رفض باسورد الـ Hub. اتأكد من باسورد ESP32_hub في EMQX.', 'The server rejected the hub password. Check the ESP32_hub password in EMQX.'],
++  'cloud_err_refused': ['السيرفر رفض اتصال الـ Hub', 'The server refused the hub'],
++  'cloud_err_tls': ['مشكلة في شهادة الأمان بين الـ Hub والسيرفر', 'TLS certificate problem between the hub and the server'],
++  'cloud_err_net': ['الـ Hub مش قادر يوصل للسيرفر (نت أو DNS)', 'The hub cannot reach the server (internet or DNS)'],
++  'err_forbidden': ['معندكش صلاحية للأمر ده', "You don't have permission for this"],
++  'err_local_only': ['الأمر ده بيشتغل بس وإنت على واي فاي البيت', 'This works only on the home Wi-Fi'],
++  // account
++  'acc_title': ['الحساب', 'Account'],
++  'acc_pick': ['اختار هتستخدم التطبيق إزاي. تقدر تغيّر بعدين من الإعدادات.', 'Choose how to use the app. You can change it later in Settings.'],
++  'acc_local': ['حساب محلي', 'Local account'],
++  'acc_local_sub': ['من غير تسجيل. كل حاجة بتتحفظ على الموبايل ده بس.', 'No sign-up. Everything stays on this phone.'],
++  'acc_local_on': ['بقيت على الحساب المحلي', 'Now using the local account'],
++  'acc_google': ['حساب جوجل', 'Google account'],
++  'acc_google_sub': ['إعداداتك كلها بتتزامن على جوجل درايف بتاعك، وترجّعها على أي موبايل.', 'Your settings sync to your Google Drive and come back on any phone.'],
++  'g_cancelled': ['اتلغى تسجيل الدخول', 'Sign-in cancelled'],
++  'g_failed': ['تسجيل الدخول بجوجل فشل. اتأكد من النت وجرب تاني.', 'Google sign-in failed. Check the internet and retry.'],
++  'g_sync_failed': ['المزامنة مع جوجل فشلت', 'Google sync failed'],
++  'g_no_data': ['مفيش نسخة محفوظة على حساب جوجل ده لسه', 'No synced copy on this Google account yet'],
++  'g_found_t': ['لقينا إعدادات محفوظة', 'Saved settings found'],
++  'g_found_b': ['فيه إعدادات محفوظة على حساب جوجل ده. ترجّعها على الموبايل ده؟', 'This Google account has saved settings. Restore them on this phone?'],
++  'g_restore': ['استرجاع من جوجل', 'Restore from Google'],
++  'g_restore_b': ['إعدادات التطبيق هنا هتتبدل باللي على جوجل.', "This phone's app settings will be replaced by the ones on Google."],
++  'g_restored': ['اترجعت الإعدادات من جوجل', 'Settings restored from Google'],
++  'g_synced': ['اتزامنت مع جوجل', 'Synced to Google'],
++  'g_sync': ['المزامنة', 'Sync'],
++  'g_sync_now': ['زامن دلوقتي', 'Sync now'],
++  'g_never': ['لسه ماتزامنتش', 'Not synced yet'],
++  'g_last': ['آخر مزامنة: {x}', 'Last sync: {x}'],
++  'g_note': ['المزامنة بتحصل لوحدها كل شوية لما حاجة تتغير. الملف في فولدر مخفي في درايف بتاعك، ومحدش يقدر يقراه غير التطبيق ده.', 'Sync runs by itself when something changes. The file sits in a hidden folder of your Drive that only this app can read.'],
++  // sharing
++  'share_title': ['المشاركة', 'Sharing'],
++  'users_title': ['المستخدمين والمشاركة', 'People & sharing'],
++  'users_empty': ['مفيش حد متشارك معاه لسه. دوس "شخص جديد" عشان تعمل كود دعوة.', 'Nobody yet. Tap "New person" to make an invite code.'],
++  'users_local_note': ['إضافة وحذف الأشخاص بيشتغل بس وإنت على واي فاي البيت.', 'Adding and removing people works only on the home Wi-Fi.'],
++  'users_need_emqx': ['عشان تشارك الـ Hub، دخّل بيانات EMQX API مرة واحدة.', 'To share the hub, enter the EMQX API details once.'],
++  'emqx_title': ['بيانات EMQX API', 'EMQX API details'],
++  'emqx_sub': ['من EMQX Cloud ← الـ Deployment ← API Key. بتتحفظ جوه الـ Hub بس ومش بتظهر تاني.', 'From EMQX Cloud → your deployment → API Key. Stored only inside the hub and never shown again.'],
++  'emqx_url': ['عنوان الـ API', 'API endpoint'],
++  'emqx_key': ['API Key', 'API Key'],
++  'emqx_secret': ['API Secret', 'API Secret'],
++  'emqx_ok': ['الـ Hub اتصل بـ EMQX API بنجاح', 'The hub reached the EMQX API'],
++  'emqx_set': ['متظبطة', 'Set up'],
++  'emqx_change': ['تغيير بيانات EMQX', 'Change EMQX details'],
++  'user_new': ['شخص جديد', 'New person'],
++  'user_edit': ['تعديل', 'Edit'],
++  'user_name': ['الاسم', 'Name'],
++  'user_scope': ['يتحكم في', 'Can use'],
++  'scope_all': ['كل المشتركات', 'All strips'],
++  'scope_some': ['مشتركات محددة', 'Some strips'],
++  'user_incomplete': ['اكتب الاسم واختار مشترك واحد على الأقل', 'Enter a name and pick at least one strip'],
++  'role': ['الصلاحية', 'Role'],
++  'role_0': ['مشاهدة', 'View'],
++  'role_1': ['تحكم', 'Control'],
++  'role_2': ['مدير', 'Admin'],
++  'role_0_sub': ['يشوف الحالة والاستهلاك بس', 'Sees status and usage only'],
++  'role_1_sub': ['يشغّل ويقفل ويعمل تايمر وجدولة', 'Switches outlets, timers and schedules'],
++  'role_2_sub': ['كل حاجة في المشتركات بتاعته: الأسماء والقفل والحماية والأتمتة. ما عدا الواي فاي والفيرموير والمستخدمين.', 'Everything on their strips: names, locks, protection, automations. Not Wi-Fi, firmware or people.'],
++  'invite_ready': ['كود الدعوة جاهز', 'Invite code ready'],
++  'invite_how': ['ابعت الكود ده لـ {x}. يفتح Fisha ← الإعدادات ← الحساب ← انضمام بكود دعوة، ويلزقه.', 'Send this code to {x}. In Fisha: Settings → Account → Join with an invite code, then paste it.'],
++  'invite_private': ['الكود فيه باسورد الدخول بتاعه. ابعته ليه هو بس، ولو اتسرب امسحه واعمل واحد جديد.', 'The code carries their password. Send it only to them; if it leaks, remove them and invite again.'],
++  'user_revoke': ['إلغاء المشاركة', 'Remove access'],
++  'user_revoke_b': ['{x} هيفقد الوصول للـ Hub على طول.', '{x} loses access to the hub right away.'],
++  'user_revoked': ['اتلغت المشاركة', 'Access removed'],
++  'join_title': ['انضمام بكود دعوة', 'Join with an invite code'],
++  'join_sub': ['الصق الكود اللي صاحب الـ Hub بعتهولك.', 'Paste the code the hub owner sent you.'],
++  'join_hint': ['الكود', 'Code'],
++  'join_btn': ['انضمام', 'Join'],
++  'join_bad': ['الكود ده مش صحيح', 'This code is not valid'],
++  'join_confirm': ['هتدخل على Hub مشترك باسم "{x}". إعدادات الاتصال الحالية هتتبدل.', 'You will join a shared hub as "{x}". Your current connection settings will be replaced.'],
++  'join_ok': ['اتصلت بالـ Hub المشترك', 'Joined the shared hub'],
++  'shared_banner': ['إنت متصل بـ Hub حد شاركه معاك باسم "{x}".', 'You are using a hub someone shared with you, as "{x}".'],
++  'shared_short': ['Hub مشترك', 'Shared hub'],
++  'leave_title': ['الخروج من الـ Hub المشترك', 'Leave the shared hub'],
++  'leave_body': ['هترجع لإعدادات الاتصال الافتراضية بتاعة الـ Hub بتاعك.', 'You go back to the default connection settings for your own hub.'],
++  'leave_btn': ['خروج', 'Leave'],
+ };
+diff --git a/app/lib/main.dart b/app/lib/main.dart
+index ed0c603..d688d6e 100644
+--- a/app/lib/main.dart
++++ b/app/lib/main.dart
+@@ -5,6 +5,7 @@ import 'app_state.dart';
+ import 'i18n.dart';
+ import 'screens/energy_screen.dart';
+ import 'screens/events_screen.dart';
++import 'screens/account_screen.dart';
+ import 'screens/home_screen.dart';
+ import 'screens/schedules_screen.dart';
+ import 'screens/settings_screen.dart';
+@@ -54,7 +55,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
+     super.dispose();
+   }
+ 
+-  String _signature() => '${s.themePref.index}-${s.langPref.index}';
++  String _signature() => '${s.themePref.index}-${s.langPref.index}-${s.accountType.isEmpty}';
+ 
+   void _onState() {
+     final sig = _signature();
+@@ -113,7 +114,11 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
+       ],
+       home: AnimatedSwitcher(
+         duration: const Duration(milliseconds: 500),
+-        child: _booted ? Shell(key: const ValueKey('shell'), state: s) : const BootScreen(key: ValueKey('boot')),
++        child: !_booted
++            ? const BootScreen(key: ValueKey('boot'))
++            : s.accountType.isEmpty
++                ? AccountScreen(key: const ValueKey('account'), state: s, firstRun: true)
++                : Shell(key: const ValueKey('shell'), state: s),
+       ),
+     );
+   }
+diff --git a/app/lib/models.dart b/app/lib/models.dart
+index af457f0..26971c2 100644
+--- a/app/lib/models.dart
++++ b/app/lib/models.dart
+@@ -335,3 +335,20 @@ class Room {
+         stripMacs: stripMacs ?? this.stripMacs,
+       );
+ }
++
++/// A person the owner shared the hub with (hub 2.9+). role 0 view · 1 control · 2 admin.
++class HubUser {
++  final String id;
++  String name;
++  int role;
++  bool all;
++  List<String> strips;
++  HubUser({required this.id, this.name = '', this.role = 1, this.all = true, List<String>? strips}) : strips = strips ?? [];
++  factory HubUser.fromJson(Map<String, dynamic> j) => HubUser(
++        id: _s(j['id']),
++        name: _s(j['name']),
++        role: _i(j['role'], 1),
++        all: j['all'] == true,
++        strips: j['strips'] is List ? (j['strips'] as List).map((e) => e.toString().toUpperCase()).toList() : [],
++      );
++}
+diff --git a/app/lib/screens/connection_screen.dart b/app/lib/screens/connection_screen.dart
+index 5a0bc10..c807d82 100644
+--- a/app/lib/screens/connection_screen.dart
++++ b/app/lib/screens/connection_screen.dart
+@@ -25,12 +25,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
+   late final _pass = TextEditingController(text: _s.password);
+   late final _local = TextEditingController(text: _s.localHost);
+   late final _localPort = TextEditingController(text: '${_s.localPort}');
++  late final _hubPass = TextEditingController(text: _s.hubPass);
+   bool _obscure = true;
++  bool _obscureHub = true;
+   bool _advanced = false;
+ 
+   @override
+   void dispose() {
+-    for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort]) {
++    for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort, _hubPass]) {
+       c.dispose();
+     }
+     super.dispose();
+@@ -45,10 +47,27 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
+       password: _pass.text,
+       localHost: _local.text.trim(),
+       localPort: int.tryParse(_localPort.text.trim()) ?? 8080,
++      hubPass: _hubPass.text,
++      sharedUser: _s.sharedUser,
++      sharedName: _s.sharedName,
++      sharedRole: _s.sharedRole,
+     );
+     FocusScope.of(context).unfocus();
+     await widget.state.saveSettings(s);
+-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('saved'))));
++    var msg = t('saved');
++    if (s.hubPass.isNotEmpty && !s.isShared) {
++      // give the local link a moment after the restart, then hand the hub its server password
++      for (var i = 0; i < 6 && widget.state.mode != ConnMode.local; i++) {
++        await Future.delayed(const Duration(milliseconds: 700));
++      }
++      if (widget.state.mode == ConnMode.local) {
++        final r = await widget.state.pushHubPass(force: true);
++        msg = r.ok ? t('cloud_pass_sent') : (r.error ?? t('err_failed'));
++      } else {
++        msg = t('cloud_pass_later');
++      }
++    }
++    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+   }
+ 
+   @override
+@@ -66,6 +85,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
+               _status(t('st_live'), st.sseLive),
+               _status(t('st_cloud'), st.mqttConnected),
+               _status(t('st_hub'), st.hubOnline),
++              if (st.hubCloudUp == false && st.hubCloudErr.isNotEmpty)
++                Text(t('cloud_err_${st.hubCloudErr}'), style: TextStyle(color: C.warn, fontSize: 12, height: 1.5)),
+               if (st.hubUptimeS != null && st.hubUptimeS! > 0)
+                 Row(children: [
+                   Container(width: 8, height: 8, decoration: BoxDecoration(color: C.accent, shape: BoxShape.circle)),
+@@ -75,7 +96,11 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
+                 ]),
+             ]),
+             const SizedBox(height: 14),
+-            section(t('sec_local'), [
++            if (st.isShared) ...[
++              emptyCard(t('shared_banner', {'x': st.settings.sharedName.isEmpty ? st.settings.sharedUser : st.settings.sharedName}), icon: Icons.group_outlined),
++              const SizedBox(height: 14),
++            ],
++            if (!st.isShared) section(t('sec_local'), [
+               _field(_local, t('f_local'), hint: '192.168.1.110'),
+             ]),
+             const SizedBox(height: 14),
+@@ -93,6 +118,22 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
+                   ),
+                 ),
+               ),
++              if (!st.isShared)
++                TextField(
++                  controller: _hubPass,
++                  obscureText: _obscureHub,
++                  textDirection: TextDirection.ltr,
++                  autocorrect: false,
++                  decoration: InputDecoration(
++                    labelText: t('f_hub_pass'),
++                    helperText: t('f_hub_pass_sub'),
++                    helperMaxLines: 3,
++                    suffixIcon: IconButton(
++                      icon: Icon(_obscureHub ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: C.muted),
++                      onPressed: () => setState(() => _obscureHub = !_obscureHub),
++                    ),
++                  ),
++                ),
+               InkWell(
+                 onTap: () => setState(() => _advanced = !_advanced),
+                 child: Row(children: [
+diff --git a/app/lib/screens/notifications_screen.dart b/app/lib/screens/notifications_screen.dart
+index a2050ba..07a1eb1 100644
+--- a/app/lib/screens/notifications_screen.dart
++++ b/app/lib/screens/notifications_screen.dart
+@@ -177,7 +177,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
+                           FilterChip(
+                             label: Text(t('whole_strip')),
+                             selected: sel,
+-                            selectedColor: C.accentBg,
++                            selectedColor: _chipOn,
+                             checkmarkColor: C.accent,
+                             labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
+                             side: BorderSide(color: sel ? C.tileOnBorder : C.border),
+@@ -189,7 +189,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
+                             FilterChip(
+                               label: Text(s.outletName(st, o.n)),
+                               selected: sel,
+-                              selectedColor: C.accentBg,
++                              selectedColor: _chipOn,
+                               checkmarkColor: C.accent,
+                               labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
+                               side: BorderSide(color: sel ? C.tileOnBorder : C.border),
+@@ -220,3 +220,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
+         Expanded(child: Text(text, style: TextStyle(color: C.textSoft, height: 1.5))),
+       ]);
+ }
++
++/// Selected chip fill: a clearly saturated green on the dark themes, the usual tint on light ones.
++Color get _chipOn => C.dark ? Color.alphaBlend(C.accent.withValues(alpha: 0.32), C.surface2) : C.accentBg;
+diff --git a/app/lib/screens/settings_screen.dart b/app/lib/screens/settings_screen.dart
+index 2e1c32d..65f8056 100644
+--- a/app/lib/screens/settings_screen.dart
++++ b/app/lib/screens/settings_screen.dart
+@@ -4,10 +4,12 @@ import '../app_state.dart';
+ import '../i18n.dart';
+ import '../theme.dart';
+ import '../widgets/common.dart';
++import 'account_screen.dart';
+ import 'backup_screen.dart';
+ import 'connection_screen.dart';
+ import 'firmware_screen.dart';
+ import 'guide_screen.dart';
++import 'users_screen.dart';
+ import 'notifications_screen.dart';
+ import 'rooms_screen.dart';
+ import 'wifi_screen.dart';
+@@ -62,6 +64,27 @@ class SettingsScreen extends StatelessWidget {
+               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
+               const SizedBox(height: 18),
+               _group(_tr('الحساب', 'Account'), [
++                _row(
++                  context,
++                  Icons.account_circle_outlined,
++                  C.accent,
++                  t('acc_title'),
++                  st.isShared
++                      ? t('shared_short')
++                      : st.accountType == 'google'
++                          ? (st.googleEmail.isEmpty ? t('acc_google') : st.googleEmail)
++                          : t('acc_local'),
++                  () => _open(context, AccountScreen(state: st)),
++                ),
++                if (!st.isShared)
++                  _row(
++                    context,
++                    Icons.group_outlined,
++                    C.accent2,
++                    t('users_title'),
++                    st.usersCount == 0 ? '—' : '${st.usersCount}',
++                    () => _open(context, UsersScreen(state: st)),
++                  ),
+                 _row(
+                   context,
+                   Icons.person_outline,
+diff --git a/app/lib/theme.dart b/app/lib/theme.dart
+index 6b7e839..efb1411 100644
+--- a/app/lib/theme.dart
++++ b/app/lib/theme.dart
+@@ -15,9 +15,9 @@ class C {
+   static Color muted = const Color(0xFF8798B3);
+   static Color faint = const Color(0xFF4D5C77);
+   static Color accent = const Color(0xFF2EE6B0);
+-  static Color accentBg = const Color(0xFF0F4A3C);
++  static Color accentBg = const Color(0xFF0E2A2B);
+   static Color tileOn = const Color(0xFF0D2524);
+-  static Color tileOnBorder = const Color(0xFF22A884);
++  static Color tileOnBorder = const Color(0xFF1E7D68);
+   static Color onAccent = const Color(0xFF032019);
+   static Color switchOff = const Color(0xFF2A3855);
+   static Color miniOff = const Color(0xFF18233B);
+@@ -49,9 +49,9 @@ class C {
+         muted = const Color(0xFF8798B3);
+         faint = const Color(0xFF4D5C77);
+         accent = const Color(0xFF2EE6B0);
+-        accentBg = const Color(0xFF0F4A3C);
++        accentBg = const Color(0xFF0E2A2B);
+         tileOn = const Color(0xFF0D2524);
+-        tileOnBorder = const Color(0xFF22A884);
++        tileOnBorder = const Color(0xFF1E7D68);
+         onAccent = const Color(0xFF032019);
+         switchOff = const Color(0xFF2A3855);
+         miniOff = const Color(0xFF18233B);
+@@ -101,9 +101,9 @@ class C {
+         muted = const Color(0xFF98A1AD);
+         faint = const Color(0xFF626A75);
+         accent = const Color(0xFF4FD8B8);
+-        accentBg = const Color(0xFF1E5546);
++        accentBg = const Color(0xFF1F3833);
+         tileOn = const Color(0xFF233A35);
+-        tileOnBorder = const Color(0xFF45B496);
++        tileOnBorder = const Color(0xFF3E8C79);
+         onAccent = const Color(0xFF0B2A23);
+         switchOff = const Color(0xFF474E58);
+         miniOff = const Color(0xFF2C3138);
+diff --git a/app/pubspec.yaml b/app/pubspec.yaml
+index 2ba8869..0e74a28 100644
+--- a/app/pubspec.yaml
++++ b/app/pubspec.yaml
+@@ -1,7 +1,7 @@
+ name: mttl_hub
+ description: Fisha — control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud). By ahmadalhelly.
+ publish_to: 'none'
+-version: 1.7.0+9
++version: 1.8.0+10
+ 
+ environment:
+   sdk: ^3.4.0
+@@ -19,6 +19,7 @@ dependencies:
+   flutter_foreground_task: ^11.0.3
+   flutter_local_notifications: ^22.3.1
+   local_auth: ^2.3.0
++  google_sign_in: ^6.2.2
+   # local bridge (packages/home_widget): the pub.dev home_widget pulled in WorkManager and crashed the app at start
+   home_widget:
+     path: packages/home_widget
+diff --git a/app/tool/configure_android.py b/app/tool/configure_android.py
+index 059b073..48fc0c2 100644
+--- a/app/tool/configure_android.py
++++ b/app/tool/configure_android.py
+@@ -321,4 +321,10 @@ elif os.path.exists(groovy):
+     open(groovy, "w").write(g)
+ else:
+     raise SystemExit("no app build.gradle found")
++# store id tied to the app name (namespace / Kotlin package stay com.mttlhub.mttl_hub)
++for gf in (kts, groovy):
++    if os.path.exists(gf):
++        g = open(gf).read()
++        g = re.sub(r'applicationId\s*=?\s*"[^"]+"', lambda m: m.group(0).split('"')[0] + '"com.fisha.app"', g, count=1)
++        open(gf, "w").write(g)
+ print("android configured:", NAME)
+diff --git a/firmware/mttl_hub/mttl_hub.ino b/firmware/mttl_hub/mttl_hub.ino
+index 4402d3c..ffccdc7 100644
+--- a/firmware/mttl_hub/mttl_hub.ino
++++ b/firmware/mttl_hub/mttl_hub.ino
+@@ -1472,13 +1472,14 @@ ApiRes api(String path, const String& b) {
+   // ---- v2.9: cloud password + shared users (owner only) ----
+   if (path == "cloud") {                          // {"pass":"..."} local network only
+     if (apiSrc != 0) return errRes("local_only");
++    bool changed = false;
+     if (jsonHas(b, "pass")) {
+       String np = jsonValue(b, "pass");
+-      if (np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
+-      Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end();
+-      secMqtt = np;
++      if (!np.length() || np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
++      changed = np != secMqtt;
++      if (changed) { Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end(); secMqtt = np; }
+     }
+-    mqttRestartReq = true;
++    if (changed || !mqttUp) mqttRestartReq = true;   // same password and already online: nothing to do
+     stateDirty = true;
+     return okRes();
+   }
