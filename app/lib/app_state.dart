@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'i18n.dart';
 import 'models.dart';
+import 'services/google_sync.dart';
 
 enum ConnMode { offline, local, cloud }
 
@@ -30,6 +31,12 @@ class HubSettings {
   String password;
   String localHost;
   int localPort;
+  /// password of the hub's own server user (ESP32_hub); the app hands it to the hub on the home Wi-Fi
+  String hubPass;
+  /// set when this phone was invited by the owner: remote-only, limited to what the owner allowed
+  String sharedUser;
+  String sharedName;
+  int sharedRole;
 
   HubSettings({
     this.hubId = '80F3DA40F674',
@@ -39,10 +46,15 @@ class HubSettings {
     this.password = '',
     this.localHost = '192.168.1.110',
     this.localPort = 8080,
+    this.hubPass = '',
+    this.sharedUser = '',
+    this.sharedName = '',
+    this.sharedRole = 0,
   });
 
+  bool get isShared => sharedUser.isNotEmpty;
   bool get hasCloud => hubId.isNotEmpty && brokerHost.isNotEmpty && username.isNotEmpty && password.isNotEmpty;
-  bool get hasLocal => localHost.isNotEmpty;
+  bool get hasLocal => localHost.isNotEmpty && !isShared;
 
   Map<String, dynamic> toJson() => {
         'hubId': hubId,
@@ -52,6 +64,10 @@ class HubSettings {
         'password': password,
         'localHost': localHost,
         'localPort': localPort,
+        'hubPass': hubPass,
+        'sharedUser': sharedUser,
+        'sharedName': sharedName,
+        'sharedRole': sharedRole,
       };
 
   factory HubSettings.fromJson(Map<String, dynamic> j) {
@@ -64,6 +80,10 @@ class HubSettings {
       password: (j['password'] ?? '').toString(),
       localHost: (j['localHost'] ?? d.localHost).toString(),
       localPort: (j['localPort'] as num?)?.toInt() ?? d.localPort,
+      hubPass: (j['hubPass'] ?? '').toString(),
+      sharedUser: (j['sharedUser'] ?? '').toString(),
+      sharedName: (j['sharedName'] ?? '').toString(),
+      sharedRole: (j['sharedRole'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -89,6 +109,18 @@ class AppState extends ChangeNotifier {
   ConnMode mode = ConnMode.offline;
   bool mqttConnected = false;
   bool hubOnline = false;
+  // the hub's own link to the server, reported by hub 2.9+ over the home Wi-Fi
+  bool? hubCloudUp;
+  String hubCloudErr = '';
+  bool hubHasPass = true;
+  bool emqxSet = false;
+  int usersCount = 0;
+  DateTime? _passPushedAt;
+  String _passPushedValue = '';
+  // account: '' (not chosen yet) | local | google
+  String accountType = '';
+  String googleEmail = '';
+  DateTime? lastSync;
   bool sseLive = false;
   bool hubTimeOk = false;
   String? hubFw;
@@ -158,6 +190,99 @@ class AppState extends ChangeNotifier {
     _loadPrefs();
     ready = true;
     await restart();
+    if (accountType == 'google') {
+      GoogleSync.I.restore().then((ok) {
+        if (ok) _startAutoSync();
+      });
+    }
+  }
+
+  // ---------- Google account: optional sign-in + settings sync (Drive appDataFolder) ----------
+  Timer? _syncTimer;
+  String _lastSyncSig = '';
+
+  Future<Map<String, dynamic>> _syncPayload() async {
+    final b = await exportBackup(parts: {'app'});
+    final app = b['app'];
+    if (app is Map) app.remove('lastSync');
+    return b;
+  }
+
+  /// null = signed in; otherwise a message for the user.
+  Future<String?> googleSignIn() async {
+    try {
+      final e = await GoogleSync.I.signIn();
+      if (e == null) return t('g_cancelled');
+      await setAccount('google', email: e);
+      _startAutoSync();
+      return null;
+    } catch (_) {
+      return t('g_failed');
+    }
+  }
+
+  Future<bool> googleHasData() async {
+    try {
+      return await GoogleSync.I.download() != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String?> syncNow() async {
+    try {
+      final b = await _syncPayload();
+      await GoogleSync.I.upload(b);
+      _lastSyncSig = jsonEncode(b['app']);
+      await markSynced();
+      return null;
+    } catch (_) {
+      return t('g_sync_failed');
+    }
+  }
+
+  Future<String?> restoreFromGoogle() async {
+    try {
+      final b = await GoogleSync.I.download();
+      if (b == null) return t('g_no_data');
+      final keepType = accountType, keepEmail = googleEmail;
+      final r = await importBackup(b, parts: {'app'});
+      await setAccount(keepType, email: keepEmail);
+      _lastSyncSig = jsonEncode(b['app']);
+      await markSynced();
+      return r;
+    } catch (_) {
+      return t('g_sync_failed');
+    }
+  }
+
+  Future<void> useLocalAccount() async {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+    if (accountType == 'google') {
+      try {
+        await GoogleSync.I.signOut();
+      } catch (_) {}
+    }
+    await setAccount('local');
+  }
+
+  void _startAutoSync() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(const Duration(minutes: 10), (_) => _autoSync());
+    Future.delayed(const Duration(seconds: 20), _autoSync);
+  }
+
+  Future<void> _autoSync() async {
+    if (accountType != 'google') return;
+    try {
+      final b = await _syncPayload();
+      final sig = jsonEncode(b['app']);
+      if (sig == _lastSyncSig) return;
+      await GoogleSync.I.upload(b);
+      _lastSyncSig = sig;
+      await markSynced();
+    } catch (_) {}
   }
 
   void _loadPrefs() {
@@ -177,6 +302,10 @@ class AppState extends ChangeNotifier {
     showMac = p.getBool('showMac') ?? false;
     tariff = p.getDouble('tariff') ?? 1.0;
     otaPass = p.getString('otaPass') ?? '';
+    accountType = p.getString('accountType') ?? '';
+    googleEmail = p.getString('googleEmail') ?? '';
+    final ls = p.getString('lastSync');
+    lastSync = ls == null ? null : DateTime.tryParse(ls);
     userName = p.getString('userName') ?? '';
     _order = p.getStringList('order') ?? [];
     final n = p.getString('names');
@@ -407,6 +536,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
     _widgetThrottleTimer?.cancel();
     _stopAll();
     super.dispose();
@@ -425,10 +555,27 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> saveSettings(HubSettings s) async {
+    final passChanged = s.hubPass != settings.hubPass;
     settings = s;
     await _prefs?.setString('settings', jsonEncode(s.toJson()));
+    if (passChanged) _passPushedValue = '';
     await restart();
   }
+
+  /// Hands the hub its server password (hub 2.9+, home Wi-Fi only). The hub keeps it and reconnects only if it changed.
+  Future<CmdResult> pushHubPass({bool force = false}) async {
+    final p = settings.hubPass;
+    if (p.isEmpty || settings.isShared) return CmdResult(false, t('cloud_need_pass'));
+    if (!_localFresh) return CmdResult(false, t('err_local_only'));
+    if (!force && _passPushedValue == p && _passPushedAt != null && DateTime.now().difference(_passPushedAt!) < const Duration(minutes: 2)) {
+      return const CmdResult(true);
+    }
+    _passPushedAt = DateTime.now();
+    _passPushedValue = p;
+    return api('cloud', {'pass': p});
+  }
+
+  bool get hubSupportsCloudCfg => hubCloudUp != null;
 
   Future<void> restart() async {
     _stopAll();
@@ -437,6 +584,8 @@ class AppState extends ChangeNotifier {
     _lastLocalOk = null;
     mode = ConnMode.offline;
     hubOnline = false;
+    hubCloudUp = null;
+    hubCloudErr = '';
     notifyListeners();
     final gen = _gen;
     if (settings.hasLocal) {
@@ -547,7 +696,8 @@ class AppState extends ChangeNotifier {
   }
 
   // ---------- MQTT ----------
-  String get _base => 'mttl/${settings.hubId}';
+  String get _base => settings.isShared ? 'mttl/${settings.hubId}/u/${settings.sharedUser}' : 'mttl/${settings.hubId}';
+  String get _statusTopic => 'mttl/${settings.hubId}/status';
 
   Future<void> _startMqtt() async {
     final clientId = 'app-${DateTime.now().millisecondsSinceEpoch % 1000000000}';
@@ -599,6 +749,7 @@ class AppState extends ChangeNotifier {
       }
     });
     c.subscribe('$_base/#', MqttQos.atLeastOnce);
+    if (settings.isShared) c.subscribe(_statusTopic, MqttQos.atLeastOnce);
   }
 
   void _stopMqtt() {
@@ -618,7 +769,7 @@ class AppState extends ChangeNotifier {
   void _onMqtt(String topic, String text) {
     if (topic == '$_base/state') {
       _applyState(text, fromLocal: false);
-    } else if (topic == '$_base/status') {
+    } else if (topic == _statusTopic) {
       hubOnline = text.trim() == 'online';
       _updateMode();
       notifyListeners();
@@ -662,6 +813,27 @@ class AppState extends ChangeNotifier {
         hubSsid = (cfg['ssid'] ?? hubSsid).toString();
         wifiTest = (cfg['wifi_test'] ?? wifiTest).toString();
         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
+      }
+      final cl = j['cloud'];
+      if (cl is Map && fromLocal) {
+        hubCloudUp = cl['up'] == true;
+        hubCloudErr = (cl['err'] ?? '').toString();
+        hubHasPass = cl['has_pass'] != false;
+        hubOnline = hubCloudUp!;
+        emqxSet = j['emqx_cfg'] == true;
+        usersCount = (j['users_n'] as num?)?.toInt() ?? usersCount;
+        if (settings.hubPass.isNotEmpty && (hubCloudErr == 'no_pass' || hubCloudErr == 'auth' || _passPushedValue != settings.hubPass)) {
+          Future.microtask(() => pushHubPass());
+        }
+      }
+      final hid = (j['hub'] ?? '').toString().toUpperCase();
+      if (fromLocal && hid.length == 12 && hid != settings.hubId.toUpperCase() && !settings.isShared) {
+        settings.hubId = hid;               // the hub knows its own id; a wrong one breaks the remote link
+        _prefs?.setString('settings', jsonEncode(settings.toJson()));
+        if (settings.hasCloud) {
+          _stopMqtt();
+          _startMqtt();
+        }
       }
       final tm = j['timers'];
       timers = tm is List ? tm.whereType<Map<String, dynamic>>().map(HubTimer.fromJson).toList() : [];
@@ -756,7 +928,7 @@ class AppState extends ChangeNotifier {
         if (j is! Map<String, dynamic>) return CmdResult(false, t('err_failed'));
         final ok = j['ok'] == true;
         final data = j['data'];
-        return CmdResult(ok, ok ? null : (j['error']?.toString() ?? t('err_not_confirmed')),
+        return CmdResult(ok, ok ? null : (j['error'] == null ? t('err_not_confirmed') : _errText(j['error'].toString())),
             data is Map<String, dynamic> ? data : null);
       }
       if (mqttConnected && _mqtt != null) {
@@ -771,7 +943,7 @@ class AppState extends ChangeNotifier {
         if (j.isEmpty) return CmdResult(false, t('err_no_ack'));
         final ok = j['ok'] == true;
         final data = j['data'];
-        final err = (j['error'] ?? '').toString();
+        final err = _errText((j['error'] ?? '').toString());
         return CmdResult(ok, ok ? null : (err.isNotEmpty ? err : t('err_not_confirmed')),
             data is Map<String, dynamic> ? data : null);
       }
@@ -779,6 +951,96 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       return CmdResult(false, t('err_failed'));
     }
+  }
+
+  String _errText(String e) {
+    switch (e) {
+      case 'forbidden':
+        return t('err_forbidden');
+      case 'local_only':
+        return t('err_local_only');
+      case 'emqx_not_set':
+        return t('users_need_emqx');
+      default:
+        return e;
+    }
+  }
+
+  // ---------- shared users (owner) ----------
+  Future<List<HubUser>?> loadUsers() async {
+    final r = await api('users');
+    if (!r.ok) {
+      _fail(r);
+      return null;
+    }
+    emqxSet = r.data?['emqx'] == true;
+    final l = r.data?['users'];
+    return l is List ? l.whereType<Map<String, dynamic>>().map(HubUser.fromJson).toList() : <HubUser>[];
+  }
+
+  Future<CmdResult> setEmqx(String url, String key, String secret) => api('emqx_config', {'url': url, 'key': key, 'secret': secret});
+
+  /// Returns the invite code in [CmdResult.data]['code'].
+  Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
+      api('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
+
+  Future<CmdResult> updateUser(HubUser u) =>
+      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')});
+
+  Future<CmdResult> revokeUser(String id) => api('user_revoke', {'id': id});
+
+  // ---------- joining someone else's hub ----------
+  static Map<String, dynamic>? decodeInvite(String code) {
+    try {
+      var c = code.trim().replaceAll(RegExp(r'\s'), '').replaceAll('-', '+').replaceAll('_', '/');
+      while (c.length % 4 != 0) {
+        c += '=';
+      }
+      final j = jsonDecode(utf8.decode(base64.decode(c)));
+      if (j is! Map<String, dynamic> || j['u'] == null || j['pw'] == null || j['hub'] == null || j['h'] == null) return null;
+      return j;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> joinWithCode(String code) async {
+    final j = decodeInvite(code);
+    if (j == null) return false;
+    await saveSettings(HubSettings(
+      hubId: j['hub'].toString().toUpperCase(),
+      brokerHost: j['h'].toString(),
+      brokerPort: (j['p'] as num?)?.toInt() ?? 8883,
+      username: j['u'].toString(),
+      password: j['pw'].toString(),
+      localHost: '',
+      sharedUser: j['u'].toString(),
+      sharedName: (j['n'] ?? '').toString(),
+      sharedRole: (j['r'] as num?)?.toInt() ?? 0,
+    ));
+    return true;
+  }
+
+  /// Back to being the owner of your own hub (default connection settings).
+  Future<void> leaveShared() => saveSettings(HubSettings());
+
+  bool get isShared => settings.isShared;
+  bool get canControl => !settings.isShared || settings.sharedRole >= 1;
+  bool get canAdmin => !settings.isShared || settings.sharedRole >= 2;
+
+  // ---------- account ----------
+  Future<void> setAccount(String type, {String email = ''}) async {
+    accountType = type;
+    googleEmail = email;
+    await _prefs?.setString('accountType', type);
+    await _prefs?.setString('googleEmail', email);
+    notifyListeners();
+  }
+
+  Future<void> markSynced() async {
+    lastSync = DateTime.now();
+    await _prefs?.setString('lastSync', lastSync!.toIso8601String());
+    notifyListeners();
   }
 
   void _fail(CmdResult r) {

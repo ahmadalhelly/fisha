@@ -177,7 +177,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           FilterChip(
                             label: Text(t('whole_strip')),
                             selected: sel,
-                            selectedColor: C.accentBg,
+                            selectedColor: _chipOn,
                             checkmarkColor: C.accent,
                             labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
                             side: BorderSide(color: sel ? C.tileOnBorder : C.border),
@@ -189,7 +189,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             FilterChip(
                               label: Text(s.outletName(st, o.n)),
                               selected: sel,
-                              selectedColor: C.accentBg,
+                              selectedColor: _chipOn,
                               checkmarkColor: C.accent,
                               labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
                               side: BorderSide(color: sel ? C.tileOnBorder : C.border),
@@ -220,3 +220,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         Expanded(child: Text(text, style: TextStyle(color: C.textSoft, height: 1.5))),
       ]);
 }
+
+/// Selected chip fill: a clearly saturated green on the dark themes, the usual tint on light ones.
+Color get _chipOn => C.dark ? Color.alphaBlend(C.accent.withValues(alpha: 0.32), C.surface2) : C.accentBg;

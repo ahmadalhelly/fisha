@@ -1472,13 +1472,14 @@ ApiRes api(String path, const String& b) {
   // ---- v2.9: cloud password + shared users (owner only) ----
   if (path == "cloud") {                          // {"pass":"..."} local network only
     if (apiSrc != 0) return errRes("local_only");
+    bool changed = false;
     if (jsonHas(b, "pass")) {
       String np = jsonValue(b, "pass");
-      if (np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
-      Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end();
-      secMqtt = np;
+      if (!np.length() || np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
+      changed = np != secMqtt;
+      if (changed) { Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end(); secMqtt = np; }
     }
-    mqttRestartReq = true;
+    if (changed || !mqttUp) mqttRestartReq = true;   // same password and already online: nothing to do
     stateDirty = true;
     return okRes();
   }

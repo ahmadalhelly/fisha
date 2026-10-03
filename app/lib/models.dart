@@ -335,3 +335,20 @@ class Room {
         stripMacs: stripMacs ?? this.stripMacs,
       );
 }
+
+/// A person the owner shared the hub with (hub 2.9+). role 0 view · 1 control · 2 admin.
+class HubUser {
+  final String id;
+  String name;
+  int role;
+  bool all;
+  List<String> strips;
+  HubUser({required this.id, this.name = '', this.role = 1, this.all = true, List<String>? strips}) : strips = strips ?? [];
+  factory HubUser.fromJson(Map<String, dynamic> j) => HubUser(
+        id: _s(j['id']),
+        name: _s(j['name']),
+        role: _i(j['role'], 1),
+        all: j['all'] == true,
+        strips: j['strips'] is List ? (j['strips'] as List).map((e) => e.toString().toUpperCase()).toList() : [],
+      );
+}

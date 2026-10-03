@@ -5,6 +5,7 @@ import 'app_state.dart';
 import 'i18n.dart';
 import 'screens/energy_screen.dart';
 import 'screens/events_screen.dart';
+import 'screens/account_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
@@ -54,7 +55,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  String _signature() => '${s.themePref.index}-${s.langPref.index}';
+  String _signature() => '${s.themePref.index}-${s.langPref.index}-${s.accountType.isEmpty}';
 
   void _onState() {
     final sig = _signature();
@@ -113,7 +114,11 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
       ],
       home: AnimatedSwitcher(
         duration: const Duration(milliseconds: 500),
-        child: _booted ? Shell(key: const ValueKey('shell'), state: s) : const BootScreen(key: ValueKey('boot')),
+        child: !_booted
+            ? const BootScreen(key: ValueKey('boot'))
+            : s.accountType.isEmpty
+                ? AccountScreen(key: const ValueKey('account'), state: s, firstRun: true)
+                : Shell(key: const ValueKey('shell'), state: s),
       ),
     );
   }

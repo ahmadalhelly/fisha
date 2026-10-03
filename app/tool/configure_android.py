@@ -321,4 +321,10 @@ elif os.path.exists(groovy):
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
+# store id tied to the app name (namespace / Kotlin package stay com.mttlhub.mttl_hub)
+for gf in (kts, groovy):
+    if os.path.exists(gf):
+        g = open(gf).read()
+        g = re.sub(r'applicationId\s*=?\s*"[^"]+"', lambda m: m.group(0).split('"')[0] + '"com.fisha.app"', g, count=1)
+        open(gf, "w").write(g)
 print("android configured:", NAME)

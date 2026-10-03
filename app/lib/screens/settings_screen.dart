@@ -4,10 +4,12 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'account_screen.dart';
 import 'backup_screen.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
+import 'users_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
 import 'wifi_screen.dart';
@@ -62,6 +64,27 @@ class SettingsScreen extends StatelessWidget {
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 18),
               _group(_tr('الحساب', 'Account'), [
+                _row(
+                  context,
+                  Icons.account_circle_outlined,
+                  C.accent,
+                  t('acc_title'),
+                  st.isShared
+                      ? t('shared_short')
+                      : st.accountType == 'google'
+                          ? (st.googleEmail.isEmpty ? t('acc_google') : st.googleEmail)
+                          : t('acc_local'),
+                  () => _open(context, AccountScreen(state: st)),
+                ),
+                if (!st.isShared)
+                  _row(
+                    context,
+                    Icons.group_outlined,
+                    C.accent2,
+                    t('users_title'),
+                    st.usersCount == 0 ? '—' : '${st.usersCount}',
+                    () => _open(context, UsersScreen(state: st)),
+                  ),
                 _row(
                   context,
                   Icons.person_outline,

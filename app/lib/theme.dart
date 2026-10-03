@@ -15,9 +15,9 @@ class C {
   static Color muted = const Color(0xFF8798B3);
   static Color faint = const Color(0xFF4D5C77);
   static Color accent = const Color(0xFF2EE6B0);
-  static Color accentBg = const Color(0xFF0F4A3C);
+  static Color accentBg = const Color(0xFF0E2A2B);
   static Color tileOn = const Color(0xFF0D2524);
-  static Color tileOnBorder = const Color(0xFF22A884);
+  static Color tileOnBorder = const Color(0xFF1E7D68);
   static Color onAccent = const Color(0xFF032019);
   static Color switchOff = const Color(0xFF2A3855);
   static Color miniOff = const Color(0xFF18233B);
@@ -49,9 +49,9 @@ class C {
         muted = const Color(0xFF8798B3);
         faint = const Color(0xFF4D5C77);
         accent = const Color(0xFF2EE6B0);
-        accentBg = const Color(0xFF0F4A3C);
+        accentBg = const Color(0xFF0E2A2B);
         tileOn = const Color(0xFF0D2524);
-        tileOnBorder = const Color(0xFF22A884);
+        tileOnBorder = const Color(0xFF1E7D68);
         onAccent = const Color(0xFF032019);
         switchOff = const Color(0xFF2A3855);
         miniOff = const Color(0xFF18233B);
@@ -101,9 +101,9 @@ class C {
         muted = const Color(0xFF98A1AD);
         faint = const Color(0xFF626A75);
         accent = const Color(0xFF4FD8B8);
-        accentBg = const Color(0xFF1E5546);
+        accentBg = const Color(0xFF1F3833);
         tileOn = const Color(0xFF233A35);
-        tileOnBorder = const Color(0xFF45B496);
+        tileOnBorder = const Color(0xFF3E8C79);
         onAccent = const Color(0xFF0B2A23);
         switchOff = const Color(0xFF474E58);
         miniOff = const Color(0xFF2C3138);

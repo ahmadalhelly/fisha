@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main, agy/ui-polish-1]
+    branches: [main, fisha-1.8]
     paths: ['app/**', '.github/workflows/build-app.yml']
   workflow_dispatch:
 
@@ -92,11 +92,11 @@ jobs:
             echo "===== LAUNCH TEST (emulator started) =====" >> build.log
             adb install -r Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
             adb logcat -c
-            adb shell am start -n com.mttlhub.mttl_hub/.MainActivity
+            adb shell monkey -p com.fisha.app -c android.intent.category.LAUNCHER 1
             sleep 25
             adb logcat -d > launch.log || true
-            (adb shell pidof com.mttlhub.mttl_hub && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
-            grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
+            (adb shell pidof com.fisha.app && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
+            grep -A60 -E "FATAL EXCEPTION|Process: com.fisha" launch.log | head -150 >> build.log || true
             grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
 
       - name: Publish APK as a release
