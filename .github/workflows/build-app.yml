@@ -37,7 +37,6 @@ jobs:
           set -o pipefail
           {
             flutter --version
-            flutter create --platforms=android --org com.mttlhub --project-name mttl_hub .
             pip install --quiet --break-system-packages pillow || pip install --quiet pillow
             python3 tool/configure_android.py
             flutter pub get
