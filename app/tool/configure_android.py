@@ -236,7 +236,7 @@ open(os.path.join(xml_dir, "fisha_widget_info.xml"), "w").write('''<?xml version
 </appwidget-provider>
 ''')
 
-# gradle signing
+# gradle signing and dependencies
 kts = os.path.join(APP, "android", "app", "build.gradle.kts")
 groovy = os.path.join(APP, "android", "app", "build.gradle")
 if os.path.exists(kts):
@@ -254,11 +254,18 @@ if os.path.exists(kts):
         )
         g = g.replace("    buildTypes {", block + "    buildTypes {", 1)
     g = g.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
-    # flutter_local_notifications needs core library desugaring
     if "isCoreLibraryDesugaringEnabled" not in g:
         g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", g, count=1)
-        g += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+    
+    # ensure home_widget project and desugar dependencies are linked
+    dep_entries = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n    implementation(project(":home_widget"))'
+    if "dependencies {" in g:
+        if 'project(":home_widget")' not in g:
+            g = re.sub(r"dependencies\s*\{", f"dependencies {{\n{dep_entries}", g, count=1)
+    else:
+        g += f'\ndependencies {{\n{dep_entries}\n}}\n'
     open(kts, "w").write(g)
+
 elif os.path.exists(groovy):
     g = open(groovy).read()
     if "signingConfigs {" not in g:
@@ -277,7 +284,13 @@ elif os.path.exists(groovy):
     g = g.replace('signingConfig = signingConfigs.debug', 'signingConfig = signingConfigs.release')
     if "coreLibraryDesugaringEnabled" not in g:
         g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        coreLibraryDesugaringEnabled true", g, count=1)
-        g += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
+    
+    dep_entries = "    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n    implementation project(':home_widget')"
+    if "dependencies {" in g:
+        if "project(':home_widget')" not in g:
+            g = re.sub(r"dependencies\s*\{", f"dependencies {{\n{dep_entries}", g, count=1)
+    else:
+        g += f"\ndependencies {{\n{dep_entries}\n}}\n"
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
