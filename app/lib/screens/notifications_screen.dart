@@ -89,11 +89,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     activeTrackColor: C.accent,
                     value: _native,
                     onChanged: _toggleNative,
-                    title: Text(_tr('إشعارات لحظية على الموبايل', 'Instant notifications on this phone'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    title: Text(_tr('إشعارات لحظية على الموبايل', 'Instant notifications on this phone'), style: TextStyle(fontWeight: FontWeight.w600, color: C.text.withValues(alpha: 0.92))),
                     subtitle: Text(
                         _tr('من غير أي تطبيق تاني. Fisha بيفضل شغال في الخلفية بإشعار صغير ثابت، وبيوصلك التنبيه حتى لو قفلت التطبيق أو كنت برا البيت.',
                             'No extra app. Fisha keeps a small service running in the background and alerts you even when it is closed or you are away.'),
-                        style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+                        style: TextStyle(color: C.text.withValues(alpha: 0.7), fontSize: 12, height: 1.5)),
                   ),
                   if (_native)
                     OutlinedButton.icon(
@@ -160,7 +160,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         dense: true,
                         activeTrackColor: C.accent,
                         value: s.notifyTypes & (1 << i) != 0,
-                        title: Text(t('nt_${_typeKeys[i]}')),
+                        title: Text(t('nt_${_typeKeys[i]}'), style: TextStyle(color: C.text.withValues(alpha: 0.92))),
                         onChanged: (v) => s.setNotifyConfig(types: v ? s.notifyTypes | (1 << i) : s.notifyTypes & ~(1 << i)),
                       ),
                   ]),
