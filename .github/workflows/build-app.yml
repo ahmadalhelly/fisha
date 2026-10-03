@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, agy/ui-polish-1]
     paths: ['app/**', '.github/workflows/build-app.yml']
   workflow_dispatch:
 
