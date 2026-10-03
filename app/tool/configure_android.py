@@ -109,26 +109,22 @@ for ma in glob.glob(os.path.join(APP, "android", "app", "src", "main", "kotlin",
             content = re.sub(r'class\s+MainActivity\s*:\s*[^\n{]+', 'class MainActivity: io.flutter.embedding.android.FlutterFragmentActivity()', content)
         open(ma, "w").write(content)
 
-# generate home_widget Android files
+# home-screen widget. A plain AppWidgetProvider that reads the values home_widget saves in the
+# "HomeWidgetPreferences" SharedPreferences, so the app does not compile against the plugin's classes.
 widget_kt_dir = os.path.join(APP, "android", "app", "src", "main", "kotlin", "com", "mttlhub", "mttl_hub")
 os.makedirs(widget_kt_dir, exist_ok=True)
 open(os.path.join(widget_kt_dir, "FishaWidgetProvider.kt"), "w").write('''package com.mttlhub.mttl_hub
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.widget.RemoteViews
-import es.antonborras.home_widget.HomeWidgetProvider
 
-class FishaWidgetProvider : HomeWidgetProvider() {
-    override fun onUpdate(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray,
-        widgetData: SharedPreferences
-    ) {
+class FishaWidgetProvider : AppWidgetProvider() {
+    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        val widgetData = context.getSharedPreferences("HomeWidgetPreferences", Context.MODE_PRIVATE)
         for (appWidgetId in appWidgetIds) {
             val views = RemoteViews(context.packageName, R.layout.widget_layout)
             views.setTextViewText(R.id.widget_total_w, widgetData.getString("total_w", "0 W"))
@@ -236,7 +232,7 @@ open(os.path.join(xml_dir, "fisha_widget_info.xml"), "w").write('''<?xml version
 </appwidget-provider>
 ''')
 
-# gradle signing and dependencies
+# gradle signing and desugaring (needed by flutter_local_notifications)
 kts = os.path.join(APP, "android", "app", "build.gradle.kts")
 groovy = os.path.join(APP, "android", "app", "build.gradle")
 if os.path.exists(kts):
@@ -256,16 +252,13 @@ if os.path.exists(kts):
     g = g.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
     if "isCoreLibraryDesugaringEnabled" not in g:
         g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", g, count=1)
-    
-    # ensure home_widget project and desugar dependencies are linked
-    dep_entries = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n    implementation(project(":home_widget"))'
-    if "dependencies {" in g:
-        if 'project(":home_widget")' not in g:
-            g = re.sub(r"dependencies\s*\{", f"dependencies {{\n{dep_entries}", g, count=1)
-    else:
-        g += f'\ndependencies {{\n{dep_entries}\n}}\n'
+    if "desugar_jdk_libs" not in g:
+        dep = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+        if re.search(r"(?m)^dependencies\s*\{", g):
+            g = re.sub(r"(?m)^dependencies\s*\{", "dependencies {\n" + dep, g, count=1)
+        else:
+            g += "\ndependencies {\n" + dep + "\n}\n"
     open(kts, "w").write(g)
-
 elif os.path.exists(groovy):
     g = open(groovy).read()
     if "signingConfigs {" not in g:
@@ -284,13 +277,12 @@ elif os.path.exists(groovy):
     g = g.replace('signingConfig = signingConfigs.debug', 'signingConfig = signingConfigs.release')
     if "coreLibraryDesugaringEnabled" not in g:
         g = re.sub(r"compileOptions\s*\{", "compileOptions {\n        coreLibraryDesugaringEnabled true", g, count=1)
-    
-    dep_entries = "    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n    implementation project(':home_widget')"
-    if "dependencies {" in g:
-        if "project(':home_widget')" not in g:
-            g = re.sub(r"dependencies\s*\{", f"dependencies {{\n{dep_entries}", g, count=1)
-    else:
-        g += f"\ndependencies {{\n{dep_entries}\n}}\n"
+    if "desugar_jdk_libs" not in g:
+        dep = "    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'"
+        if re.search(r"(?m)^dependencies\s*\{", g):
+            g = re.sub(r"(?m)^dependencies\s*\{", "dependencies {\n" + dep, g, count=1)
+        else:
+            g += "\ndependencies {\n" + dep + "\n}\n"
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
