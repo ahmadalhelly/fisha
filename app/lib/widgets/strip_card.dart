@@ -335,14 +335,17 @@ class _MasterSocket extends StatelessWidget {
     final pending = state.isPending(s.mac, 0);
     
     final load = on ? (s.livePower / kStripMaxW).clamp(0.0, 1.0) : 0.0;
-    final String lbl = allOn ? t('all_on') : (allOff ? t('all_off') : t('n_of_4', {'a': s.onCount, 'b': 4}));
+    final String lbl = allOn ? t('master_all_on') : (allOff ? t('master_all_off') : t('master_n_of_4', {'a': s.onCount}));
 
     return InkWell(
       borderRadius: BorderRadius.circular(18),
       onTap: pending ? null : () {
         if (!online) return;
-        if (allOn) guardedAllOff(context, state, s);
-        else state.setOutlet(s.mac, 0, true);
+        if (allOn) {
+          guardedAllOff(context, state, s);
+        } else {
+          guardedAllOn(context, state, s);
+        }
       },
       onLongPress: () => openStripSheet(context, state, s.mac),
       child: Padding(

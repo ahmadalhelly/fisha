@@ -908,25 +908,7 @@ ApiRes api(String path, const String& b) {
     if (outlet < 0 || outlet > 4 || !jsonHas(b, "on")) return errRes("bad request");
     return setOutlets(strips[idx], outlet, jsonBool(b, "on")) ? okRes() : errRes("not confirmed");
   }
-  if (path == "forget") {
-    int idx = stripFor(mac);
-    if (idx >= 0) {
-      Strip& s = strips[idx];
-      cfg.remove(("n" + s.mac).c_str());
-      for (int k = 1; k <= 4; k++) cfg.remove(("n" + s.mac + String(k)).c_str());
-      cfg.remove(("l" + s.mac).c_str());
-      cfg.remove(("s" + s.mac).c_str());
-      cfg.remove(("p" + s.mac).c_str());
-      cfg.remove(("a" + s.mac).c_str());
-      cfg.remove(("e" + s.mac).c_str());
-      cfg.remove(("m" + s.mac).c_str());
-      cfg.remove(("k" + s.mac).c_str());
-      s.keepOnMask = 0;
-      s.keepOnHold = 0;
-      dropStrip(s, "forgot");
-    }
-    return okRes();
-  }
+
   if (path == "refresh") {
     for (int i = 0; i < MAX_STRIPS; i++) {
       Strip& s = strips[i];
@@ -958,6 +940,7 @@ ApiRes api(String path, const String& b) {
         } else s.lockMask &= ~bit;
         saveLocks(s);
       } else if (path == "keepon") {
+        if (outlet < 1 || outlet > 4) return errRes("bad outlet");
         if (jsonBool(b, "on")) s.keepOnMask |= bit; else s.keepOnMask &= ~bit;
         cfg.putUChar(("k" + s.mac).c_str(), s.keepOnMask);
         if ((s.keepOnMask & bit) && !s.o[outlet - 1].on) sendOnOff(s, outlet, true);

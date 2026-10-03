@@ -60,7 +60,8 @@ class _WifiPainter extends CustomPainter {
     // arcs
     paint.style = PaintingStyle.stroke;
     
-    final radii = [size.height * 0.32, size.height * 0.56, size.height * 0.80];
+    final maxR = (size.width / 2 - paint.strokeWidth / 2) / math.sin(50 * math.pi / 180);
+    final radii = [maxR * 0.36, maxR * 0.68, maxR];
     for (int i = 0; i < 3; i++) {
       paint.color = (i + 1) <= litLevel ? color : unlitColor;
       final radius = radii[i];
