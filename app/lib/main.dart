@@ -215,8 +215,10 @@ class _ShellState extends State<Shell> {
           body: IndexedStack(index: state.tab, children: pages),
           bottomNavigationBar: NavigationBarTheme(
             data: NavigationBarThemeData(
+              height: 62,
               backgroundColor: C.nav,
               indicatorColor: C.accentBg,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               labelTextStyle: WidgetStateProperty.resolveWith(
                 (st) => TextStyle(
                   fontSize: 11,
@@ -229,6 +231,7 @@ class _ShellState extends State<Shell> {
               ),
             ),
             child: NavigationBar(
+              height: 62,
               selectedIndex: state.tab,
               onDestinationSelected: state.setTab,
               destinations: [

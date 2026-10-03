@@ -233,7 +233,7 @@ class StripCard extends StatelessWidget {
               ? [BoxShadow(color: C.accent.withValues(alpha: C.dark ? 0.08 : 0.12), blurRadius: 24, offset: const Offset(0, 8))]
               : null,
         ),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             if (dragHandle != null) dragHandle!,
@@ -298,7 +298,7 @@ class StripCard extends StatelessWidget {
           ]),
           if (state.showMac)
             Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           // the strip body
           Container(
             padding: const EdgeInsets.fromLTRB(6, 10, 6, 8),
@@ -315,7 +315,7 @@ class StripCard extends StatelessWidget {
               Row(children: [
                 for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
               ]),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               _MasterSocket(state: state, strip: s),
             ]),
           ),
@@ -379,10 +379,10 @@ class _MasterSocket extends StatelessWidget {
             duration: const Duration(milliseconds: 700),
             curve: Curves.easeOutCubic,
             builder: (_, v, __) => SizedBox(
-              width: 62,
-              height: 62,
+              width: 54,
+              height: 54,
               child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(
+                CustomPaint(size: const Size(54, 54), painter: _SocketPainter(
                   on: on, load: v, level: loadLevel(s.livePower, kStripMaxW), hot: s.maxTemp >= 60, dark: C.dark,
                   isMaster: true, mixed: mixed,
                 )),
@@ -390,14 +390,8 @@ class _MasterSocket extends StatelessWidget {
               ]),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(lbl, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
-          Text(
-            on ? '${s.livePower.toStringAsFixed(s.livePower < 10 ? 1 : 0)} W' : (online ? t('off') : '—'),
-            textDirection: TextDirection.ltr,
-            style: on ? mono(11, color: loadColor(s.livePower, kStripMaxW), weight: FontWeight.w500) : TextStyle(fontSize: 11, color: C.faint),
-          ),
-          if (online) const SizedBox(height: 11),
         ]),
       ),
     );
@@ -434,15 +428,15 @@ class _Socket extends StatelessWidget {
             duration: const Duration(milliseconds: 700),
             curve: Curves.easeOutCubic,
             builder: (_, v, __) => SizedBox(
-              width: 62,
-              height: 62,
+              width: 54,
+              height: 54,
               child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(on: on, load: v, level: loadLevel(o.powerW, kOutletMaxW), hot: o.tempC >= 60, dark: C.dark)),
+                CustomPaint(size: const Size(54, 54), painter: _SocketPainter(on: on, load: v, level: loadLevel(o.powerW, kOutletMaxW), hot: o.tempC >= 60, dark: C.dark)),
                 if (pending) SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
               ]),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(state.outletName(strip, o.n),
               maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
           Text(
