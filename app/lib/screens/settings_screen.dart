@@ -13,7 +13,7 @@ import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-const appVersion = '1.6.0';
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 
 /// Settings home: short, grouped, every detail lives one tap deeper.
 class SettingsScreen extends StatelessWidget {
