@@ -1,0 +1,513 @@
+diff --git a/firmware/mttl_hub/mttl_hub.ino b/firmware/mttl_hub/mttl_hub.ino
+index 987d81b..4402d3c 100644
+--- a/firmware/mttl_hub/mttl_hub.ino
++++ b/firmware/mttl_hub/mttl_hub.ino
+@@ -25,6 +25,7 @@
+ #include <time.h>
+ #include "mqtt_client.h"
+ #include "esp_idf_version.h"
++#include "mbedtls/base64.h"
+ #include <vector>
+ 
+ // ================== CONFIG ==================
+@@ -49,7 +50,7 @@ String secSsid, secWifi, secMqtt, secOta;
+ // Wi-Fi change requested from the app (tested before it is kept)
+ volatile bool wifiTestReq = false;
+ String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
+-const char* FW_VERSION = "2.8";
++const char* FW_VERSION = "2.9";
+ 
+ static const char MQTT_CA[] = R"PEM(
+ -----BEGIN CERTIFICATE-----
+@@ -135,6 +136,9 @@ struct Autom { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; f
+ struct Ev { uint32_t ts = 0; String type, mac, msg; int outlet = 0; };
+ struct ApiRes { bool ok; String err; String data; };
+ struct Note { String type, mac, msg; int outlet; };   // queued phone notification (defined early for Arduino auto-prototypes)
++// v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
++struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; };
++struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
+ 
+ Strip strips[MAX_STRIPS];
+ ELog elogs[MAX_STRIPS];
+@@ -161,12 +165,21 @@ uint32_t lastPoll = 0, pollCount = 0;
+ volatile bool stateDirty = true;
+ 
+ // MQTT
+-struct MqttCmd { char payload[640]; };
++struct MqttCmd { char payload[640]; char topic[96]; };
+ esp_mqtt_client_handle_t mqtt = nullptr;
+ QueueHandle_t mqttQ = nullptr;
+ volatile bool mqttUp = false, mqttFreshConnect = false;
+ String hubId, tStatus, tInfo, tState, tEvent, tCmd, tAck;
+ char mqttClientId[32];
++// v2.9: why the cloud link is down, and who sent the command being handled
++volatile int mqttErrKind = 0, mqttErrCode = 0, mqttErrTls = 0;   // written by the MQTT task
++String mqttErr = "";                                               // "" | no_pass | auth | refused | tls | net
++volatile bool mqttRestartReq = false;
++uint8_t apiSrc = 0;                                                // 0 local HTTP · 1 owner MQTT · 2 shared user
++const uint8_t MAX_USERS = 10;
++HubUser users[MAX_USERS];
++uint8_t userCount = 0;
++String exUrl, exKey, exSec, exLast;                                // EMQX management API (NVS "sec"), never returned
+ 
+ // provisioning
+ volatile bool provRequested = false;
+@@ -354,6 +367,8 @@ void addEvent(const String& type, const String& mac, int outlet, const String& m
+              ",\"msg\":\"" + jsonEsc(msg) + "\"}";
+   Serial.printf("[event] %s\n", j.c_str());
+   mqttPub(tEvent, j, 1, false);
++  for (int u = 0; u < userCount; u++)
++    if (mac.length() ? userHas(users[u], mac) : users[u].all) mqttPub("mttl/" + hubId + "/u/" + users[u].id + "/event", j, 1, false);
+   sseSend("event", j);
+   queueNotify(type, mac, outlet, msg);
+ }
+@@ -1115,6 +1130,9 @@ String buildStateJson() {
+              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
+              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
+              "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
++             ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +
++             ",\"user\":\"" + String(MQTT_USER) + "\",\"host\":\"" + mqttHost() + "\"}" +
++             ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
+              ",\"timers\":" + timersJson() + ",\"devices\":[";
+   bool first = true;
+   for (int i = 0; i < MAX_STRIPS; i++) {
+@@ -1179,6 +1197,207 @@ String energyJson(int i) {
+   return j + "]}";
+ }
+ 
++
++// ---------- v2.9 shared users ----------
++ApiRes api(String path, const String& b);
++ApiRes okRes(const String& data);
++ApiRes okRes();
++ApiRes errRes(const String& e);
++void publishUserState(const HubUser& u);
++const uint32_t USERS_MAGIC = 0x55535231;
++void loadUsers() {
++  Preferences up; up.begin("users", true);
++  static UsersNV nv;
++  memset(&nv, 0, sizeof nv);
++  if (up.getBytesLength("list") == sizeof nv) up.getBytes("list", &nv, sizeof nv);
++  up.end();
++  userCount = 0;
++  if (nv.magic != USERS_MAGIC) return;
++  for (int i = 0; i < nv.count && i < MAX_USERS; i++) if (nv.u[i].id[0]) users[userCount++] = nv.u[i];
++}
++void saveUsers() {
++  static UsersNV nv;
++  memset(&nv, 0, sizeof nv);
++  nv.magic = USERS_MAGIC; nv.count = userCount;
++  for (int i = 0; i < userCount; i++) nv.u[i] = users[i];
++  Preferences up; up.begin("users", false); up.putBytes("list", &nv, sizeof nv); up.end();
++}
++void loadEmqx() {
++  Preferences sp; sp.begin("sec", true);
++  exUrl = sp.getString("ex_url", ""); exKey = sp.getString("ex_key", ""); exSec = sp.getString("ex_sec", "");
++  sp.end();
++}
++bool emqxReady() { return exUrl.length() && exKey.length() && exSec.length(); }
++int findUser(const String& id) { for (int i = 0; i < userCount; i++) if (id == users[i].id) return i; return -1; }
++bool userHas(const HubUser& u, const String& macIn) {
++  if (u.all) return true;
++  String m = macIn; m.toUpperCase();
++  for (int k = 0; k < u.n && k < 6; k++) if (m == u.strips[k]) return true;
++  return false;
++}
++void parseStrips(HubUser& u, const String& list) {
++  u.n = 0; memset(u.strips, 0, sizeof u.strips);
++  for (String p : split(list, ',')) {
++    p.trim(); p.toUpperCase();
++    if (p.length() == 12 && isHex(p) && u.n < 6) strlcpy(u.strips[u.n++], p.c_str(), 13);
++  }
++}
++String userJson(const HubUser& u) {
++  String j = "{\"id\":\"" + String(u.id) + "\",\"name\":\"" + jsonEsc(String(u.name)) + "\",\"role\":" + String(u.role) +
++             ",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
++  for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
++  return j + "]}";
++}
++String randText(int len) {
++  static const char A[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
++  String s; for (int i = 0; i < len; i++) s += A[esp_random() % (sizeof(A) - 1)];
++  return s;
++}
++String b64url(const String& in) {
++  size_t olen = 0;
++  size_t cap = ((in.length() + 2) / 3) * 4 + 4;
++  std::vector<unsigned char> out(cap);
++  if (mbedtls_base64_encode(out.data(), cap, &olen, (const unsigned char*)in.c_str(), in.length()) != 0) return "";
++  String r;
++  for (size_t i = 0; i < olen; i++) { char c = out[i]; if (c == '+') c = '-'; else if (c == '/') c = '_'; else if (c == '=') continue; r += c; }
++  return r;
++}
++String mqttHost() {
++  String u = MQTT_URI;
++  int s = u.indexOf("://"); if (s >= 0) u = u.substring(s + 3);
++  int c = u.indexOf(':'); if (c > 0) u = u.substring(0, c);
++  return u;
++}
++// One HTTPS call to the EMQX management API. Returns the HTTP code (<0 = no connection).
++int emqxCall(const char* method, const String& path, const String& body) {
++  bool paused = false;
++  if (mqtt && ESP.getMaxAllocHeap() < 52000) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; delay(100); }
++  int code;
++  {
++    WiFiClientSecure tls;
++    tls.setCACert(MQTT_CA);
++    HTTPClient h;
++    h.setTimeout(10000);
++    if (!h.begin(tls, exUrl + path)) code = -1;
++    else {
++      h.setAuthorization(exKey.c_str(), exSec.c_str());
++      h.addHeader("Content-Type", "application/json");
++      code = h.sendRequest(method, body);
++      exLast = h.getString().substring(0, 160);
++      h.end();
++    }
++  }
++  if (paused) esp_mqtt_client_start(mqtt);
++  Serial.printf("[emqx] %s %s -> %d\n", method, path.c_str(), code);
++  return code;
++}
++bool http2xx(int c) { return c >= 200 && c < 300; }
++const char* EX_AUTHN = "/api/v5/authentication/password_based:built_in_database/users";
++const char* EX_AUTHZ = "/api/v5/authorization/sources/built_in_database/rules/users";
++
++// what a shared user may call · 0 view · 1 control · 2 admin · -1 never
++int needRole(const String& p) {
++  if (p == "state" || p == "events" || p == "energy" || p == "schedules" || p == "automations") return 0;
++  if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete") return 1;
++  if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "automation_save" || p == "automation_delete") return 2;
++  return -1;
++}
++// the mac an action touches ("" = none / global)
++String actionMac(const String& p, const String& b) {
++  if (p == "timer_cancel") {
++    uint32_t id = (uint32_t)jsonValue(b, "tid").toInt();
++    for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used && timers[t].id == id) return String(timers[t].mac);
++    return "?";
++  }
++  if (p == "schedule_delete" || (p == "schedule_save" && jsonValue(b, "sid").toInt())) {
++    uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
++    for (int i = 0; i < schedCount; i++) if (scheds[i].id == id) {
++      if (p == "schedule_save" && jsonHas(b, "mac") && !jsonValue(b, "mac").equalsIgnoreCase(scheds[i].mac)) return "?";
++      return String(scheds[i].mac);
++    }
++    return p == "schedule_delete" ? "?" : jsonValue(b, "mac");
++  }
++  if (p == "automation_delete" || (p == "automation_save" && jsonValue(b, "aid").toInt())) {
++    uint32_t id = (uint32_t)jsonValue(b, "aid").toInt();
++    for (int i = 0; i < autoCount; i++) if (autos[i].id == id) {
++      if (p == "automation_save" && jsonHas(b, "mac") && !jsonValue(b, "mac").equalsIgnoreCase(autos[i].mac)) return "?";
++      return String(autos[i].mac);
++    }
++    return p == "automation_delete" ? "?" : jsonValue(b, "mac");
++  }
++  return jsonValue(b, "mac");
++}
++String userStateJson(const HubUser& u) {
++  String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
++             ",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
++  bool first = true;
++  uint32_t now = millis();
++  for (int t = 0; t < MAX_TIMERS; t++) {
++    const Timer& x = timers[t];
++    if (!x.used || !userHas(u, x.mac)) continue;
++    if (!first) j += ",";
++    first = false;
++    long in = (int32_t)(x.at - now) / 1000;
++    j += "{\"tid\":" + String(x.id) + ",\"mac\":\"" + String(x.mac) + "\",\"outlet\":" + String(x.outlet) +
++         ",\"kind\":\"" + (x.kind == 2 ? "loop" : x.kind == 1 ? "cycle" : (x.on ? "on" : "off")) + "\",\"phase\":" + String(x.phase) +
++         ",\"in_s\":" + String(in < 0 ? 0 : in) + ",\"off_s\":" + String(x.offMs / 1000) + ",\"on_s\":" + String(x.onMs / 1000) +
++         ",\"repeat_s\":" + String(x.periodS) + "}";
++  }
++  j += "],\"devices\":[";
++  first = true;
++  for (int i = 0; i < MAX_STRIPS; i++) {
++    if (!strips[i].used || !strips[i].identified || !userHas(u, strips[i].mac)) continue;
++    if (!first) j += ",";
++    j += stripJson(i);
++    first = false;
++  }
++  for (int k = 0; k < knownCount; k++) {
++    if (findStrip(known[k].mac) >= 0 || !userHas(u, known[k].mac)) continue;
++    if (!first) j += ",";
++    j += offlineStripJson(known[k]);
++    first = false;
++  }
++  return j + "]}";
++}
++// list actions answered per user (filtered to the user's strips)
++bool userList(const HubUser& u, const String& p, ApiRes& r) {
++  String j;
++  if (p == "schedules") {
++    j = "{\"schedules\":["; bool f = true;
++    for (int i = 0; i < schedCount; i++) if (userHas(u, scheds[i].mac)) { if (!f) j += ","; f = false; j += schedJson(scheds[i]); }
++    r = okRes(j + "]}"); return true;
++  }
++  if (p == "automations") {
++    j = "{\"automations\":["; bool f = true;
++    for (int i = 0; i < autoCount; i++) if (userHas(u, autos[i].mac)) { if (!f) j += ","; f = false; j += autoJson(autos[i]); }
++    r = okRes(j + "]}"); return true;
++  }
++  if (p == "events") {
++    j = "{\"events\":["; bool f = true;
++    for (int n = 0; n < evCount; n++) {
++      const Ev& e = events[((int)evHead - 1 - n + MAX_EVENTS) % MAX_EVENTS];
++      if (e.mac.length() ? !userHas(u, e.mac) : !u.all) continue;
++      if (!f) j += ","; f = false;
++      j += "{\"ts\":" + String(e.ts) + ",\"type\":\"" + e.type + "\",\"mac\":\"" + e.mac + "\",\"outlet\":" + String(e.outlet) +
++           ",\"msg\":\"" + jsonEsc(e.msg) + "\"}";
++    }
++    r = okRes(j + "]}"); return true;
++  }
++  if (p == "state") { r = okRes(userStateJson(u)); return true; }
++  return false;
++}
++ApiRes userApi(const HubUser& u, String path, const String& b) {
++  if (path.startsWith("/api/")) path = path.substring(5);
++  int need = needRole(path);
++  if (need < 0 || u.role < need) return errRes("forbidden");
++  ApiRes r;
++  if (userList(u, path, r)) return r;
++  String m = actionMac(path, b);
++  if (path == "refresh") { if (!u.all) return errRes("forbidden"); }
++  else if (!m.length() || m == "?" || !userHas(u, m)) return errRes("forbidden");
++  return api(path, b);
++}
++
+ // ---------- API (shared by HTTP and MQTT) ----------
+ ApiRes okRes(const String& data) { return {true, "", data}; }
+ ApiRes okRes() { return {true, "", ""}; }
+@@ -1250,6 +1469,107 @@ ApiRes api(String path, const String& b) {
+     stateDirty = true;
+     return okRes();
+   }
++  // ---- v2.9: cloud password + shared users (owner only) ----
++  if (path == "cloud") {                          // {"pass":"..."} local network only
++    if (apiSrc != 0) return errRes("local_only");
++    if (jsonHas(b, "pass")) {
++      String np = jsonValue(b, "pass");
++      if (np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
++      Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end();
++      secMqtt = np;
++    }
++    mqttRestartReq = true;
++    stateDirty = true;
++    return okRes();
++  }
++  if (path == "emqx_config") {                    // {"url","key","secret"} local network only
++    if (apiSrc != 0) return errRes("local_only");
++    String u = jsonValue(b, "url"), k = jsonValue(b, "key"), sc = jsonValue(b, "secret");
++    u.trim(); k.trim(); sc.trim();
++    while (u.endsWith("/")) u.remove(u.length() - 1);
++    if (u.endsWith("/api/v5")) u.remove(u.length() - 7);
++    if (!u.startsWith("https://") || !k.length() || !sc.length()) return errRes("url (https://...), key and secret are required");
++    Preferences sp; sp.begin("sec", false); sp.putString("ex_url", u); sp.putString("ex_key", k); sp.putString("ex_sec", sc); sp.end();
++    exUrl = u; exKey = k; exSec = sc;
++    int c = emqxCall("GET", String(EX_AUTHN) + "?limit=1", "");
++    stateDirty = true;
++    if (!http2xx(c)) return errRes("emqx " + String(c));
++    return okRes();
++  }
++  if (path == "users") {
++    if (apiSrc == 2) return errRes("forbidden");
++    String j = "{\"users\":[";
++    for (int i = 0; i < userCount; i++) { if (i) j += ","; j += userJson(users[i]); }
++    return okRes(j + "],\"emqx\":" + (emqxReady() ? "true" : "false") + "}");
++  }
++  if (path == "user_invite") {                    // {"name","role","all","strips":"MAC1,MAC2"} local network only
++    if (apiSrc != 0) return errRes("local_only");
++    if (!emqxReady()) return errRes("emqx_not_set");
++    if (userCount >= MAX_USERS) return errRes("max 10 users");
++    HubUser u; memset(&u, 0, sizeof u);
++    String nm = jsonValue(b, "name"); nm.trim();
++    if (!nm.length()) return errRes("name required");
++    strlcpy(u.name, nm.c_str(), sizeof u.name);
++    u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
++    u.all = jsonBool(b, "all") ? 1 : 0;
++    parseStrips(u, jsonValue(b, "strips"));
++    if (!u.all && !u.n) return errRes("pick at least one strip");
++    do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
++    String pw = randText(18);
++    String base = "mttl/" + hubId + "/";
++    int c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(u.id) + "\",\"password\":\"" + pw + "\"}");
++    if (!http2xx(c1)) return errRes("emqx user " + String(c1));
++    String rules = "[{\"username\":\"" + String(u.id) + "\",\"rules\":["
++                   "{\"topic\":\"" + base + "u/" + u.id + "/cmd\",\"permission\":\"allow\",\"action\":\"publish\"},"
++                   "{\"topic\":\"" + base + "u/" + u.id + "/#\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
++                   "{\"topic\":\"" + base + "status\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
++                   "{\"topic\":\"#\",\"permission\":\"deny\",\"action\":\"all\"}]}]";
++    int c2 = emqxCall("POST", EX_AUTHZ, rules);
++    if (!http2xx(c2)) {
++      emqxCall("DELETE", String(EX_AUTHN) + "/" + u.id, "");          // rollback
++      return errRes("emqx acl " + String(c2));
++    }
++    users[userCount++] = u;
++    saveUsers();
++    publishUserState(u);
++    stateDirty = true;
++    String code = b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(u.id) +
++                         "\",\"pw\":\"" + pw + "\",\"n\":\"" + jsonEsc(String(u.name)) + "\",\"r\":" + String(u.role) + "}");
++    return okRes("{\"code\":\"" + code + "\",\"user\":" + userJson(u) + "}");
++  }
++  if (path == "user_update") {                    // {"id","name","role","all","strips"}
++    if (apiSrc == 2) return errRes("forbidden");
++    int i = findUser(jsonValue(b, "id"));
++    if (i < 0) return errRes("no such user");
++    HubUser u = users[i];
++    if (jsonHas(b, "name")) { String nm = jsonValue(b, "name"); nm.trim(); if (nm.length()) strlcpy(u.name, nm.c_str(), sizeof u.name); }
++    if (jsonHas(b, "role")) u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
++    if (jsonHas(b, "all")) u.all = jsonBool(b, "all") ? 1 : 0;
++    if (jsonHas(b, "strips")) parseStrips(u, jsonValue(b, "strips"));
++    if (!u.all && !u.n) return errRes("pick at least one strip");
++    users[i] = u;
++    saveUsers();
++    publishUserState(u);
++    return okRes();
++  }
++  if (path == "user_revoke") {                    // {"id"} local network only
++    if (apiSrc != 0) return errRes("local_only");
++    int i = findUser(jsonValue(b, "id"));
++    if (i < 0) return errRes("no such user");
++    String id = users[i].id;
++    if (emqxReady()) {
++      int c1 = emqxCall("DELETE", String(EX_AUTHN) + "/" + id, "");
++      int c2 = emqxCall("DELETE", String(EX_AUTHZ) + "/" + id, "");
++      if ((!http2xx(c1) && c1 != 404) || (!http2xx(c2) && c2 != 404)) return errRes("emqx " + String(c1) + "/" + String(c2));
++    }
++    mqttPub("mttl/" + hubId + "/u/" + id + "/state", "", 1, true);
++    for (int j = i; j < userCount - 1; j++) users[j] = users[j + 1];
++    userCount--;
++    saveUsers();
++    stateDirty = true;
++    return okRes();
++  }
++
+   if (path == "wifi") {
+     String ns = jsonValue(b, "ssid"), np = jsonValue(b, "pass");
+     ns.trim();
+@@ -1486,6 +1806,7 @@ void handleRaw() {
+ void handleOther() {
+   if (web.method() == HTTP_POST && web.uri().startsWith("/api/")) {
+     if (!guard()) return;
++    apiSrc = 0;
+     ApiRes r = api(web.uri(), web.arg("plain"));
+     stateDirty = true;
+     web.send(r.ok ? 200 : 400, "application/json", apiJson(r));
+@@ -1606,13 +1927,30 @@ float lastPubPower = -1;
+ static void mqttEvent(void*, esp_event_base_t, int32_t id, void* data) {
+   esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
+   switch ((esp_mqtt_event_id_t)id) {
+-    case MQTT_EVENT_CONNECTED: mqttUp = true; mqttFreshConnect = true; esp_mqtt_client_subscribe(mqtt, tCmd.c_str(), 1); break;
++    case MQTT_EVENT_CONNECTED: {
++      mqttUp = true; mqttFreshConnect = true; mqttErrKind = 0;
++      esp_mqtt_client_subscribe(mqtt, tCmd.c_str(), 1);
++      String uc = "mttl/" + hubId + "/u/+/cmd";
++      esp_mqtt_client_subscribe(mqtt, uc.c_str(), 1);
++      break;
++    }
+     case MQTT_EVENT_DISCONNECTED: mqttUp = false; break;
++    case MQTT_EVENT_ERROR:
++      if (e->error_handle) {
++        if (e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) { mqttErrKind = 1; mqttErrCode = e->error_handle->connect_return_code; }
++        else if (e->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
++          mqttErrKind = 2; mqttErrCode = e->error_handle->esp_tls_last_esp_err; mqttErrTls = e->error_handle->esp_tls_cert_verify_flags;
++        }
++      }
++      break;
+     case MQTT_EVENT_DATA: {
+       if (e->current_data_offset != 0 || e->data_len <= 0 || e->data_len >= (int)sizeof(MqttCmd::payload)) break;
++      if (e->topic_len <= 0 || e->topic_len >= (int)sizeof(MqttCmd::topic)) break;
+       MqttCmd c;
+       memcpy(c.payload, e->data, e->data_len);
+       c.payload[e->data_len] = 0;
++      memcpy(c.topic, e->topic, e->topic_len);
++      c.topic[e->topic_len] = 0;
+       if (mqttQ) xQueueSend(mqttQ, &c, 0);
+       break;
+     }
+@@ -1629,7 +1967,7 @@ void mqttStart() {
+   String base = "mttl/" + hubId + "/";
+   tStatus = base + "status"; tInfo = base + "info"; tState = base + "state"; tEvent = base + "event"; tCmd = base + "cmd"; tAck = base + "cmd/ack";
+   snprintf(mqttClientId, sizeof mqttClientId, "hub-%s", id);
+-  mqttQ = xQueueCreate(6, sizeof(MqttCmd));
++  if (!mqttQ) mqttQ = xQueueCreate(6, sizeof(MqttCmd));
+   esp_mqtt_client_config_t cfgm = {};
+ #if ESP_IDF_VERSION_MAJOR >= 5
+   cfgm.broker.address.uri = MQTT_URI;
+@@ -1680,8 +2018,27 @@ float totalPower() {
+   return p;
+ }
+ 
++void publishUserState(const HubUser& u) {
++  mqttPub("mttl/" + hubId + "/u/" + u.id + "/state", userStateJson(u), 0, true);
++}
++void mqttRestart() {
++  if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = nullptr; }
++  mqttUp = false; mqttErrKind = 0; mqttErr = "";
++  mqttStart();
++}
++void mqttHealth() {
++  if (mqttRestartReq) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
++  String e;
++  if (!secMqtt.length()) e = "no_pass";
++  else if (mqttUp) e = "";
++  else if (mqttErrKind == 1) e = (mqttErrCode == 4 || mqttErrCode == 5) ? "auth" : "refused";
++  else if (mqttErrKind == 2) e = mqttErrTls ? "tls" : "net";
++  else e = mqttErr == "no_pass" ? "" : mqttErr;
++  if (e != mqttErr) { mqttErr = e; stateDirty = true; if (e.length()) Serial.printf("[mqtt] down: %s (%d)\n", e.c_str(), (int)mqttErrCode); }
++}
+ void publishState() {
+   mqttPub(tState, buildStateJson(), 0, true);
++  for (int u = 0; u < userCount; u++) publishUserState(users[u]);
+   lastStatePub = millis();
+   lastRelaySig = relaySignature();
+   lastPubPower = totalPower();
+@@ -1709,10 +2066,24 @@ void mqttProcess() {
+       String action = jsonValue(body, "action");
+       path = action.length() ? "/api/" + action : "/api/onoff";
+     }
+-    ApiRes r = api(path, body);
++    String topic = c.topic, ackTopic = tAck;
++    ApiRes r;
++    String ub = "mttl/" + hubId + "/u/";
++    if (topic.startsWith(ub) && topic.endsWith("/cmd")) {
++      String uid = topic.substring(ub.length(), topic.length() - 4);
++      int ui = findUser(uid);
++      if (ui < 0) continue;                       // revoked or unknown: no answer
++      ackTopic = ub + uid + "/cmd/ack";
++      apiSrc = 2;
++      r = userApi(users[ui], path, body);
++    } else {
++      apiSrc = 1;
++      r = api(path, body);
++    }
++    apiSrc = 0;
+     String ack = "{\"id\":\"" + id + "\",\"ok\":" + (r.ok ? "true" : "false") + ",\"error\":\"" + jsonEsc(r.err) + "\"";
+     if (r.data.length()) ack += ",\"data\":" + r.data;
+-    mqttPub(tAck, ack + "}", 1, false);
++    mqttPub(ackTopic, ack + "}", 1, false);
+     publishState();
+   }
+   if (!mqttUp) return;
+@@ -1999,8 +2370,10 @@ void loadSecrets() {
+ void setup() {
+   Serial.begin(115200);
+   delay(300);
+-  Serial.println("\n=== Fisha Hub v2.8 — @ahmadalhelly ===");
++  Serial.println("\n=== Fisha Hub v2.9 — @ahmadalhelly ===");
+   loadSecrets();
++  loadEmqx();
++  loadUsers();
+   cfg.begin("mttl", false);
+   loadGlobals();
+   loadKnown();
+@@ -2063,6 +2436,7 @@ void loop() {
+   }
+   ssePump();
+   serialRaw();
++  mqttHealth();
+   mqttProcess();
+   sendNotes();
+   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();
