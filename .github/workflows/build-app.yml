@@ -50,6 +50,17 @@ jobs:
           } 2>&1 | tee ../build.log
 
       # open the APK on an Android emulator and keep the crash report (if any) in the build log
+      - name: Free disk space for the emulator
+        if: success()
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules \
+                      /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -af > /dev/null 2>&1 || true
+          rm -rf app/build ~/.gradle/caches ~/.pub-cache/hosted || true
+          df -h / | tail -1
+
       - name: Enable KVM
         if: success()
         working-directory: .
@@ -70,12 +81,12 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           working-directory: .
           script: |
+            echo "===== LAUNCH TEST (emulator started) =====" >> build.log
             adb install -r Fisha-1.1.0-${{ github.run_number }}.apk
             adb logcat -c
             adb shell am start -n com.mttlhub.mttl_hub/.MainActivity
             sleep 25
             adb logcat -d > launch.log || true
-            echo "===== LAUNCH TEST =====" >> build.log
             (adb shell pidof com.mttlhub.mttl_hub && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
             grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
             grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
