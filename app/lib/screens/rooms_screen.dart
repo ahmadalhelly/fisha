@@ -6,6 +6,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/strip_card.dart';
+import 'backup_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -149,6 +150,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
             backgroundColor: C.bg,
             surfaceTintColor: Colors.transparent,
             title: Text(_tr('الغرف', 'Rooms'), style: const TextStyle(fontWeight: FontWeight.w700)),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings_backup_restore),
+                tooltip: t('backup_title'),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BackupScreen(state: s))),
+              ),
+            ],
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _addRoom,

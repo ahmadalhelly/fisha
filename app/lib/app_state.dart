@@ -77,6 +77,7 @@ class CmdResult {
 
 class AppState extends ChangeNotifier {
   static const ssePort = 8081;
+  static const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 
   SharedPreferences? _prefs;
   HubSettings settings = HubSettings();
@@ -154,7 +155,14 @@ class AppState extends ChangeNotifier {
   // ---------- lifecycle ----------
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    final p = _prefs!;
+    _loadPrefs();
+    ready = true;
+    await restart();
+  }
+
+  void _loadPrefs() {
+    final p = _prefs;
+    if (p == null) return;
     final s = p.getString('settings');
     if (s != null) {
       try {
@@ -183,8 +191,218 @@ class AppState extends ChangeNotifier {
         rooms = (jsonDecode(rm) as List).whereType<Map<String, dynamic>>().map(Room.fromJson).toList();
       } catch (_) {}
     }
-    ready = true;
-    await restart();
+  }
+
+  Future<Map<String, dynamic>> exportBackup({Set<String> parts = const {'app', 'hub'}}) async {
+    final out = <String, dynamic>{
+      'fisha_backup': 1,
+      'created': DateTime.now().toIso8601String(),
+      'app_version': appVersion,
+    };
+
+    if (parts.contains('app')) {
+      final appMap = <String, dynamic>{};
+      final p = _prefs ?? await SharedPreferences.getInstance();
+      _prefs = p;
+      for (final k in p.getKeys()) {
+        final v = p.get(k);
+        if (v is bool) {
+          appMap[k] = {'t': 'b', 'v': v};
+        } else if (v is int) {
+          appMap[k] = {'t': 'i', 'v': v};
+        } else if (v is double) {
+          appMap[k] = {'t': 'd', 'v': v};
+        } else if (v is List) {
+          appMap[k] = {'t': 'l', 'v': v.map((e) => e.toString()).toList()};
+        } else if (v is String) {
+          appMap[k] = {'t': 's', 'v': v};
+        }
+      }
+      out['app'] = appMap;
+    }
+
+    if (parts.contains('hub') && mode != ConnMode.offline) {
+      await loadSchedules();
+      await loadAutomations();
+      out['hub'] = <String, dynamic>{
+        'schedules': [for (final s in schedules) s.toJson()],
+        'automations': [for (final a in automations) a.toJson()],
+        'strips': [
+          for (final s in allStrips)
+            {
+              'mac': s.mac,
+              'label': s.label,
+              'notify': s.notifyMask,
+              'notifyMask': s.notifyMask,
+              'outlets': [
+                for (final o in s.outlets)
+                  {
+                    'n': o.n,
+                    'label': o.label,
+                    'locked': o.locked,
+                    'protected': o.protected,
+                    'autooff': o.autoOffMin,
+                    'auto_off_min': o.autoOffMin,
+                    'keep_on': o.keepOn,
+                    'keepOn': o.keepOn,
+                  }
+              ],
+            }
+        ],
+        'config': {
+          'temp_max': tempMax,
+          'temp_protect': tempProtect,
+          'ntfy': ntfyTopic,
+          'notifyTypes': notifyTypes,
+        },
+      };
+    }
+
+    return out;
+  }
+
+  Future<String?> importBackup(Map<String, dynamic> j, {Set<String> parts = const {'app', 'hub'}, bool replace = false}) async {
+    if (j['fisha_backup'] != 1) return t('backup_err_invalid');
+
+    int skipped = 0;
+    if (parts.contains('hub') && j['hub'] is Map<String, dynamic>) {
+      if (mode == ConnMode.offline) return t('err_no_conn');
+      final hubData = j['hub'] as Map<String, dynamic>;
+
+      // schedules
+      if (hubData['schedules'] is List) {
+        if (replace) {
+          await loadSchedules();
+          for (final s in schedules) {
+            await api('schedule_delete', {'sid': s.sid});
+          }
+        }
+        for (final raw in hubData['schedules']) {
+          if (raw is Map) {
+            final m = Map<String, dynamic>.from(raw)..remove('sid');
+            await api('schedule_save', m);
+          }
+        }
+      }
+
+      // automations
+      if (hubData['automations'] is List) {
+        if (replace) {
+          await loadAutomations();
+          for (final a in automations) {
+            await api('automation_delete', {'aid': a.aid});
+          }
+        }
+        for (final raw in hubData['automations']) {
+          if (raw is Map) {
+            final m = Map<String, dynamic>.from(raw)..remove('aid');
+            await api('automation_save', m);
+          }
+        }
+      }
+
+      // strips
+      final currentMacs = allStrips.map((s) => s.mac.toUpperCase()).toSet();
+      if (hubData['strips'] is List) {
+        for (final raw in hubData['strips']) {
+          if (raw is! Map) continue;
+          final mac = (raw['mac'] ?? '').toString().toUpperCase();
+          if (mac.isEmpty || !currentMacs.contains(mac)) {
+            skipped++;
+            continue;
+          }
+          final label = (raw['label'] ?? '').toString();
+          if (label.isNotEmpty) {
+            await api('label', {'mac': mac, 'outlet': 0, 'label': label});
+          }
+          final mask = raw['notifyMask'] ?? raw['notify'];
+          if (mask is num) {
+            await api('notify', {'mac': mac, 'mask': mask.toInt()});
+          }
+          final outlets = raw['outlets'];
+          if (outlets is List) {
+            for (final o in outlets) {
+              if (o is! Map) continue;
+              final n = (o['n'] as num?)?.toInt() ?? 0;
+              if (n <= 0) continue;
+              final oLabel = (o['label'] ?? '').toString();
+              if (oLabel.isNotEmpty) {
+                await api('label', {'mac': mac, 'outlet': n, 'label': oLabel});
+              }
+              if (o.containsKey('locked')) {
+                await api('lock', {'mac': mac, 'outlet': n, 'locked': o['locked'] == true});
+              }
+              if (o.containsKey('protected')) {
+                await api('protect', {'mac': mac, 'outlet': n, 'protected': o['protected'] == true});
+              }
+              if (o.containsKey('keep_on') || o.containsKey('keepOn')) {
+                final keep = (o['keep_on'] ?? o['keepOn']) == true;
+                await api('keepon', {'mac': mac, 'outlet': n, 'on': keep});
+              }
+              if (o.containsKey('autooff') || o.containsKey('auto_off_min') || o.containsKey('autoOffMin')) {
+                final min = (o['autooff'] ?? o['auto_off_min'] ?? o['autoOffMin'] as num?)?.toInt() ?? 0;
+                await api('autooff', {'mac': mac, 'outlet': n, 'minutes': min});
+              }
+            }
+          }
+        }
+      }
+
+      // config & notify
+      final cfg = hubData['config'] is Map ? hubData['config'] as Map : hubData;
+      final tempMax = (cfg['temp_max'] as num?)?.toInt();
+      final tempProtect = cfg['temp_protect'] is bool ? cfg['temp_protect'] as bool : null;
+      if (tempMax != null || tempProtect != null) {
+        await api('config', {
+          if (tempProtect != null) 'temp_protect': tempProtect,
+          if (tempMax != null) 'temp_max': tempMax,
+        });
+      }
+      final ntfy = (cfg['ntfy'] ?? cfg['ntfy_topic'])?.toString();
+      final ntypes = (cfg['notifyTypes'] ?? cfg['notify_types'] ?? cfg['ntypes'] as num?)?.toInt();
+      if (ntfy != null || ntypes != null) {
+        await api('notify', {
+          if (ntfy != null) 'ntfy': ntfy,
+          if (ntypes != null) 'types': ntypes,
+        });
+      }
+
+      await loadSchedules();
+      await loadAutomations();
+      await refresh();
+    }
+
+    if (parts.contains('app') && j['app'] is Map<String, dynamic>) {
+      final appMap = j['app'] as Map<String, dynamic>;
+      final p = _prefs ?? await SharedPreferences.getInstance();
+      _prefs = p;
+      for (final entry in appMap.entries) {
+        final k = entry.key;
+        final item = entry.value;
+        if (item is Map) {
+          final t = item['t'];
+          final v = item['v'];
+          if (t == 'b' && v is bool) {
+            await p.setBool(k, v);
+          } else if (t == 'i' && v is num) {
+            await p.setInt(k, v.toInt());
+          } else if (t == 'd' && v is num) {
+            await p.setDouble(k, v.toDouble());
+          } else if (t == 's' && v is String) {
+            await p.setString(k, v);
+          } else if (t == 'l' && v is List) {
+            await p.setStringList(k, v.map((e) => e.toString()).toList());
+          }
+        }
+      }
+      _loadPrefs();
+      await restart();
+    }
+
+    if (skipped > 0) {
+      return t('backup_skipped', {'n': '$skipped'});
+    }
+    return null;
   }
 
   @override

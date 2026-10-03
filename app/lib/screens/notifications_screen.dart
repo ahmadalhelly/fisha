@@ -173,19 +173,29 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         child: Text(s.stripName(st), style: const TextStyle(fontWeight: FontWeight.w700)),
                       ),
                       Wrap(spacing: 6, runSpacing: 6, children: [
-                        FilterChip(
-                          label: Text(t('whole_strip')),
-                          selected: st.notifyMask & 0x10 != 0,
-                          selectedColor: C.accentBg,
-                          onSelected: (v) => s.setNotifyMask(st, v ? st.notifyMask | 0x10 : st.notifyMask & ~0x10),
-                        ),
-                        for (final o in st.outlets)
+                        for (final sel in [st.notifyMask & 0x10 != 0])
                           FilterChip(
-                            label: Text(s.outletName(st, o.n)),
-                            selected: st.notifyMask & (1 << (o.n - 1)) != 0,
+                            label: Text(t('whole_strip')),
+                            selected: sel,
                             selectedColor: C.accentBg,
-                            onSelected: (v) => s.setNotifyMask(st, v ? st.notifyMask | (1 << (o.n - 1)) : st.notifyMask & ~(1 << (o.n - 1))),
+                            checkmarkColor: C.accent,
+                            labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
+                            side: BorderSide(color: sel ? C.tileOnBorder : C.border),
+                            backgroundColor: C.surface2,
+                            onSelected: (v) => s.setNotifyMask(st, v ? st.notifyMask | 0x10 : st.notifyMask & ~0x10),
                           ),
+                        for (final o in st.outlets)
+                          for (final sel in [st.notifyMask & (1 << (o.n - 1)) != 0])
+                            FilterChip(
+                              label: Text(s.outletName(st, o.n)),
+                              selected: sel,
+                              selectedColor: C.accentBg,
+                              checkmarkColor: C.accent,
+                              labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: sel ? FontWeight.w600 : FontWeight.w400),
+                              side: BorderSide(color: sel ? C.tileOnBorder : C.border),
+                              backgroundColor: C.surface2,
+                              onSelected: (v) => s.setNotifyMask(st, v ? st.notifyMask | (1 << (o.n - 1)) : st.notifyMask & ~(1 << (o.n - 1))),
+                            ),
                       ]),
                     ],
                   ]),
