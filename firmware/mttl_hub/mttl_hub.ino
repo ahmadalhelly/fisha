@@ -26,6 +26,7 @@
 #include "mqtt_client.h"
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
+#include "esp_task_wdt.h"
 #include <vector>
 
 // ================== CONFIG ==================
@@ -50,7 +51,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.9";
+const char* FW_VERSION = "2.10";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -113,6 +114,8 @@ struct Strip {
   uint32_t autoOffAt[4] = {0, 0, 0, 0};
   uint32_t hotSince[4] = {0, 0, 0, 0};
   uint32_t loadEventAt = 0, voltEventAt = 0;
+  uint32_t ocSince = 0, vOkSince = 0;            // v2.10 over-current timer · voltage back to normal since
+  uint8_t ovCount = 0, vCutMask = 0;             // consecutive high readings · outlets cut for over-voltage
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
@@ -156,6 +159,11 @@ uint8_t evHead = 0, evCount = 0;
 uint32_t nextTimerId = 1;
 uint8_t tempMax = 70;
 bool tempProtect = true;
+// v2.10 whole-strip protections
+bool vProt = true, vRestore = true, aProt = true;
+uint16_t vMax = 250;
+float aMax = 16.0f;
+volatile uint32_t rebootAt = 0;
 
 WiFiServer stripServer(STRIP_PORT);
 WiFiServer sseServer(SSE_PORT);
@@ -298,8 +306,8 @@ void sseSend(const char* ev, const String& data);
 String ntfyTopic;
 uint32_t notifyTypes = 0xFFFFFFFF;
 const char* EV_TYPES[] = {"temp", "load", "auto_off", "automation", "schedule", "missed", "timer", "cycle", "lock", "added", "test",
-                          "button", "remote", "online", "offline", "voltage"};
-const int EV_COUNT = 16;
+                          "button", "remote", "online", "offline", "voltage", "overvolt", "overcurrent"};
+const int EV_COUNT = 18;
 Note notes[6];
 uint8_t noteCount = 0;
 int stripFor(const String& mac);
@@ -332,7 +340,8 @@ String noteTitle(const Note& n) {
                 : n.type == "timer" ? "Timer ran" : n.type == "cycle" ? "Rebooted" : n.type == "lock" ? "Child lock reverted a button press"
                 : n.type == "added" ? "New strip connected" : n.type == "button" ? "Switched on the strip"
                 : n.type == "remote" ? "Switched from the app" : n.type == "online" ? "Strip back online" : n.type == "offline" ? "Strip offline"
-                : n.type == "voltage" ? "Unusual voltage" : "Test notification";
+                : n.type == "voltage" ? "Unusual voltage" : n.type == "overvolt" ? "High voltage - strip turned off"
+                : n.type == "overcurrent" ? "Over current - strip turned off" : "Test notification";
   return who.length() ? String(t) + " | " + who : String(t);
 }
 
@@ -436,6 +445,11 @@ void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, s
 void loadGlobals() {
   tempMax = cfg.getUChar("tmax", 70);
   tempProtect = cfg.getBool("tprot", true);
+  vProt = cfg.getBool("vprot", true);
+  vRestore = cfg.getBool("vrest", true);
+  vMax = cfg.getUShort("vmax", 250);
+  aProt = cfg.getBool("aprot", true);
+  aMax = cfg.getFloat("amax", 16.0f);
   schedCount = 0;
   if (cfg.getBytesLength("sch") == sizeof(Sched) * MAX_SCHED) {
     cfg.getBytes("sch", scheds, sizeof(Sched) * MAX_SCHED);
@@ -637,6 +651,36 @@ void energyUpdate(int i) {
   if (changed) saveElog(i);
 }
 
+
+// v2.10: whole strip off on over-voltage (protected outlets stay on), back on when the line is normal again
+void voltCheck(Strip& s) {
+  if (isnan(s.voltage)) return;
+  uint32_t now = millis();
+  if (vProt && s.voltage > vMax) {
+    s.vOkSince = 0;
+    if (s.ovCount < 255) s.ovCount++;
+    if (s.vCutMask || (s.ovCount < 2 && s.voltage < vMax + 15)) return;   // two readings in a row, or one far above
+    uint8_t cut = 0;
+    for (int k = 0; k < 4; k++)
+      if (s.o[k].on && !(s.protMask & (1 << k))) { sendOnOffF(s, k + 1, false, true); cut |= 1 << k; }
+    s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
+    addEvent("overvolt", s.mac, 0, String(s.voltage, 0) + " V");
+    stateDirty = true;
+    return;
+  }
+  s.ovCount = 0;
+  if (!s.vCutMask) return;
+  if (s.voltage > vMax - 5) { s.vOkSince = 0; return; }
+  if (!s.vOkSince) { s.vOkSince = now ? now : 1; return; }
+  if (now - s.vOkSince < 60000) return;
+  if (vRestore)
+    for (int k = 0; k < 4; k++) if (s.vCutMask & (1 << k)) sendOnOff(s, k + 1, true);
+  addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V ok");
+  s.vCutMask = 0;
+  s.vOkSince = 0;
+  stateDirty = true;
+}
+
 // ---------- automations / protections (evaluated after every poll) ----------
 void evalStrip(int i) {
   Strip& s = strips[i];
@@ -665,6 +709,17 @@ void evalStrip(int i) {
       }
     }
   }
+  // v2.10 over-current on the whole strip
+  float volts = (!isnan(s.voltage) && s.voltage > 50) ? s.voltage : 220.0f;
+  float amps = total / volts;
+  if (aProt && amps > aMax) {
+    if (!s.ocSince) s.ocSince = now ? now : 1;
+    else if (now - s.ocSince > 3000) {
+      for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+      addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
+      s.ocSince = 0;
+    }
+  } else s.ocSince = 0;
   if (total > 3300 && now - s.loadEventAt > 300000) {
     s.loadEventAt = now;
     addEvent("load", s.mac, 0, String((int)total) + " W");
@@ -817,6 +872,7 @@ void handleLine(int i, const String& line) {
         s.voltEventAt = millis();
         addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V");
       }
+      voltCheck(s);
     }
     return;
   }
@@ -1128,11 +1184,14 @@ String buildStateJson() {
              ",\"uptime_s\":" + String(millis() / 1000) +
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
+             ",\"v_protect\":" + (vProt ? "true" : "false") + ",\"v_restore\":" + (vRestore ? "true" : "false") + ",\"v_max\":" + String(vMax) +
+             ",\"a_protect\":" + (aProt ? "true" : "false") + ",\"a_max\":" + String(aMax, 1) +
              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
              "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
              ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +
              ",\"user\":\"" + String(MQTT_USER) + "\",\"host\":\"" + mqttHost() + "\"}" +
              ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
+             ",\"reset\":\"" + resetText() + "\"" +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
@@ -1268,32 +1327,109 @@ String mqttHost() {
   int c = u.indexOf(':'); if (c > 0) u = u.substring(0, c);
   return u;
 }
-// One HTTPS call to the EMQX management API. Returns the HTTP code (<0 = no connection).
-int emqxCall(const char* method, const String& path, const String& body) {
-  bool paused = false;
-  if (mqtt && ESP.getMaxAllocHeap() < 52000) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; delay(100); }
-  int code;
-  {
-    WiFiClientSecure tls;
-    tls.setCACert(MQTT_CA);
-    HTTPClient h;
-    h.setTimeout(10000);
-    if (!h.begin(tls, exUrl + path)) code = -1;
-    else {
-      h.setAuthorization(exKey.c_str(), exSec.c_str());
-      h.addHeader("Content-Type", "application/json");
-      code = h.sendRequest(method, body);
-      exLast = h.getString().substring(0, 160);
-      h.end();
-    }
-  }
-  if (paused) esp_mqtt_client_start(mqtt);
-  Serial.printf("[emqx] %s %s -> %d\n", method, path.c_str(), code);
-  return code;
-}
 bool http2xx(int c) { return c >= 200 && c < 300; }
 const char* EX_AUTHN = "/api/v5/authentication/password_based:built_in_database/users";
 const char* EX_AUTHZ = "/api/v5/authorization/sources/built_in_database/rules/users";
+// One HTTPS call to the EMQX management API (runs only inside the job task). Returns the HTTP code (<0 = no connection).
+int emqxCall(const char* method, const String& path, const String& body) {
+  int code;
+  WiFiClientSecure tls;
+  tls.setCACert(MQTT_CA);
+  tls.setHandshakeTimeout(12);
+  tls.setTimeout(12);
+  HTTPClient h;
+  h.setConnectTimeout(8000);
+  h.setTimeout(10000);
+  h.setReuse(false);
+  if (!h.begin(tls, exUrl + path)) code = -1;
+  else {
+    h.setAuthorization(exKey.c_str(), exSec.c_str());
+    h.addHeader("Content-Type", "application/json");
+    code = h.sendRequest(method, body);
+    exLast = code > 0 ? h.getString().substring(0, 160) : HTTPClient::errorToString(code);
+    h.end();
+  }
+  Serial.printf("[emqx] %s %s -> %d %s\n", method, path.c_str(), code, exLast.c_str());
+  return code;
+}
+// EMQX work runs in its own task so the hub keeps switching strips meanwhile.
+// kind 1 invite · 2 revoke · 3 test the API details. state 0 idle · 1 running · 2 finished (loop collects) · 3 result ready
+struct ExJob { volatile uint8_t state = 0; uint8_t kind = 0; HubUser u; String pw, base, err; int c1 = 0, c2 = 0; bool ok = false; String data; };
+ExJob exJob;
+static void exTask(void*) {
+  ExJob& j = exJob;
+  bool paused = false;
+  if (mqtt) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; }   // two TLS sessions don't fit in RAM
+  vTaskDelay(pdMS_TO_TICKS(300));
+  if (j.kind == 1) {
+    j.c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(j.u.id) + "\",\"password\":\"" + j.pw + "\"}");
+    if (http2xx(j.c1)) {
+      String rules = "[{\"username\":\"" + String(j.u.id) + "\",\"rules\":["
+                     "{\"topic\":\"" + j.base + "u/" + j.u.id + "/cmd\",\"permission\":\"allow\",\"action\":\"publish\"},"
+                     "{\"topic\":\"" + j.base + "u/" + j.u.id + "/#\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
+                     "{\"topic\":\"" + j.base + "status\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
+                     "{\"topic\":\"#\",\"permission\":\"deny\",\"action\":\"all\"}]}]";
+      j.c2 = emqxCall("POST", EX_AUTHZ, rules);
+      if (!http2xx(j.c2)) emqxCall("DELETE", String(EX_AUTHN) + "/" + j.u.id, "");   // rollback
+    }
+  } else if (j.kind == 2) {
+    j.c1 = emqxCall("DELETE", String(EX_AUTHN) + "/" + j.u.id, "");
+    j.c2 = emqxCall("DELETE", String(EX_AUTHZ) + "/" + j.u.id, "");
+  } else {
+    j.c1 = emqxCall("GET", String(EX_AUTHN) + "?limit=1", "");
+    j.c2 = 200;
+  }
+  if (paused && mqtt) esp_mqtt_client_start(mqtt);
+  j.state = 2;
+  vTaskDelete(nullptr);
+}
+bool exStart(uint8_t kind) {
+  if (exJob.state == 1) return false;
+  exJob.kind = kind; exJob.c1 = exJob.c2 = 0; exJob.ok = false; exJob.err = ""; exJob.data = "";
+  exJob.state = 1;
+  if (xTaskCreatePinnedToCore(exTask, "emqx", 12288, nullptr, 1, nullptr, 0) != pdPASS) { exJob.state = 0; return false; }
+  return true;
+}
+String exCodeText(int c) { return c < 0 ? "no connection (" + exLast + ")" : "HTTP " + String(c) + (exLast.length() ? " " + exLast : ""); }
+// called from loop(): applies a finished job (users[] is only touched here)
+void exCollect() {
+  if (exJob.state != 2) return;
+  ExJob& j = exJob;
+  if (j.kind == 1) {
+    j.ok = http2xx(j.c1) && http2xx(j.c2);
+    if (j.ok && userCount < MAX_USERS) {
+      users[userCount++] = j.u;
+      saveUsers();
+      publishUserState(j.u);
+      j.data = "{\"code\":\"" + b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(j.u.id) +
+                                     "\",\"pw\":\"" + j.pw + "\",\"n\":\"" + jsonEsc(String(j.u.name)) + "\",\"r\":" + String(j.u.role) + "}") +
+               "\",\"user\":" + userJson(j.u) + "}";
+    } else j.err = "emqx " + exCodeText(http2xx(j.c1) ? j.c2 : j.c1);
+    j.pw = "";
+  } else if (j.kind == 2) {
+    j.ok = (http2xx(j.c1) || j.c1 == 404) && (http2xx(j.c2) || j.c2 == 404);
+    if (j.ok) {
+      int i = findUser(j.u.id);
+      mqttPub("mttl/" + hubId + "/u/" + String(j.u.id) + "/state", "", 1, true);
+      if (i >= 0) { for (int k = i; k < userCount - 1; k++) users[k] = users[k + 1]; userCount--; saveUsers(); }
+    } else j.err = "emqx " + exCodeText(http2xx(j.c1) || j.c1 == 404 ? j.c2 : j.c1);
+  } else {
+    j.ok = http2xx(j.c1);
+    if (!j.ok) j.err = "emqx " + exCodeText(j.c1);
+  }
+  j.state = 3;
+  stateDirty = true;
+}
+String resetText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default: return "other";
+  }
+}
 
 // what a shared user may call · 0 view · 1 control · 2 admin · -1 never
 int needRole(const String& p) {
@@ -1492,10 +1628,9 @@ ApiRes api(String path, const String& b) {
     if (!u.startsWith("https://") || !k.length() || !sc.length()) return errRes("url (https://...), key and secret are required");
     Preferences sp; sp.begin("sec", false); sp.putString("ex_url", u); sp.putString("ex_key", k); sp.putString("ex_sec", sc); sp.end();
     exUrl = u; exKey = k; exSec = sc;
-    int c = emqxCall("GET", String(EX_AUTHN) + "?limit=1", "");
     stateDirty = true;
-    if (!http2xx(c)) return errRes("emqx " + String(c));
-    return okRes();
+    if (!exStart(3)) return errRes("busy");
+    return okRes("{\"job\":true}");
   }
   if (path == "users") {
     if (apiSrc == 2) return errRes("forbidden");
@@ -1516,27 +1651,12 @@ ApiRes api(String path, const String& b) {
     parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
-    String pw = randText(18);
-    String base = "mttl/" + hubId + "/";
-    int c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(u.id) + "\",\"password\":\"" + pw + "\"}");
-    if (!http2xx(c1)) return errRes("emqx user " + String(c1));
-    String rules = "[{\"username\":\"" + String(u.id) + "\",\"rules\":["
-                   "{\"topic\":\"" + base + "u/" + u.id + "/cmd\",\"permission\":\"allow\",\"action\":\"publish\"},"
-                   "{\"topic\":\"" + base + "u/" + u.id + "/#\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
-                   "{\"topic\":\"" + base + "status\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
-                   "{\"topic\":\"#\",\"permission\":\"deny\",\"action\":\"all\"}]}]";
-    int c2 = emqxCall("POST", EX_AUTHZ, rules);
-    if (!http2xx(c2)) {
-      emqxCall("DELETE", String(EX_AUTHN) + "/" + u.id, "");          // rollback
-      return errRes("emqx acl " + String(c2));
-    }
-    users[userCount++] = u;
-    saveUsers();
-    publishUserState(u);
-    stateDirty = true;
-    String code = b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(u.id) +
-                         "\",\"pw\":\"" + pw + "\",\"n\":\"" + jsonEsc(String(u.name)) + "\",\"r\":" + String(u.role) + "}");
-    return okRes("{\"code\":\"" + code + "\",\"user\":" + userJson(u) + "}");
+    if (exJob.state == 1) return errRes("busy");
+    exJob.u = u;
+    exJob.pw = randText(18);
+    exJob.base = "mttl/" + hubId + "/";
+    if (!exStart(1)) return errRes("busy");
+    return okRes("{\"job\":true}");
   }
   if (path == "user_update") {                    // {"id","name","role","all","strips"}
     if (apiSrc == 2) return errRes("forbidden");
@@ -1557,17 +1677,34 @@ ApiRes api(String path, const String& b) {
     if (apiSrc != 0) return errRes("local_only");
     int i = findUser(jsonValue(b, "id"));
     if (i < 0) return errRes("no such user");
-    String id = users[i].id;
-    if (emqxReady()) {
-      int c1 = emqxCall("DELETE", String(EX_AUTHN) + "/" + id, "");
-      int c2 = emqxCall("DELETE", String(EX_AUTHZ) + "/" + id, "");
-      if ((!http2xx(c1) && c1 != 404) || (!http2xx(c2) && c2 != 404)) return errRes("emqx " + String(c1) + "/" + String(c2));
+    if (!emqxReady()) {                           // nothing on the server to remove
+      mqttPub("mttl/" + hubId + "/u/" + String(users[i].id) + "/state", "", 1, true);
+      for (int j = i; j < userCount - 1; j++) users[j] = users[j + 1];
+      userCount--;
+      saveUsers();
+      stateDirty = true;
+      return okRes();
     }
-    mqttPub("mttl/" + hubId + "/u/" + id + "/state", "", 1, true);
-    for (int j = i; j < userCount - 1; j++) users[j] = users[j + 1];
-    userCount--;
-    saveUsers();
-    stateDirty = true;
+    if (exJob.state == 1) return errRes("busy");
+    exJob.u = users[i];
+    if (!exStart(2)) return errRes("busy");
+    return okRes("{\"job\":true}");
+  }
+  if (path == "ujob") {                           // result of the last EMQX job
+    if (apiSrc == 2) return errRes("forbidden");
+    if (exJob.state == 1 || exJob.state == 2) return okRes("{\"state\":\"running\"}");
+    if (exJob.state == 0) return okRes("{\"state\":\"idle\"}");
+    String d = "{\"state\":\"done\",\"ok\":" + String(exJob.ok ? "true" : "false") + ",\"error\":\"" + jsonEsc(exJob.err) + "\"" +
+               (exJob.data.length() ? ",\"data\":" + exJob.data : String("")) + "}";
+    exJob.state = 0;
+    exJob.data = "";
+    return okRes(d);
+  }
+  if (path == "reboot") {                         // owner only, local or remote
+    if (apiSrc == 2) return errRes("forbidden");
+    rebootAt = millis() + 1200;
+    if (!rebootAt) rebootAt = 1;
+    addEvent("cycle", "", 0, "hub reboot");
     return okRes();
   }
 
@@ -1735,6 +1872,11 @@ ApiRes api(String path, const String& b) {
   if (path == "config") {
     if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 40, 90); cfg.putUChar("tmax", tempMax); }
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
+    if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
+    if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
+    if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 225, 270); cfg.putUShort("vmax", vMax); }
+    if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
+    if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
     stateDirty = true;
     return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") + "}");
   }
@@ -1790,7 +1932,8 @@ void handleHealth() {
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
-           ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
+           ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
+           ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
 void handleRaw() {
@@ -2028,7 +2171,7 @@ void mqttRestart() {
   mqttStart();
 }
 void mqttHealth() {
-  if (mqttRestartReq) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
+  if (mqttRestartReq && exJob.state != 1) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
   String e;
   if (!secMqtt.length()) e = "no_pass";
   else if (mqttUp) e = "";
@@ -2278,13 +2421,14 @@ void setupPortal() {
   portal.begin();
   uint32_t lastTry = millis();
   while (true) {
+    esp_task_wdt_reset();
     portal.handleClient();
     if (saved) { delay(1500); ESP.restart(); }
     if (millis() - lastTry > 120000) {           // the old network may simply have been down: retry it now and then
       lastTry = millis();
       WiFi.begin(secSsid.c_str(), secWifi.c_str());
       uint32_t t0 = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) { portal.handleClient(); delay(50); }
+      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) { esp_task_wdt_reset(); portal.handleClient(); delay(50); }
       if (WiFi.status() == WL_CONNECTED) { Serial.println("[portal] home Wi-Fi is back"); delay(500); ESP.restart(); }
     }
     delay(5);
@@ -2371,7 +2515,7 @@ void loadSecrets() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== Fisha Hub v2.9 — @ahmadalhelly ===");
+  Serial.println("\n=== Fisha Hub v2.10 — @ahmadalhelly ===");
   loadSecrets();
   loadEmqx();
   loadUsers();
@@ -2413,11 +2557,21 @@ void setup() {
   Serial.printf("Web UI  : http://%s:%u  · live: http://%s:%u/events\n", WiFi.localIP().toString().c_str(), WEB_PORT,
                 WiFi.localIP().toString().c_str(), SSE_PORT);
   mqttStart();
+  // v2.10: a frozen loop reboots the hub after 90 s instead of hanging forever
+  esp_task_wdt_config_t wc = {};
+  wc.timeout_ms = 90000;
+  wc.idle_core_mask = 0;
+  wc.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&wc) != ESP_OK) esp_task_wdt_init(&wc);
+  esp_task_wdt_add(nullptr);
+  Serial.printf("[hub] last reset: %s\n", resetText().c_str());
 }
 
 uint32_t wifiLostAt = 0;
 
 void loop() {
+  esp_task_wdt_reset();
+  if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) { Serial.println("[hub] reboot requested"); delay(200); ESP.restart(); }
   if (WiFi.status() != WL_CONNECTED) {
     if (!wifiLostAt) wifiLostAt = millis();
     if (millis() - wifiLostAt > 60000) ESP.restart();
@@ -2437,6 +2591,7 @@ void loop() {
   }
   ssePump();
   serialRaw();
+  exCollect();
   mqttHealth();
   mqttProcess();
   sendNotes();

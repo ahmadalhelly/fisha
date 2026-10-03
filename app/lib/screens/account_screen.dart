@@ -58,54 +58,31 @@ class _AccountScreenState extends State<AccountScreen> {
         _snack(r ?? t('g_synced'));
       });
 
-  Future<void> _join() async {
-    final ctrl = TextEditingController();
-    final code = await showDialog<String>(
+  Future<void> _join() => joinWithInviteDialog(context, s);
+
+  Future<void> _rename() async {
+    final ctrl = TextEditingController(text: s.userName);
+    final v = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: C.surface,
-        title: Text(t('join_title'), style: const TextStyle(fontSize: 18)),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(t('join_sub'), style: TextStyle(color: C.textSoft, height: 1.5, fontSize: 13)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            minLines: 2,
-            maxLines: 4,
-            textDirection: TextDirection.ltr,
-            autocorrect: false,
-            decoration: InputDecoration(
-              hintText: t('join_hint'),
-              suffixIcon: IconButton(
-                icon: Icon(Icons.content_paste, color: C.muted),
-                onPressed: () async {
-                  final d = await Clipboard.getData(Clipboard.kTextPlain);
-                  if (d?.text != null) ctrl.text = d!.text!;
-                },
-              ),
-            ),
-          ),
-        ]),
+        title: Text(t('acc_name'), style: const TextStyle(fontSize: 18)),
+        content: TextField(controller: ctrl, autofocus: true, maxLength: 30),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('join_btn'))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('save'))),
         ],
       ),
     );
     ctrl.dispose();
-    if (code == null || code.trim().isEmpty) return;
-    final inv = AppState.decodeInvite(code);
-    if (inv == null) {
-      _snack(t('join_bad'));
-      return;
-    }
-    if (!mounted) return;
-    final ok = await confirmDialog(context, t('join_title'), t('join_confirm', {'x': (inv['n'] ?? inv['u']).toString()}));
-    if (!ok) return;
+    if (v != null && v.trim().isNotEmpty) await s.setUserName(v);
+  }
+
+  Future<void> _logout() async {
+    if (!await confirmDialog(context, t('acc_logout'), t('acc_logout_b'), ok: t('acc_logout'), danger: true)) return;
     await _run(() async {
-      await s.joinWithCode(code);
-      if (s.accountType.isEmpty) await s.setAccount('local');
-      _snack(t('join_ok'));
+      await s.logout();
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
     });
   }
 
@@ -191,6 +168,29 @@ class _AccountScreenState extends State<AccountScreen> {
                 Text(t('g_note'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
               ]),
             ],
+            if (!widget.firstRun) ...[
+              const SizedBox(height: 14),
+              section(t('acc_profile'), [
+                Row(children: [
+                  Expanded(
+                    child: Text(s.userName.isEmpty ? t('acc_no_name') : s.userName,
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                  ),
+                  TextButton.icon(onPressed: _busy ? null : _rename, icon: const Icon(Icons.edit_outlined, size: 18), label: Text(t('rename'))),
+                ]),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _logout,
+                  icon: const Icon(Icons.logout),
+                  label: Text(t('acc_logout')),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: C.danger,
+                    side: BorderSide(color: C.border),
+                    minimumSize: const Size(0, 48),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                ),
+              ]),
+            ],
             const SizedBox(height: 14),
             section(t('share_title'), [
               if (s.isShared) ...[
@@ -230,4 +230,56 @@ class _AccountScreenState extends State<AccountScreen> {
     String p(int n) => n.toString().padLeft(2, '0');
     return '${d.year}-${p(d.month)}-${p(d.day)} ${p(d.hour)}:${p(d.minute)}';
   }
+}
+
+/// Paste an invite code and join someone else's hub.
+Future<void> joinWithInviteDialog(BuildContext context, AppState s) async {
+  void snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  final ctrl = TextEditingController();
+  final code = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: C.surface,
+      title: Text(t('join_title'), style: const TextStyle(fontSize: 18)),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(t('join_sub'), style: TextStyle(color: C.textSoft, height: 1.5, fontSize: 13)),
+        const SizedBox(height: 12),
+        TextField(
+          controller: ctrl,
+          minLines: 2,
+          maxLines: 4,
+          textDirection: TextDirection.ltr,
+          autocorrect: false,
+          decoration: InputDecoration(
+            hintText: t('join_hint'),
+            suffixIcon: IconButton(
+              icon: Icon(Icons.content_paste, color: C.muted),
+              onPressed: () async {
+                final d = await Clipboard.getData(Clipboard.kTextPlain);
+                if (d?.text != null) ctrl.text = d!.text!;
+              },
+            ),
+          ),
+        ),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('join_btn'))),
+      ],
+    ),
+  );
+  ctrl.dispose();
+  if (code == null || code.trim().isEmpty) return;
+  final inv = AppState.decodeInvite(code);
+  if (!context.mounted) return;
+  if (inv == null) {
+    snack(t('join_bad'));
+    return;
+  }
+  final ok = await confirmDialog(context, t('join_title'), t('join_confirm', {'x': (inv['n'] ?? inv['u']).toString()}));
+  if (!ok) return;
+  final messenger = ScaffoldMessenger.of(context);
+  await s.joinWithCode(code);
+  if (s.accountType.isEmpty) await s.setAccount('local');
+  messenger.showSnackBar(SnackBar(content: Text(t('join_ok'))));
 }

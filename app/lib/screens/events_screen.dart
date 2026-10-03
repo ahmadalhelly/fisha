@@ -25,6 +25,8 @@ String eventText(AppState s, HubEvent e) {
     'online' => t('ev_online'),
     'offline' => t('ev_offline'),
     'voltage' => t('ev_voltage', {'x': m}),
+    'overvolt' => t('ev_overvolt', {'x': m}),
+    'overcurrent' => t('ev_overcurrent', {'x': m}),
     'test' => t('ev_test'),
     _ => '${e.type} $m',
   };
@@ -45,7 +47,8 @@ IconData _icon(String type) => switch (type) {
       'remote' => Icons.phone_android,
       'online' => Icons.wifi,
       'offline' => Icons.wifi_off,
-      'voltage' => Icons.electric_bolt,
+      'voltage' || 'overvolt' => Icons.electric_bolt,
+      'overcurrent' => Icons.electric_meter_outlined,
       _ => Icons.info_outline,
     };
 

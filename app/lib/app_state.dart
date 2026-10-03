@@ -125,6 +125,12 @@ class AppState extends ChangeNotifier {
   bool hubTimeOk = false;
   String? hubFw;
   int tempMax = 70;
+  // whole-strip protections (hub 2.10+)
+  bool vProtect = true, vRestore = true, aProtect = true;
+  int vMax = 250;
+  double aMax = 16;
+  bool hubHasStripProt = false;
+  String hubReset = '';
   String ntfyTopic = '';
   int notifyTypes = 0x7FF;
   String otaPass = '';
@@ -214,6 +220,10 @@ class AppState extends ChangeNotifier {
       final e = await GoogleSync.I.signIn();
       if (e == null) return t('g_cancelled');
       await setAccount('google', email: e);
+      if (userName.isEmpty) {
+        final dn = GoogleSync.I.displayName;
+        await setUserName(dn != null && dn.trim().isNotEmpty ? dn : e.split('@').first);
+      }
       _startAutoSync();
       return null;
     } catch (_) {
@@ -265,6 +275,19 @@ class AppState extends ChangeNotifier {
       } catch (_) {}
     }
     await setAccount('local');
+  }
+
+  /// Leaves the account (Google or local) and goes back to the welcome screen. Data on this phone stays.
+  Future<void> logout() async {
+    _syncTimer?.cancel();
+    _syncTimer = null;
+    if (accountType == 'google') {
+      await _autoSync();
+      try {
+        await GoogleSync.I.signOut();
+      } catch (_) {}
+    }
+    await setAccount('');
   }
 
   void _startAutoSync() {
@@ -808,12 +831,21 @@ class AppState extends ChangeNotifier {
       if (cfg is Map) {
         tempMax = (cfg['temp_max'] as num?)?.toInt() ?? tempMax;
         tempProtect = cfg['temp_protect'] != false;
+        if (cfg.containsKey('v_max')) {
+          hubHasStripProt = true;
+          vProtect = cfg['v_protect'] != false;
+          vRestore = cfg['v_restore'] != false;
+          vMax = (cfg['v_max'] as num?)?.toInt() ?? vMax;
+          aProtect = cfg['a_protect'] != false;
+          aMax = (cfg['a_max'] as num?)?.toDouble() ?? aMax;
+        }
         ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
         notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
         hubSsid = (cfg['ssid'] ?? hubSsid).toString();
         wifiTest = (cfg['wifi_test'] ?? wifiTest).toString();
         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
       }
+      if (j['reset'] != null) hubReset = j['reset'].toString();
       final cl = j['cloud'];
       if (cl is Map && fromLocal) {
         hubCloudUp = cl['up'] == true;
@@ -961,6 +993,8 @@ class AppState extends ChangeNotifier {
         return t('err_local_only');
       case 'emqx_not_set':
         return t('users_need_emqx');
+      case 'busy':
+        return t('err_busy');
       default:
         return e;
     }
@@ -978,16 +1012,37 @@ class AppState extends ChangeNotifier {
     return l is List ? l.whereType<Map<String, dynamic>>().map(HubUser.fromJson).toList() : <HubUser>[];
   }
 
-  Future<CmdResult> setEmqx(String url, String key, String secret) => api('emqx_config', {'url': url, 'key': key, 'secret': secret});
+  /// Hub 2.10 runs server work in the background: start it, then wait for the result.
+  Future<CmdResult> _job(String action, Map<String, dynamic> body) async {
+    final r = await api(action, body);
+    if (!r.ok || r.data?['job'] != true) return r;
+    final until = DateTime.now().add(const Duration(seconds: 80));
+    while (DateTime.now().isBefore(until)) {
+      await Future.delayed(const Duration(milliseconds: 1500));
+      final p = await api('ujob');
+      if (!p.ok) continue;                      // the hub may be busy for a moment
+      final st = p.data?['state'];
+      if (st == 'running') continue;
+      if (st == 'done') {
+        final ok = p.data?['ok'] == true;
+        final d = p.data?['data'];
+        return CmdResult(ok, ok ? null : _errText((p.data?['error'] ?? '').toString()), d is Map<String, dynamic> ? d : null);
+      }
+      return CmdResult(false, t('err_not_confirmed'));
+    }
+    return CmdResult(false, t('err_no_ack'));
+  }
+
+  Future<CmdResult> setEmqx(String url, String key, String secret) => _job('emqx_config', {'url': url, 'key': key, 'secret': secret});
 
   /// Returns the invite code in [CmdResult.data]['code'].
   Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
-      api('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
+      _job('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
 
   Future<CmdResult> updateUser(HubUser u) =>
       api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')});
 
-  Future<CmdResult> revokeUser(String id) => api('user_revoke', {'id': id});
+  Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id});
 
   // ---------- joining someone else's hub ----------
   static Map<String, dynamic>? decodeInvite(String code) {
@@ -1182,6 +1237,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     _fail(await api('timer_cancel', {'tid': tid}));
   }
+
+  Future<void> setStripProtection({bool? vOn, bool? vBack, int? vLimit, bool? aOn, double? aLimit}) async {
+    if (vOn != null) vProtect = vOn;
+    if (vBack != null) vRestore = vBack;
+    if (vLimit != null) vMax = vLimit;
+    if (aOn != null) aProtect = aOn;
+    if (aLimit != null) aMax = aLimit;
+    notifyListeners();
+    _fail(await api('config', {'v_protect': vProtect, 'v_restore': vRestore, 'v_max': vMax, 'a_protect': aProtect, 'a_max': aMax}));
+  }
+
+  /// Restarts the ESP32 hub (owner only). It is back in about 15 s.
+  Future<CmdResult> rebootHub() => api('reboot');
 
   Future<void> setTempProtection({bool? enabled, int? max}) async {
     if (enabled != null) tempProtect = enabled;

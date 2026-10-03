@@ -76,6 +76,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
                 if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
                   _tempCard(),
+                  if (s.hubHasStripProt) ...[const SizedBox(height: 14), _stripProtCard()],
                   const SizedBox(height: 14),
                   if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
                   if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
@@ -130,6 +131,68 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
       ),
     );
   }
+
+  Widget _stripProtCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: cardBox(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Icon(Icons.bolt, color: C.warn),
+            const SizedBox(width: 10),
+            Expanded(child: Text(t('vprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+            Switch(value: s.vProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(vOn: v)),
+          ]),
+          Text(t('vprot_sub', {'x': s.vMax}), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+          Row(children: [
+            Text(t('vprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: s.vMax.toDouble().clamp(225, 270),
+                min: 225,
+                max: 270,
+                divisions: 45,
+                activeColor: C.accent,
+                label: '${s.vMax} V',
+                onChanged: s.vProtect ? (v) => setState(() => s.vMax = v.round()) : null,
+                onChangeEnd: (v) => s.setStripProtection(vLimit: v.round()),
+              ),
+            ),
+            Text('${s.vMax} V', textDirection: TextDirection.ltr, style: mono(14)),
+          ]),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: s.vRestore,
+            activeTrackColor: C.accent,
+            title: Text(t('vprot_restore'), style: const TextStyle(fontSize: 13)),
+            onChanged: s.vProtect ? (v) => s.setStripProtection(vBack: v) : null,
+          ),
+          Divider(height: 22, color: C.border),
+          Row(children: [
+            Icon(Icons.electric_meter_outlined, color: C.danger),
+            const SizedBox(width: 10),
+            Expanded(child: Text(t('aprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+            Switch(value: s.aProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(aOn: v)),
+          ]),
+          Text(t('aprot_sub', {'x': s.aMax.toStringAsFixed(1)}), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+          Row(children: [
+            Text(t('aprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: s.aMax.clamp(1, 16),
+                min: 1,
+                max: 16,
+                divisions: 30,
+                activeColor: C.accent,
+                label: '${s.aMax.toStringAsFixed(1)} A',
+                onChanged: s.aProtect ? (v) => setState(() => s.aMax = (v * 2).round() / 2) : null,
+                onChangeEnd: (v) => s.setStripProtection(aLimit: (v * 2).round() / 2),
+              ),
+            ),
+            Text('${s.aMax.toStringAsFixed(1)} A', textDirection: TextDirection.ltr, style: mono(14)),
+          ]),
+        ]),
+      );
 
   Widget _tempCard() => Container(
         padding: const EdgeInsets.all(16),

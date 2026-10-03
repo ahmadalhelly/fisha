@@ -16,6 +16,7 @@ class GoogleSync {
   GoogleSignInAccount? _acc;
 
   String? get email => _acc?.email;
+  String? get displayName => _acc?.displayName;
   bool get signedIn => _acc != null;
 
   /// Interactive sign-in. Returns the e-mail, or null if the user cancelled.

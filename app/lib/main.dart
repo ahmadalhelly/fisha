@@ -5,7 +5,7 @@ import 'app_state.dart';
 import 'i18n.dart';
 import 'screens/energy_screen.dart';
 import 'screens/events_screen.dart';
-import 'screens/account_screen.dart';
+import 'screens/welcome_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
@@ -117,7 +117,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
         child: !_booted
             ? const BootScreen(key: ValueKey('boot'))
             : s.accountType.isEmpty
-                ? AccountScreen(key: const ValueKey('account'), state: s, firstRun: true)
+                ? WelcomeScreen(key: const ValueKey('welcome'), state: s)
                 : Shell(key: const ValueKey('shell'), state: s),
       ),
     );

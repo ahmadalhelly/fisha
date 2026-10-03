@@ -112,6 +112,9 @@ class SettingsScreen extends StatelessWidget {
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
                 _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
+                if (!st.isShared)
+                  _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
+                      () => _reboot(context, st)),
                 _row(context, Icons.settings_backup_restore, C.accent2, t('backup_title'), '', () => _open(context, BackupScreen(state: st)),
                     last: true),
               ]),
@@ -194,6 +197,13 @@ class SettingsScreen extends StatelessWidget {
           ]),
         ),
       );
+
+  Future<void> _reboot(BuildContext context, AppState st) async {
+    if (!await confirmDialog(context, t('reboot_title'), t('reboot_body'), ok: t('reboot_btn'), danger: true)) return;
+    final r = await st.rebootHub();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.ok ? t('reboot_ok') : (r.error ?? t('err_failed')))));
+  }
 
   Widget _group(String title, List<Widget> children) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
