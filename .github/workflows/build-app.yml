@@ -91,12 +91,17 @@ jobs:
             grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
             grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
 
+      - name: Read app version
+        id: ver
+        run: echo "v=$(grep -m1 '^version:' app/pubspec.yaml | sed -E 's/version:[[:space:]]*//; s/\+.*//')" >> "$GITHUB_OUTPUT"
+
       - name: Publish APK as a release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0-build-${{ github.run_number }}
-          name: Fisha 1.1.0 (build ${{ github.run_number }})
+          tag_name: v${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
+          name: Fisha ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
+          prerelease: ${{ github.ref_name != 'main' }}
           make_latest: true
           files: Fisha-1.1.0-${{ github.run_number }}.apk
           body: "Commit ${{ github.sha }}"

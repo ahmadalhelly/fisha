@@ -43,7 +43,7 @@ const char* MQTT_USER = "ESP32_hub";
 const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
-const char* FW_VERSION = "2.2";
+const char* FW_VERSION = "2.7";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
