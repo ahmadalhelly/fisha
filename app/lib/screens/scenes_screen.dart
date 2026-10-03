@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'backup_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -110,7 +111,18 @@ class _ScenesScreenState extends State<ScenesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: C.bg,
-      appBar: AppBar(backgroundColor: C.bg, surfaceTintColor: Colors.transparent, title: Text(_tr('السيناريوهات', 'Scenarios'), style: const TextStyle(fontWeight: FontWeight.w700))),
+      appBar: AppBar(
+        backgroundColor: C.bg,
+        surfaceTintColor: Colors.transparent,
+        title: Text(_tr('السيناريوهات', 'Scenarios'), style: const TextStyle(fontWeight: FontWeight.w700)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_backup_restore),
+            tooltip: t('backup_title'),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BackupScreen(state: widget.state))),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _edit(),
         backgroundColor: C.accent,
