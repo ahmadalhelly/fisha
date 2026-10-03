@@ -1,0 +1,22 @@
+--- a/firmware/mttl_hub/mttl_hub.ino
++++ b/firmware/mttl_hub/mttl_hub.ino
+@@ -1327,6 +1327,9 @@
+   int c = u.indexOf(':'); if (c > 0) u = u.substring(0, c);
+   return u;
+ }
++bool http2xx(int c) { return c >= 200 && c < 300; }
++const char* EX_AUTHN = "/api/v5/authentication/password_based:built_in_database/users";
++const char* EX_AUTHZ = "/api/v5/authorization/sources/built_in_database/rules/users";
+ // One HTTPS call to the EMQX management API (runs only inside the job task). Returns the HTTP code (<0 = no connection).
+ int emqxCall(const char* method, const String& path, const String& body) {
+   int code;
+@@ -1427,9 +1430,6 @@
+     default: return "other";
+   }
+ }
+-bool http2xx(int c) { return c >= 200 && c < 300; }
+-const char* EX_AUTHN = "/api/v5/authentication/password_based:built_in_database/users";
+-const char* EX_AUTHZ = "/api/v5/authorization/sources/built_in_database/rules/users";
+ 
+ // what a shared user may call · 0 view · 1 control · 2 admin · -1 never
+ int needRole(const String& p) {
