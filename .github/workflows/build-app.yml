@@ -49,6 +49,37 @@ jobs:
             cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-1.1.0-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 
+      # open the APK on an Android emulator and keep the crash report (if any) in the build log
+      - name: Enable KVM
+        if: success()
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Launch test on emulator
+        if: success()
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          working-directory: .
+          script: |
+            adb install -r Fisha-1.1.0-${{ github.run_number }}.apk
+            adb logcat -c
+            adb shell am start -n com.mttlhub.mttl_hub/.MainActivity
+            sleep 25
+            adb logcat -d > launch.log || true
+            echo "===== LAUNCH TEST =====" >> build.log
+            (adb shell pidof com.mttlhub.mttl_hub && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
+            grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
+            grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
+
       - name: Publish APK as a release
         if: success()
         uses: softprops/action-gh-release@v2
