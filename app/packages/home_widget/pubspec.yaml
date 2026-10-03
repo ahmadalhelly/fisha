@@ -1,0 +1,11 @@
+name: home_widget
+description: Fisha's small bridge to its own Android home-screen widget (replaces the home_widget package, which pulled in WorkManager and crashed the app at start).
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  flutter:
+    sdk: flutter

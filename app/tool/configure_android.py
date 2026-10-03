@@ -98,22 +98,57 @@ if "FishaWidgetProvider" not in s:
     </application>''', 1)
 open(man, "w").write(s)
 
-# patch MainActivity to FlutterFragmentActivity for local_auth
-import glob
-for ma in glob.glob(os.path.join(APP, "android", "app", "src", "main", "kotlin", "**", "MainActivity.kt"), recursive=True):
-    content = open(ma).read()
-    if "FlutterFragmentActivity" not in content:
-        content = content.replace("import io.flutter.embedding.android.FlutterActivity", "import io.flutter.embedding.android.FlutterFragmentActivity")
-        content = content.replace("FlutterActivity()", "FlutterFragmentActivity()")
-        if "FlutterFragmentActivity" not in content:
-            content = re.sub(r'class\s+MainActivity\s*:\s*[^\n{]+', 'class MainActivity: io.flutter.embedding.android.FlutterFragmentActivity()', content)
-        open(ma, "w").write(content)
+# MainActivity: FlutterFragmentActivity (needed by local_auth) + the "fisha/widget" channel that
+# stores the widget values and asks the home-screen widget to redraw
+kt_dir = os.path.join(APP, "android", "app", "src", "main", "kotlin", "com", "mttlhub", "mttl_hub")
+os.makedirs(kt_dir, exist_ok=True)
+for ma in __import__("glob").glob(os.path.join(APP, "android", "app", "src", "main", "kotlin", "**", "MainActivity.kt"), recursive=True):
+    os.remove(ma)
+open(os.path.join(kt_dir, "MainActivity.kt"), "w").write('''package com.mttlhub.mttl_hub
 
-# home-screen widget. A plain AppWidgetProvider that reads the values home_widget saves in the
-# "HomeWidgetPreferences" SharedPreferences, so the app does not compile against the plugin's classes.
-widget_kt_dir = os.path.join(APP, "android", "app", "src", "main", "kotlin", "com", "mttlhub", "mttl_hub")
-os.makedirs(widget_kt_dir, exist_ok=True)
-open(os.path.join(widget_kt_dir, "FishaWidgetProvider.kt"), "w").write('''package com.mttlhub.mttl_hub
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity : FlutterFragmentActivity() {
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/widget").setMethodCallHandler { call, result ->
+            if (call.method == "update") {
+                try {
+                    val editor = getSharedPreferences("HomeWidgetPreferences", Context.MODE_PRIVATE).edit()
+                    val args = call.arguments as? Map<*, *>
+                    if (args != null) {
+                        for ((k, v) in args) editor.putString(k.toString(), v?.toString() ?: "")
+                    }
+                    editor.apply()
+                    val manager = AppWidgetManager.getInstance(this)
+                    val ids = manager.getAppWidgetIds(ComponentName(this, FishaWidgetProvider::class.java))
+                    if (ids.isNotEmpty()) {
+                        val intent = Intent(this, FishaWidgetProvider::class.java)
+                        intent.action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                        intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                        sendBroadcast(intent)
+                    }
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.success(false)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
+    }
+}
+''')
+
+# home-screen widget. A plain AppWidgetProvider that reads the values saved in the
+# "HomeWidgetPreferences" SharedPreferences.
+open(os.path.join(kt_dir, "FishaWidgetProvider.kt"), "w").write('''package com.mttlhub.mttl_hub
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
