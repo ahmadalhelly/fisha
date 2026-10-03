@@ -16,6 +16,21 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('strip_offline_cmd'))));
     return;
   }
+  if (!on && o.keepOn) {
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        icon: Icon(Icons.push_pin_outlined, color: C.accent),
+        title: Text(Tr.isAr ? 'المخرج محمي (مفتوح دائمًا)' : 'Outlet kept always on', style: const TextStyle(fontSize: 18)),
+        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «إبقاء دائمًا شغال» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        ],
+      ),
+    );
+    return;
+  }
   if (state.requiresBio(s.mac, o.n)) {
     final reason = Tr.isAr
         ? 'تأكيد البصمة للتحكم في «${state.outletName(s, o.n)}»'
@@ -40,21 +55,6 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
       ),
     );
     if (ok != true) return;
-  }
-  if (!on && o.keepOn) {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: C.surface,
-        icon: Icon(Icons.push_pin_outlined, color: C.accent),
-        title: Text(Tr.isAr ? 'المخرج محمي (مفتوح دائمًا)' : 'Outlet kept always on', style: const TextStyle(fontSize: 18)),
-        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «إبقاء دائمًا شغال» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-        ],
-      ),
-    );
-    return;
   }
   await state.setOutlet(s.mac, o.n, on);
 }
@@ -132,7 +132,6 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
     }
   }
 }
-
 
 
 /// Rated load: the MTTL-W01 is a 16 A strip (about 3500 W in total, and any single outlet may take the full load).

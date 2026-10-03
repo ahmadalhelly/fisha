@@ -48,28 +48,26 @@ class _WifiPainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 1.8;
+      ..strokeWidth = size.height * 0.13;
 
-    final center = Offset(size.width / 2, size.height - 2);
+    final center = Offset(size.width / 2, size.height * 0.88);
     
     // dot
     paint.style = PaintingStyle.fill;
     paint.color = color;
-    canvas.drawCircle(center, 1.8, paint);
+    canvas.drawCircle(center, size.height * 0.1, paint);
 
     // arcs
     paint.style = PaintingStyle.stroke;
     
-    for (int i = 1; i <= 3; i++) {
-      paint.color = i <= litLevel ? color : unlitColor;
-      final radius = 1.8 + i * 3.5;
+    final radii = [size.height * 0.32, size.height * 0.56, size.height * 0.80];
+    for (int i = 0; i < 3; i++) {
+      paint.color = (i + 1) <= litLevel ? color : unlitColor;
+      final radius = radii[i];
       final rect = Rect.fromCircle(center: center, radius: radius);
       
-      // ~90 deg sweep, centered upwards
-      // startAngle is -135 degrees (in radians)
-      // sweepAngle is 90 degrees (in radians)
-      const startAngle = -135 * (math.pi / 180);
-      const sweepAngle = 90 * (math.pi / 180);
+      const startAngle = -140 * (math.pi / 180);
+      const sweepAngle = 100 * (math.pi / 180);
       
       canvas.drawArc(rect, startAngle, sweepAngle, false, paint);
     }
