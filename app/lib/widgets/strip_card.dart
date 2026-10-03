@@ -61,6 +61,9 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
 
 Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
+  if (state.requiresBio(s.mac, 0)) {
+    if (!await authenticateBio(Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On')) return;
+  }
   final needsBio = s.outlets.any((o) => !o.on && state.requiresBio(s.mac, o.n));
   bool bioOk = true;
   if (needsBio) {
@@ -80,6 +83,9 @@ Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
 
 Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
+  if (state.requiresBio(s.mac, 0)) {
+    if (!await authenticateBio(Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off')) return;
+  }
   final bioOutlets = s.outlets.where((o) => o.on && state.requiresBio(s.mac, o.n)).toList();
   bool bioOk = true;
   if (bioOutlets.isNotEmpty) {
@@ -351,6 +357,22 @@ class _MasterSocket extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
         child: Column(children: [
+          if (state.requiresBio(s.mac, 0))
+            SizedBox(
+              height: 14,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Tooltip(
+                    message: Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                      child: Icon(Icons.fingerprint, size: 12, color: C.accent),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
           const SizedBox(height: 2),
           TweenAnimationBuilder<double>(
             tween: Tween(end: load),

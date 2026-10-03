@@ -44,6 +44,13 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
+                _switchTile(
+                    Icons.fingerprint,
+                    Tr.isAr ? 'بصمة للمفتاح الرئيسي' : 'Fingerprint for master switch',
+                    Tr.isAr ? 'يطلب البصمة قبل تشغيل أو إيقاف المشترك كله' : 'Asks for fingerprint before switching the whole strip',
+                    state.requiresBio(s.mac, 0),
+                    true,
+                    (v) => state.setRequiresBio(s.mac, 0, v)),
                 _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
                     (v) => state.setNotifyMask(s, v ? s.notifyMask | 0x10 : s.notifyMask & ~0x10)),
                 const SizedBox(height: 8),
