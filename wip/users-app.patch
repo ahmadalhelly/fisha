@@ -1,0 +1,484 @@
+diff --git a/app/lib/app_state.dart b/app/lib/app_state.dart
+index 60b4b1c..61ebbc8 100644
+--- a/app/lib/app_state.dart
++++ b/app/lib/app_state.dart
+@@ -148,9 +148,37 @@ class AppState extends ChangeNotifier {
+   int _seq = 0;
+   int _gen = 0; // bumps on restart so old loops stop
+ 
++  // owner hub state (fw >= 2.8)
++  bool emqxCfg = false;
++  int usersN = 0;
++
++  // shared (invitee) mode
++  InviteeProfile? _sharedProfile;
++  String _sharedMeId = '';
++  String _sharedMeName = '';
++  int _sharedMeRole = 0; // 0=view, 1=control, 2=admin
++  bool _sharedPassRotated = false;
++
+   bool get hubV2 => hubFw != null && !hubFw!.startsWith('1.');
+   bool get hubHasConfig => hubFw != null && hubFw != '1.0-alpha';
+ 
++  /// Hub firmware >= 2.8 (user management API)
++  bool get hubFw28 {
++    if (hubFw == null) return false;
++    final m = RegExp(r'^(\d+)\.(\d+)').firstMatch(hubFw!);
++    if (m == null) return false;
++    final major = int.parse(m.group(1)!);
++    final minor = int.parse(m.group(2)!);
++    return major > 2 || (major == 2 && minor >= 8);
++  }
++
++  // ---------- shared mode getters ----------
++  bool get isShared => _sharedProfile != null;
++  bool get canControl => !isShared || _sharedMeRole >= 1;
++  bool get canAdmin => !isShared || _sharedMeRole >= 2;
++  String get sharedUserName => _sharedMeName;
++  int get sharedUserRole => _sharedMeRole;
++
+   // ---------- lifecycle ----------
+   Future<void> init() async {
+     _prefs = await SharedPreferences.getInstance();
+@@ -183,6 +211,12 @@ class AppState extends ChangeNotifier {
+         rooms = (jsonDecode(rm) as List).whereType<Map<String, dynamic>>().map(Room.fromJson).toList();
+       } catch (_) {}
+     }
++    final sp = p.getString('shared_profile');
++    if (sp != null) {
++      try {
++        _sharedProfile = InviteeProfile.fromJson(jsonDecode(sp) as Map<String, dynamic>);
++      } catch (_) {}
++    }
+     ready = true;
+     await restart();
+   }
+@@ -221,6 +255,11 @@ class AppState extends ChangeNotifier {
+     hubOnline = false;
+     notifyListeners();
+     final gen = _gen;
++    if (isShared) {
++      // Shared mode: MQTT only, user-specific topics
++      _startSharedMqtt();
++      return;
++    }
+     if (settings.hasLocal) {
+       _pollLocal();
+       _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+@@ -235,6 +274,190 @@ class AppState extends ChangeNotifier {
+     });
+   }
+ 
++  // ---------- shared profile management ----------
++  Future<void> saveSharedProfile(InviteeProfile profile) async {
++    _sharedProfile = profile;
++    _sharedPassRotated = false;
++    await _prefs?.setString('shared_profile', jsonEncode(profile.toJson()));
++    await restart();
++  }
++
++  Future<void> leaveSharedProfile() async {
++    _sharedProfile = null;
++    _sharedMeId = '';
++    _sharedMeName = '';
++    _sharedMeRole = 0;
++    _sharedPassRotated = false;
++    await _prefs?.remove('shared_profile');
++    await restart();
++  }
++
++  // ---------- shared MQTT ----------
++  String _sharedBase(String hubId, String userId) => 'mttl/$hubId/u/$userId';
++
++  Future<void> _startSharedMqtt() async {
++    final profile = _sharedProfile;
++    if (profile == null) return;
++    final clientId = 'shapp-${DateTime.now().millisecondsSinceEpoch % 1000000000}';
++    final c = MqttServerClient.withPort(profile.host, clientId, profile.port);
++    c.secure = true;
++    c.securityContext = SecurityContext.defaultContext;
++    c.keepAlivePeriod = 30;
++    c.autoReconnect = true;
++    c.logging(on: false);
++    c.setProtocolV311();
++    c.connectionMessage = MqttConnectMessage().withClientIdentifier(clientId).startClean();
++    c.onConnected = () {
++      mqttConnected = true;
++      hubOnline = true;
++      mode = ConnMode.cloud;
++      notifyListeners();
++      // On first connect, rotate password
++      if (!_sharedPassRotated) {
++        _sharedPassRotated = true;
++        _doPassRotate(c, profile);
++      }
++    };
++    c.onAutoReconnected = () {
++      mqttConnected = true;
++      hubOnline = true;
++      mode = ConnMode.cloud;
++      notifyListeners();
++    };
++    c.onDisconnected = () {
++      mqttConnected = false;
++      mode = ConnMode.offline;
++      notifyListeners();
++    };
++    _mqtt = c;
++    try {
++      await c.connect(profile.user, profile.pass);
++    } catch (_) {
++      mqttConnected = false;
++      try { c.disconnect(); } catch (_) {}
++      _mqtt = null;
++      mode = ConnMode.offline;
++      notifyListeners();
++      _mqttRetry = Timer(const Duration(seconds: 15), () {
++        if (_mqtt == null && _sharedProfile != null) _startSharedMqtt();
++      });
++      return;
++    }
++    final base = _sharedBase(profile.hubId, profile.sharedId);
++    _mqttSub = c.updates?.listen((msgs) {
++      for (final m in msgs) {
++        final payload = m.payload;
++        if (payload is! MqttPublishMessage) continue;
++        final text = utf8.decode(payload.payload.message.toList(), allowMalformed: true);
++        _onSharedMqtt(m.topic.toString(), text, base, profile.sharedId);
++      }
++    });
++    c.subscribe('$base/#', MqttQos.atLeastOnce);
++  }
++
++  void _onSharedMqtt(String topic, String text, String base, String userId) {
++    if (topic == '$base/state') {
++      _applySharedState(text);
++    } else if (topic == '$base/cmd/ack') {
++      try {
++        final j = jsonDecode(text) as Map<String, dynamic>;
++        final done = _acks.remove((j['id'] ?? '').toString());
++        if (done != null && !done.isCompleted) done.complete(j);
++      } catch (_) {}
++    }
++  }
++
++  void _applySharedState(String body) {
++    try {
++      final j = jsonDecode(body) as Map<String, dynamic>;
++      // Parse 'me' object for role/identity
++      final me = j['me'];
++      if (me is Map) {
++        _sharedMeId = (me['id'] ?? '').toString();
++        _sharedMeName = (me['name'] ?? '').toString();
++        _sharedMeRole = (me['role'] as num?)?.toInt() ?? _sharedMeRole;
++      }
++      final devs = j['devices'];
++      if (devs is List) {
++        final list = <Strip>[];
++        for (final d in devs) {
++          if (d is! Map<String, dynamic>) continue;
++          var s = Strip.fromJson(d);
++          final p = _pending[s.mac];
++          if (p != null && p.isNotEmpty) s = s.withOutletState(p);
++          list.add(s);
++        }
++        _strips = list;
++        for (final s in list) {
++          if (!_order.contains(s.mac)) _order.add(s.mac);
++        }
++      }
++      hubOnline = true;
++      lastUpdate = DateTime.now();
++      notifyListeners();
++    } catch (_) {}
++  }
++
++  Future<void> _doPassRotate(MqttServerClient c, InviteeProfile profile) async {
++    try {
++      final id = 'pr${DateTime.now().millisecondsSinceEpoch}';
++      final done = Completer<Map<String, dynamic>>();
++      _acks[id] = done;
++      final base = _sharedBase(profile.hubId, profile.sharedId);
++      final msg = <String, dynamic>{'id': id, 'path': '/api/pass_rotate'};
++      final b = MqttClientPayloadBuilder()..addUTF8String(jsonEncode(msg));
++      c.publishMessage('$base/cmd', MqttQos.atLeastOnce, b.payload!);
++      final j = await done.future.timeout(const Duration(seconds: 15), onTimeout: () => <String, dynamic>{});
++      _acks.remove(id);
++      if (j['ok'] == true && j['data'] is Map) {
++        final newPw = (j['data'] as Map)['pw']?.toString();
++        if (newPw != null && newPw.isNotEmpty) {
++          _sharedProfile = InviteeProfile(
++            host: profile.host,
++            port: profile.port,
++            hubId: profile.hubId,
++            user: profile.user,
++            pass: newPw,
++            sharedId: profile.sharedId,
++          );
++          await _prefs?.setString('shared_profile', jsonEncode(_sharedProfile!.toJson()));
++          // Reconnect with new password
++          try { c.disconnect(); } catch (_) {}
++          _mqtt = null;
++          await Future.delayed(const Duration(seconds: 2));
++          if (_sharedProfile != null) _startSharedMqtt();
++        }
++      }
++    } catch (_) {}
++  }
++
++  // ---------- shared MQTT command ----------
++  Future<CmdResult> _sharedCmd(String action, [Map<String, dynamic> body = const {}]) async {
++    final profile = _sharedProfile;
++    if (profile == null || _mqtt == null || !mqttConnected) {
++      return CmdResult(false, t('err_no_conn'));
++    }
++    try {
++      final id = 'a${DateTime.now().millisecondsSinceEpoch}${_seq++}';
++      final done = Completer<Map<String, dynamic>>();
++      _acks[id] = done;
++      final base = _sharedBase(profile.hubId, profile.sharedId);
++      final msg = <String, dynamic>{'id': id, 'path': '/api/$action', ...body};
++      final bl = MqttClientPayloadBuilder()..addUTF8String(jsonEncode(msg));
++      _mqtt!.publishMessage('$base/cmd', MqttQos.atLeastOnce, bl.payload!);
++      final j = await done.future.timeout(const Duration(seconds: 12), onTimeout: () => <String, dynamic>{});
++      _acks.remove(id);
++      if (j.isEmpty) return CmdResult(false, t('err_no_ack'));
++      final ok = j['ok'] == true;
++      final data = j['data'];
++      final err = (j['error'] ?? '').toString();
++      return CmdResult(ok, ok ? null : (err.isNotEmpty ? err : t('err_not_confirmed')),
++          data is Map<String, dynamic> ? data : null);
++    } catch (_) {
++      return CmdResult(false, t('err_failed'));
++    }
++  }
++
+   // ---------- local: REST + Server-Sent Events ----------
+   Uri _localUri(String path) => Uri.parse('http://${settings.localHost}:${settings.localPort}$path');
+ 
+@@ -430,6 +653,8 @@ class AppState extends ChangeNotifier {
+       if (fw != null) hubFw = fw.toString();
+       hubTimeOk = j['time_ok'] == true;
+       if (j.containsKey('uptime_s')) hubUptimeS = (j['uptime_s'] as num?)?.toInt() ?? hubUptimeS;
++      if (j.containsKey('emqx_cfg')) emqxCfg = j['emqx_cfg'] == true;
++      if (j.containsKey('users_n')) usersN = (j['users_n'] as num?)?.toInt() ?? usersN;
+       final pv = j['provision'];
+       if (pv is Map) {
+         provState = (pv['state'] ?? 'idle').toString();
+@@ -528,6 +753,7 @@ class AppState extends ChangeNotifier {
+ 
+   // ---------- hub API: local REST when on the same Wi-Fi, otherwise MQTT ----------
+   Future<CmdResult> api(String action, [Map<String, dynamic> body = const {}]) async {
++    if (isShared) return _sharedCmd(action, body);
+     try {
+       if (_localFresh) {
+         final r = await http
+diff --git a/app/lib/i18n.dart b/app/lib/i18n.dart
+index 21426b3..81a2b9a 100644
+--- a/app/lib/i18n.dart
++++ b/app/lib/i18n.dart
+@@ -355,4 +355,46 @@ const Map<String, List<String>> _s = {
+   'add_timeout': ['خد وقت أكتر من اللازم. اتأكد إن المشترك بيرمش وقريب من الـ Hub وجرب تاني.', 'This took too long. Make sure the strip is blinking and close to the hub, then try again.'],
+   'add_retry': ['جرب تاني', 'Try again'],
+   'add_close': ['تمام', 'Done'],
++  // shared users / accounts
++  'users_and_sharing': ['المستخدمين والمشاركة', 'Users and sharing'],
++  'users_title': ['المستخدمين والمشاركة', 'Users and sharing'],
++  'invite_person': ['دعوة شخص', 'Invite user'],
++  'invite_title': ['دعوة شخص', 'Invite person'],
++  'role': ['الصلاحية', 'Role'],
++  'role_view': ['مشاهدة فقط', 'View only'],
++  'role_control': ['تحكم', 'Control'],
++  'role_admin': ['مسؤول', 'Admin'],
++  'scope': ['النطاق', 'Scope'],
++  'all_strips_scope': ['كل المشتركات', 'All strips'],
++  'selected_strips': ['مشتركات محددة', 'Selected strips'],
++  'view_only_perm': ['صلاحية مشاهدة فقط', 'View only permission'],
++  'emqx_setup_title': ['إعداد سيرفر EMQX', 'EMQX Server Setup'],
++  'emqx_setup_desc': ['لإدارة الحسابات وتحديد الصلاحيات، أدخل بيانات EMQX API الخاصة بك.', 'To manage accounts and permissions, enter your EMQX API credentials.'],
++  'emqx_url': ['عنوان EMQX API (URL)', 'EMQX API URL'],
++  'emqx_key': ['App ID (Key)', 'App ID (Key)'],
++  'emqx_secret': ['App Secret', 'App Secret'],
++  'import_invite': ['استيراد دعوة', 'Import invite'],
++  'import_invite_hint': ['الصق كود الدعوة هنا', 'Paste invite code here'],
++  'invite_code': ['كود الدعوة', 'Invite code'],
++  'invite_copied': ['اتنسخ الكود', 'Code copied'],
++  'invite_share_copied': ['اتنسخت رسالة الدعوة', 'Invite message copied'],
++  'invite_share_text': ['ادخل على Fisha > الاتصال > استيراد دعوة والصق الكود: {code}', 'Open Fisha > Connection > Import invite and paste code: {code}'],
++  'invite_once_warn': ['الكود يُستخدم مرة واحدة', 'This code can only be used once'],
++  'leave_shared': ['خروج من الحساب المشترك', 'Leave shared account'],
++  'leave_shared_confirm': ['متأكد إنك عاوز تخرج من الحساب المشترك؟', 'Are you sure you want to leave this shared account?'],
++  'shared_account': ['حساب مشترك', 'Shared account'],
++  'shared_profile': ['ملف المشاركة', 'Shared profile'],
++  'user_revoke': ['إلغاء الصلاحية', 'Revoke user'],
++  'user_revoke_confirm': ['متأكد إنك عاوز تلغي صلاحية "{x}"؟ مش هيقدر يتحكم أو يشوف المشتركات تاني.', 'Revoke access for "{x}"? They will no longer be able to view or control strips.'],
++  'err_invalid_invite': ['كود الدعوة مش صحيح', 'Invalid invite code'],
++  'user_updated': ['تم تحديث المستخدم', 'User updated'],
++  'user_created': ['تم إنشاء كود الدعوة', 'Invite code generated'],
++  'user_revoked': ['تم إلغاء الصلاحية', 'User revoked'],
++  'copy_share_msg': ['نسخ نص الدعوة', 'Copy invite text'],
++  'no_users': ['مفيش مستخدمين متضافين لسه', 'No users added yet'],
++  'no_users_sub': ['اضغط "دعوة شخص" عشان تشارك التحكم مع العيلة أو الزملاء.', 'Tap "Invite user" to share control with family or colleagues.'],
++  'edit_user': ['تعديل المستخدم', 'Edit user'],
++  'generate_invite': ['إنشاء الدعوة', 'Generate invite'],
++  'person_name': ['اسم الشخص', "Person's name"],
++  'person_name_hint': ['مثلاً: أحمد، سارة', 'e.g. Ahmad, Sarah'],
+ };
+diff --git a/app/lib/models.dart b/app/lib/models.dart
+index af457f0..cd3c0d2 100644
+--- a/app/lib/models.dart
++++ b/app/lib/models.dart
+@@ -335,3 +335,86 @@ class Room {
+         stripMacs: stripMacs ?? this.stripMacs,
+       );
+ }
++
++class SharedUser {
++  final String id;
++  final String name;
++  final int role; // 0: view, 1: control, 2: admin
++  final bool all;
++  final List<String> strips;
++
++  const SharedUser({
++    required this.id,
++    required this.name,
++    required this.role,
++    required this.all,
++    this.strips = const [],
++  });
++
++  factory SharedUser.fromJson(Map<String, dynamic> j) {
++    List<String> parseStrips(dynamic v) {
++      if (v is List) return v.map((e) => e.toString().toUpperCase()).toList();
++      if (v is String && v.isNotEmpty) {
++        return v.split(',').map((e) => e.trim().toUpperCase()).where((e) => e.isNotEmpty).toList();
++      }
++      return const [];
++    }
++
++    return SharedUser(
++      id: _s(j['id']),
++      name: _s(j['name']),
++      role: _i(j['role']),
++      all: j['all'] == true,
++      strips: parseStrips(j['strips']),
++    );
++  }
++
++  Map<String, dynamic> toJson() => {
++        'id': id,
++        'name': name,
++        'role': role,
++        'all': all,
++        'strips': strips,
++      };
++}
++
++class InviteeProfile {
++  String host;
++  int port;
++  String hubId;
++  String user;
++  String pass;
++  String sharedId;
++  String mode; // 'shared'
++
++  InviteeProfile({
++    required this.host,
++    required this.port,
++    required this.hubId,
++    required this.user,
++    required this.pass,
++    required this.sharedId,
++    this.mode = 'shared',
++  });
++
++  Map<String, dynamic> toJson() => {
++        'host': host,
++        'port': port,
++        'hubId': hubId,
++        'user': user,
++        'pass': pass,
++        'sharedId': sharedId,
++        'mode': mode,
++      };
++
++  factory InviteeProfile.fromJson(Map<String, dynamic> j) => InviteeProfile(
++        host: _s(j['host'] ?? j['h']),
++        port: _i(j['port'] ?? j['p'], 8883),
++        hubId: _s(j['hubId'] ?? j['hub']),
++        user: _s(j['user'] ?? j['u']),
++        pass: _s(j['pass'] ?? j['pw']),
++        sharedId: _s(j['sharedId'] ?? j['u'] ?? j['user']),
++        mode: _s(j['mode'], 'shared'),
++      );
++}
++
+diff --git a/app/lib/screens/settings_screen.dart b/app/lib/screens/settings_screen.dart
+index c7bce99..d9461bd 100644
+--- a/app/lib/screens/settings_screen.dart
++++ b/app/lib/screens/settings_screen.dart
+@@ -9,6 +9,7 @@ import 'firmware_screen.dart';
+ import 'guide_screen.dart';
+ import 'notifications_screen.dart';
+ import 'rooms_screen.dart';
++import 'users_screen.dart';
+ import 'wifi_screen.dart';
+ 
+ String _tr(String ar, String en) => Tr.isAr ? ar : en;
+@@ -81,13 +82,28 @@ class SettingsScreen extends StatelessWidget {
+               ]),
+               const SizedBox(height: 18),
+               _group(_tr('الـ Hub', 'Hub'), [
+-                _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
+-                    () => _open(context, WifiScreen(state: st))),
++                if (!st.isShared)
++                  _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
++                      () => _open(context, WifiScreen(state: st))),
+                 _row(context, Icons.link, C.accent, _tr('الاتصال', 'Connection'), conn, () => _open(context, ConnectionScreen(state: st)),
+                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
+-                _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
+-                    st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
+-                _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st)),
++                if (!st.isShared)
++                  _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
++                      st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
++                if (!st.isShared)
++                  _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
++                if (!st.isShared && st.hubFw28)
++                  _row(
++                    context,
++                    Icons.group_outlined,
++                    C.accent2,
++                    t('users_and_sharing'),
++                    '${st.usersN} ${Tr.isAr ? 'مستخدم' : 'users'}',
++                    () => _open(context, UsersScreen(state: st)),
++                    last: true,
++                  ),
++                if (st.isShared || !st.hubFw28)
++                  _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st)),
+                     last: true),
+               ]),
+               const SizedBox(height: 18),
+diff --git a/app/pubspec.yaml b/app/pubspec.yaml
+index 2ba8869..a609d80 100644
+--- a/app/pubspec.yaml
++++ b/app/pubspec.yaml
+@@ -1,7 +1,7 @@
+ name: mttl_hub
+ description: Fisha — control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud). By ahmadalhelly.
+ publish_to: 'none'
+-version: 1.7.0+9
++version: 1.8.0+10
+ 
+ environment:
+   sdk: ^3.4.0
+@@ -19,6 +19,7 @@ dependencies:
+   flutter_foreground_task: ^11.0.3
+   flutter_local_notifications: ^22.3.1
+   local_auth: ^2.3.0
++  qr_flutter: ^4.1.0
+   # local bridge (packages/home_widget): the pub.dev home_widget pulled in WorkManager and crashed the app at start
+   home_widget:
+     path: packages/home_widget
