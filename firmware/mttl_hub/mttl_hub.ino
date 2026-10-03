@@ -28,8 +28,8 @@
 #include <vector>
 
 // ================== CONFIG ==================
-const char* WIFI_SSID = "YAYA";                 // 2.4 GHz home network — also given to new strips
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";   // no ':' allowed (strip protocol limit)
+const char* WIFI_SSID = "YAYA";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
+const char* WIFI_PASS = "";   // no ':' allowed (strip protocol limit)
 #define USE_STATIC_IP 1
 IPAddress LOCAL_IP(192, 168, 1, 110);
 IPAddress GATEWAY(192, 168, 1, 1);
@@ -37,13 +37,19 @@ IPAddress SUBNET(255, 255, 255, 0);
 IPAddress DNS1(192, 168, 1, 1);
 const char* API_TOKEN = "";                     // empty = no auth (LAN only)
 const char* HOSTNAME  = "mttl-hub";
-const char* OTA_PASS  = "change-me";
+const char* OTA_PASS  = "";
 const char* MQTT_URI  = "mqtts://t0eb1112.ala.eu-central-1.emqxsl.com:8883";
 const char* MQTT_USER = "ESP32_hub";
-const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";
+const char* MQTT_PASS = "";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
-const char* FW_VERSION = "2.7";
+// From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
+// above keeps using the stored ones, so later updates can be installed from the app without editing the code.
+String secSsid, secWifi, secMqtt, secOta;
+// Wi-Fi change requested from the app (tested before it is kept)
+volatile bool wifiTestReq = false;
+String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
+const char* FW_VERSION = "2.8";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -71,8 +77,8 @@ MrY=
 )PEM";
 
 const uint16_t STRIP_PORT = 10086, WEB_PORT = 8080, SSE_PORT = 8081;
-const uint32_t POLL_MS = 3000, STALE_MS = 45000;
-const uint8_t  DIAG_EVERY = 5, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 10, MAX_EVENTS = 40, MAX_SSE = 4;
+const uint32_t POLL_MS = 2000, STALE_MS = 45000;
+const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 10, MAX_EVENTS = 40, MAX_SSE = 4;
 const int      ELOG_DAYS = 90;
 
 // ---------- data ----------
@@ -86,28 +92,44 @@ struct ELog {                                    // per-strip daily energy histo
   int32_t dayOf[ELOG_DAYS];
 };
 
+struct PeakLog {                                 // per-strip daily highest total load (W)
+  uint32_t magic = 0;
+  int32_t day = 0;
+  uint16_t today = 0;
+  uint16_t pk[ELOG_DAYS];
+  int32_t dayOf[ELOG_DAYS];
+};
+
 struct Strip {
   WiFiClient c;
   bool used = false, identified = false, hasRssi = false, gotInfo = false, poked = false;
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
   String label, olabel[4];
-  uint8_t lockMask = 0, lockState = 0, protMask = 0, keepOnMask = 0, keepOnHold = 0, notifyMask = 0x1F;
+  uint8_t lockMask = 0, lockState = 0, protMask = 0, notifyMask = 0x1F;
+  uint8_t keepMask = 0, keepHold = 0;            // v2.8 keep always on · hold = a safety cut is in force
+  uint32_t keepEvAt[4] = {0, 0, 0, 0};
   uint16_t autoOffMin[4] = {0, 0, 0, 0};
   uint32_t autoOffAt[4] = {0, 0, 0, 0};
   uint32_t hotSince[4] = {0, 0, 0, 0};
-  uint32_t loadEventAt = 0;
+  uint32_t loadEventAt = 0, voltEventAt = 0;
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
-  uint32_t lastRx = 0, infoSeq = 0;
+  uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
+  uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
 };
 
-struct Timer { bool used = false; uint32_t id = 0; char mac[13] = {0}; uint8_t outlet = 0, kind = 0, phase = 0; bool on = false; uint32_t at = 0, offMs = 0, tries = 0; };
-// kind: 0 = switch on/off once, 1 = power cycle (off, wait, on)
+struct Timer { bool used = false; uint32_t id = 0; char mac[13] = {0}; uint8_t outlet = 0, kind = 0, phase = 0; bool on = false;
+               uint32_t at = 0, offMs = 0, onMs = 0, periodS = 0, tries = 0; };
+// kind: 0 = switch on/off (once, or every periodS), 1 = reboot: off, wait, on (once, or every periodS),
+//       2 = loop: on for onMs, off for offMs, forever. All kept in NVS, so they survive a hub restart.
+struct TimerNV { uint32_t id; char mac[13]; uint8_t outlet, kind, on, phase; uint32_t offS, onS, periodS, dueEpoch, remainS; };
+struct Known { String mac, label, olabel[4]; uint8_t lock, prot, notify, keep; };
 
 struct Sched { uint32_t id; char mac[13]; uint8_t outlet, on, days, hh, mm, enabled; uint32_t date; char label[40]; };
-struct AutomV1 { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; };
-struct Autom { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; };
+struct AutomV2 { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; };
+struct Autom { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; float limit2; };
+// metric 2 = watts OR temperature: "watts" is the W limit and "limit2" the °C limit
 // outlet 0 = whole strip (total W / hottest outlet) · metric 0 = power (W), 1 = temperature (°C) · "watts" holds the threshold
 // act: 1 notify, 2 switch off, 3 both
 struct Ev { uint32_t ts = 0; String type, mac, msg; int outlet = 0; };
@@ -116,6 +138,8 @@ struct Note { String type, mac, msg; int outlet; };   // queued phone notificati
 
 Strip strips[MAX_STRIPS];
 ELog elogs[MAX_STRIPS];
+PeakLog peaks[MAX_STRIPS];
+uint32_t peakSavedAt[MAX_STRIPS];
 Timer timers[MAX_TIMERS];
 Sched scheds[MAX_SCHED];
 uint8_t schedCount = 0;
@@ -260,11 +284,13 @@ void sseSend(const char* ev, const String& data);
 // ---------- phone notifications through ntfy (free, works while the app is closed) ----------
 String ntfyTopic;
 uint32_t notifyTypes = 0xFFFFFFFF;
-const char* EV_TYPES[] = {"temp", "load", "auto_off", "automation", "schedule", "missed", "timer", "cycle", "lock", "added", "test"};
+const char* EV_TYPES[] = {"temp", "load", "auto_off", "automation", "schedule", "missed", "timer", "cycle", "lock", "added", "test",
+                          "button", "remote", "online", "offline", "voltage"};
+const int EV_COUNT = 16;
 Note notes[6];
 uint8_t noteCount = 0;
 int stripFor(const String& mac);
-int typeBit(const String& t) { for (int i = 0; i < 11; i++) if (t == EV_TYPES[i]) return i; return -1; }
+int typeBit(const String& t) { for (int i = 0; i < EV_COUNT; i++) if (t == EV_TYPES[i]) return i; return -1; }
 
 void queueNotify(const String& type, const String& mac, int outlet, const String& msg) {
   if (!ntfyTopic.length()) return;
@@ -291,7 +317,9 @@ String noteTitle(const Note& n) {
   const char* t = n.type == "temp" ? "High temperature - turned off" : n.type == "load" ? "High load" : n.type == "auto_off" ? "Auto-off"
                 : n.type == "automation" ? "Rule triggered" : n.type == "schedule" ? "Schedule ran" : n.type == "missed" ? "Missed (strip offline)"
                 : n.type == "timer" ? "Timer ran" : n.type == "cycle" ? "Rebooted" : n.type == "lock" ? "Child lock reverted a button press"
-                : n.type == "added" ? "New strip connected" : "Test notification";
+                : n.type == "added" ? "New strip connected" : n.type == "button" ? "Switched on the strip"
+                : n.type == "remote" ? "Switched from the app" : n.type == "online" ? "Strip back online" : n.type == "offline" ? "Strip offline"
+                : n.type == "voltage" ? "Unusual voltage" : "Test notification";
   return who.length() ? String(t) + " | " + who : String(t);
 }
 
@@ -336,6 +364,7 @@ void saveLocks(Strip& s) {
   cfg.putUChar(("s" + s.mac).c_str(), s.lockState);
 }
 void saveElog(int i) { cfg.putBytes(("e" + strips[i].mac).c_str(), &elogs[i], sizeof(ELog)); }
+void savePeak(int i) { cfg.putBytes(("k" + strips[i].mac).c_str(), &peaks[i], sizeof(PeakLog)); peakSavedAt[i] = millis(); }
 
 void loadStripCfg(int i) {
   Strip& s = strips[i];
@@ -344,7 +373,7 @@ void loadStripCfg(int i) {
   s.lockMask = cfg.getUChar(("l" + s.mac).c_str(), 0);
   s.lockState = cfg.getUChar(("s" + s.mac).c_str(), 0);
   s.protMask = cfg.getUChar(("p" + s.mac).c_str(), 0);
-  s.keepOnMask = cfg.getUChar(("k" + s.mac).c_str(), 0);
+  s.keepMask = cfg.getUChar(("q" + s.mac).c_str(), 0);
   s.notifyMask = cfg.getUChar(("m" + s.mac).c_str(), 0x1F);
   if (cfg.getBytesLength(("a" + s.mac).c_str()) == sizeof(s.autoOffMin)) cfg.getBytes(("a" + s.mac).c_str(), s.autoOffMin, sizeof(s.autoOffMin));
   else memset(s.autoOffMin, 0, sizeof(s.autoOffMin));
@@ -354,6 +383,35 @@ void loadStripCfg(int i) {
     memset(&el, 0, sizeof(ELog));
     el.magic = 0xE1E1;
     for (int d = 0; d < ELOG_DAYS; d++) el.dayOf[d] = -1;
+  }
+  PeakLog& pl = peaks[i];
+  if (cfg.getBytesLength(("k" + s.mac).c_str()) == sizeof(PeakLog)) cfg.getBytes(("k" + s.mac).c_str(), &pl, sizeof(PeakLog));
+  if (pl.magic != 0xBEA7) {
+    memset(&pl, 0, sizeof(PeakLog));
+    pl.magic = 0xBEA7;
+    for (int d = 0; d < ELOG_DAYS; d++) pl.dayOf[d] = -1;
+  }
+  peakSavedAt[i] = millis();
+}
+
+void peakUpdate(int i, float watts) {
+  if (!timeOk()) return;
+  PeakLog& pl = peaks[i];
+  int32_t today = localDay();
+  if (pl.day != today) {
+    if (pl.day) {
+      int idx = ((pl.day % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
+      pl.pk[idx] = pl.today;
+      pl.dayOf[idx] = pl.day;
+    }
+    pl.day = today;
+    pl.today = 0;
+    savePeak(i);
+  }
+  uint16_t w = (uint16_t)constrain(watts, 0.0f, 65000.0f);
+  if (w > pl.today) {
+    pl.today = w;
+    if (millis() - peakSavedAt[i] > 600000) savePeak(i);   // at most every 10 min
   }
 }
 
@@ -372,15 +430,14 @@ void loadGlobals() {
   if (cfg.getBytesLength("aut") == sizeof(Autom) * MAX_AUTO) {
     cfg.getBytes("aut", autos, sizeof(Autom) * MAX_AUTO);
     autoCount = min((int)cfg.getUChar("autN", 0), (int)MAX_AUTO);
-  } else if (cfg.getBytesLength("aut") == sizeof(AutomV1) * MAX_AUTO) {   // migrate rules saved by v2.0/2.1
-    static AutomV1 old[MAX_AUTO];
+  } else if (cfg.getBytesLength("aut") == sizeof(AutomV2) * MAX_AUTO) {   // migrate rules saved by v2.0 .. v2.2
+    static AutomV2 old[MAX_AUTO];
     cfg.getBytes("aut", old, sizeof(old));
     autoCount = min((int)cfg.getUChar("autN", 0), (int)MAX_AUTO);
     for (int i = 0; i < autoCount; i++) {
       memset(&autos[i], 0, sizeof(Autom));
-      autos[i].id = old[i].id; memcpy(autos[i].mac, old[i].mac, sizeof old[i].mac);
-      autos[i].outlet = old[i].outlet; autos[i].above = old[i].above; autos[i].act = old[i].act; autos[i].enabled = old[i].enabled;
-      autos[i].watts = old[i].watts; autos[i].holdS = old[i].holdS; memcpy(autos[i].label, old[i].label, sizeof old[i].label);
+      memcpy(&autos[i], &old[i], offsetof(AutomV2, metric) + 1);
+      autos[i].limit2 = 70;
     }
     saveAutos();
   }
@@ -389,9 +446,94 @@ void loadGlobals() {
   for (int i = 0; i < MAX_AUTO; i++) { autoArmed[i] = false; autoSince[i] = 0; }
 }
 
+// ---------- strips the hub has seen (shown as offline instead of disappearing) ----------
+const int MAX_KNOWN = 12;
+Known known[MAX_KNOWN];
+int knownCount = 0;
+
+void refreshKnown(const String& mac) {
+  int k = -1;
+  for (int i = 0; i < knownCount; i++) if (known[i].mac == mac) k = i;
+  if (k < 0) {
+    if (knownCount >= MAX_KNOWN) return;
+    k = knownCount++;
+    String list;
+    for (int i = 0; i < knownCount; i++) { if (i) list += ","; list += (i == k ? mac : known[i].mac); }
+    cfg.putString("known", list);
+  }
+  Known& n = known[k];
+  n.mac = mac;
+  n.label = cfg.getString(("n" + mac).c_str(), "");
+  for (int o = 0; o < 4; o++) n.olabel[o] = cfg.getString(("n" + mac + String(o + 1)).c_str(), "");
+  n.lock = cfg.getUChar(("l" + mac).c_str(), 0);
+  n.prot = cfg.getUChar(("p" + mac).c_str(), 0);
+  n.keep = cfg.getUChar(("q" + mac).c_str(), 0);
+  n.notify = cfg.getUChar(("m" + mac).c_str(), 0x1F);
+}
+
+void loadKnown() {
+  knownCount = 0;
+  String list = cfg.getString("known", "");
+  for (const String& m : split(list, ',')) if (m.length() == 12 && knownCount < MAX_KNOWN) { known[knownCount].mac = m; knownCount++; }
+  for (int i = 0; i < knownCount; i++) refreshKnown(known[i].mac);
+}
+
+void forgetKnown(const String& mac) {
+  String list;
+  int w = 0;
+  for (int i = 0; i < knownCount; i++) {
+    if (known[i].mac == mac) continue;
+    known[w++] = known[i];
+  }
+  knownCount = w;
+  for (int i = 0; i < knownCount; i++) { if (i) list += ","; list += known[i].mac; }
+  cfg.putString("known", list);
+}
+
+bool hasSched(const String& mac, int outlet);
+bool hasRule(const String& mac, int outlet);
+
+String offlineStripJson(const Known& n) {
+  String outs = "[";
+  for (int k = 0; k < 4; k++) {
+    if (k) outs += ",";
+    outs += "{\"n\":" + String(k + 1) + ",\"on\":false,\"power_w\":0,\"energy_kwh\":0,\"temp_c\":0,\"label\":\"" + jsonEsc(n.olabel[k]) +
+            "\",\"locked\":" + ((n.lock & (1 << k)) ? "true" : "false") + ",\"protected\":" + ((n.prot & (1 << k)) ? "true" : "false") +
+            ",\"keep_on\":" + ((n.keep & (1 << k)) ? "true" : "false") +
+            ",\"auto_off_min\":0,\"auto_off_in_s\":-1,\"sched\":" + (hasSched(n.mac, k + 1) ? "true" : "false") +
+            ",\"rule\":" + (hasRule(n.mac, k + 1) ? "true" : "false") + "}";
+  }
+  return "{\"mac\":\"" + n.mac + "\",\"label\":\"" + jsonEsc(n.label) + "\",\"fw\":\"\",\"online\":false,\"on\":false,\"power_w\":0,\"voltage\":null,\"rssi\":null,\"notify\":" +
+         String(n.notify) + ",\"sched\":" + (hasSched(n.mac, 0) ? "true" : "false") + ",\"rule\":" + (hasRule(n.mac, 0) ? "true" : "false") +
+         ",\"outlets\":" + outs + "]}";
+}
+
+// ---------- strips removed from the app are ignored until they are added again ----------
+bool isBlocked(const String& mac) { return ("," + cfg.getString("block", "") + ",").indexOf("," + mac + ",") >= 0; }
+void setBlocked(const String& mac, bool on) {
+  String out;
+  for (const String& m : split(cfg.getString("block", ""), ',')) {
+    if (m.length() != 12 || m == mac) continue;
+    if (out.length()) out += ",";
+    out += m;
+  }
+  if (on) { if (out.length()) out += ","; out += mac; }
+  cfg.putString("block", out);
+}
+String offlineMacs;                               // strips that dropped off, to report when they come back
+
 // ---------- strip control ----------
 void dropStrip(Strip& s, const char* why) {
   Serial.printf("[-] %s %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), why);
+  if (s.identified && (!strcmp(why, "disconnected") || !strcmp(why, "stale"))) {
+    String mac = s.mac;
+    if (offlineMacs.indexOf(mac) < 0) offlineMacs += mac + ",";
+    s.c.stop();
+    s = Strip();
+    stateDirty = true;
+    addEvent("offline", mac, 0, "");
+    return;
+  }
   s.c.stop();
   s = Strip();
   stateDirty = true;
@@ -400,25 +542,33 @@ void dropStrip(Strip& s, const char* why) {
 void noteCommanded(Strip& s, int outlet, bool on) {
   uint8_t before = s.lockState;
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    s.cmdAt[ch - 1] = millis();
     if (on) s.lockState |= (1 << (ch - 1)); else s.lockState &= ~(1 << (ch - 1));
   }
   if (s.lockState != before && s.lockMask) saveLocks(s);
 }
 
 // fire-and-forget switch (used by schedules, timers, automations); the next poll confirms it
-void sendOnOff(Strip& s, int outlet, bool on, bool force = false) {
-  noteCommanded(s, outlet, on);
+// keep-always-on outlets ignore "off" unless it is a safety cut (force), which holds them off until switched on again
+bool keepSkip(Strip& s, int ch, bool on, bool force) {
+  uint8_t bit = 1 << (ch - 1);
+  if (on || !(s.keepMask & bit)) return false;
+  if (!force) return true;
+  s.keepHold |= bit;
+  return false;
+}
+
+void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
-    if (!on && (s.keepOnMask & (1 << (ch - 1)))) {
-      if (!force) continue;
-      s.keepOnHold |= (1 << (ch - 1));
-    }
+    if (keepSkip(s, ch, on, force)) continue;
+    noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     s.o[ch - 1].on = on;
   }
   sendLine(s, "up:getinfo:all");
   stateDirty = true;
 }
+void sendOnOff(Strip& s, int outlet, bool on) { sendOnOffF(s, outlet, on, false); }
 
 void pumpStrips();
 void pumpFor(uint32_t ms) { uint32_t t0 = millis(); while (millis() - t0 < ms) { pumpStrips(); delay(5); } }
@@ -429,13 +579,10 @@ bool waitForInfo(Strip& s, uint32_t seq, uint32_t ms) {
 }
 
 // switch and wait for the strip to confirm (used by app commands)
-bool setOutlets(Strip& s, int outlet, bool on, bool force = false) {
-  noteCommanded(s, outlet, on);
+bool setOutlets(Strip& s, int outlet, bool on) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
-    if (!on && (s.keepOnMask & (1 << (ch - 1)))) {
-      if (!force) continue;
-      s.keepOnHold |= (1 << (ch - 1));
-    }
+    if (keepSkip(s, ch, on, false)) continue;
+    noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     pumpFor(120);
   }
@@ -487,7 +634,7 @@ void evalStrip(int i) {
     if (tempProtect && o.on && o.tempC >= tempMax) {
       if (!s.hotSince[k]) s.hotSince[k] = now ? now : 1;
       else if (now - s.hotSince[k] > 30000) {
-        sendOnOff(s, k + 1, false, true);
+        sendOnOffF(s, k + 1, false, true);
         addEvent("temp", s.mac, k + 1, String(o.tempC) + "°C");
         s.hotSince[k] = 0;
       }
@@ -497,7 +644,7 @@ void evalStrip(int i) {
     // auto-off
     if (s.autoOffAt[k] && (int32_t)(now - s.autoOffAt[k]) >= 0) {
       s.autoOffAt[k] = 0;
-      if (o.on) {
+      if (o.on && !(s.keepMask & (1 << k))) {
         sendOnOff(s, k + 1, false);
         addEvent("auto_off", s.mac, k + 1, String(s.autoOffMin[k]) + " min");
       }
@@ -513,12 +660,17 @@ void evalStrip(int i) {
   for (int a = 0; a < autoCount; a++) {
     Autom& r = autos[a];
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
-    float p;
+    float pw, tc;
     bool on;
-    if (r.outlet == 0) { p = r.metric ? hottest : total; on = anyOn; }
-    else { Outlet& o = s.o[r.outlet - 1]; p = r.metric ? o.tempC : (o.on ? o.powerW : 0); on = o.on; }
+    if (r.outlet == 0) { pw = total; tc = hottest; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; on = o.on; }
+    float p = r.metric == 1 ? tc : pw;
     bool cond;
-    if (r.above) {
+    if (r.metric == 2) {                         // either limit
+      if (pw < r.watts && tc < r.limit2) { autoArmed[a] = true; autoSince[a] = 0; continue; }
+      cond = autoArmed[a] && on;
+      if (tc >= r.limit2) p = tc;
+    } else if (r.above) {
       if (p < r.watts) { autoArmed[a] = true; autoSince[a] = 0; continue; }
       cond = autoArmed[a] && on;
     } else {
@@ -532,16 +684,25 @@ void evalStrip(int i) {
       autoSince[a] = 0;
       if (r.act & 2) {
         if (r.outlet == 0) {                       // whole strip: never cut protected outlets (router)
-          for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOff(s, k + 1, false, true);
-        } else sendOnOff(s, r.outlet, false, true);
+          for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+        } else sendOnOffF(s, r.outlet, false, true);
       }
-      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, r.metric ? 0 : 1) + (r.metric ? " C" : " W"));
+      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, (r.metric == 1 || (r.metric == 2 && p == tc)) ? 0 : 1) + ((r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : " W"));
     }
   }
 }
 
 // ---------- strip protocol ----------
 // up:getinfo:<ch>:<runtime>;<relay>;<state>;<flagA>;<flagB>;<power mW>;<energy hex Wh>;<prev>;<config>;<status>;<event>;<temp>  x4
+void keepRestore(Strip& s, int ch) {
+  s.cmdAt[ch - 1] = millis();
+  sendLine(s, "up:onoff:" + String(ch) + ":on");
+  if (!s.keepEvAt[ch - 1] || millis() - s.keepEvAt[ch - 1] > 60000) {
+    s.keepEvAt[ch - 1] = millis() ? millis() : 1;
+    addEvent("lock", s.mac, ch, "keep_on");
+  }
+}
+
 bool tryParseInfo(int i) {
   Strip& s = strips[i];
   std::vector<String> t = split(s.pendingInfo.substring(11), ':');
@@ -563,7 +724,14 @@ bool tryParseInfo(int i) {
     return false;
   }
   uint32_t now = millis();
+  float total = 0;
   for (int k = 0; k < 4; k++) {
+    if (tmp[k].on) total += tmp[k].powerW;
+    // a change the hub did not ask for in the last 8 s came from the strip's own buttons
+    if (s.gotInfo && tmp[k].on != s.o[k].on && now - s.cmdAt[k] > 8000 && !(s.lockMask & (1 << k))) {
+      s.cmdAt[k] = now;
+      addEvent("button", s.mac, k + 1, tmp[k].on ? "on" : "off");
+    }
     bool was = s.gotInfo ? s.o[k].on : false;
     if (tmp[k].on && !was && s.autoOffMin[k]) s.autoOffAt[k] = now + (uint32_t)s.autoOffMin[k] * 60000UL;
     if (!tmp[k].on) s.autoOffAt[k] = 0;
@@ -572,16 +740,19 @@ bool tryParseInfo(int i) {
   s.gotInfo = true;
   s.pendingInfo = "";
   s.infoSeq++;
-  for (int k = 0; k < 4; k++) {                  // enforce keep_on and child lock
-    if (s.o[k].on) s.keepOnHold &= ~(1 << k);
-    if ((s.keepOnMask & (1 << k)) && !(s.keepOnHold & (1 << k)) && !s.o[k].on) {
-      sendLine(s, "up:onoff:" + String(k + 1) + ":on");
-    } else if (s.lockMask & (1 << k)) {
-      bool want = s.lockState & (1 << k);
-      if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
-    }
+  for (int k = 0; k < 4; k++) {                  // keep always on (wins over the child lock)
+    uint8_t bit = 1 << k;
+    if (!(s.keepMask & bit)) continue;
+    if (s.o[k].on) { s.keepHold &= ~bit; continue; }
+    if (!(s.keepHold & bit)) keepRestore(s, k + 1);
+  }
+  for (int k = 0; k < 4; k++) {                  // child lock: keep a locked outlet where it belongs
+    if (!(s.lockMask & (1 << k)) || (s.keepMask & (1 << k))) continue;
+    bool want = s.lockState & (1 << k);
+    if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
   }
   energyUpdate(i);
+  peakUpdate(i, total);
   evalStrip(i);
   stateDirty = true;
   return true;
@@ -598,10 +769,16 @@ void handleLine(int i, const String& line) {
     std::vector<String> f = split(line.substring(12), ';');
     if (f.size() < 5 || f[1].length() != 12 || !isHex(f[1])) { Serial.printf("[?] bootinfo not understood from %s: %s\n", s.ip.c_str(), line.c_str()); return; }
     String mac = f[1]; mac.toUpperCase();
+    bool target = provTarget.length() && mac.endsWith(provTarget) && (provState == "waiting" || provState == "error");
+    if (isBlocked(mac)) {
+      if (!target) { Serial.printf("[x] %s was removed in the app, ignoring\n", mac.c_str()); s.c.stop(); s = Strip(); return; }
+      setBlocked(mac, false);
+    }
     for (int j = 0; j < MAX_STRIPS; j++)
       if (j != i && strips[j].used && strips[j].mac == mac) dropStrip(strips[j], "replaced");
-    s.mac = mac; s.model = f[0]; s.fw = f[3]; s.identified = true;
+    s.mac = mac; s.model = f[0]; s.fw = f[3]; s.identified = true; s.connectedAt = millis();
     loadStripCfg(i);
+    refreshKnown(mac);
     Serial.printf("[*] strip %s online  model=%s fw=%s\n", mac.c_str(), s.model.c_str(), s.fw.c_str());
     // only the strip we just configured counts — every other strip re-dials after the hub rejoins Wi-Fi
     bool isTarget = provTarget.length() && mac.endsWith(provTarget);
@@ -610,6 +787,8 @@ void handleLine(int i, const String& line) {
       provMsg = mac;
       addEvent("added", mac, 0, "");
     }
+    int off = offlineMacs.indexOf(mac + ",");
+    if (off >= 0) { offlineMacs.remove(off, 13); addEvent("online", mac, 0, ""); }
     sendLine(s, "up:getinfo:all");
     stateDirty = true;
     return;
@@ -617,7 +796,13 @@ void handleLine(int i, const String& line) {
   if (line.startsWith("up:getinfo:")) { s.pendingInfo = line; tryParseInfo(i); return; }
   if (line.startsWith("up:power_report:")) {
     std::vector<String> f = split(line.substring(16), ':');
-    if (f.size() == 2 && f[1].toInt() >= 50000) s.voltage = f[1].toInt() / 1000.0f;
+    if (f.size() == 2 && f[1].toInt() >= 50000) {
+      s.voltage = f[1].toInt() / 1000.0f;
+      if ((s.voltage < 200 || s.voltage > 250) && (!s.voltEventAt || millis() - s.voltEventAt > 600000)) {
+        s.voltEventAt = millis();
+        addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V");
+      }
+    }
     return;
   }
   if (line.startsWith("up:query:")) { s.rssi = line.substring(9).toInt(); s.hasRssi = true; return; }
@@ -632,21 +817,21 @@ void handleLine(int i, const String& line) {
   bool isEvent = l.startsWith("up:event:");
   if (ch >= 1 && ch <= 4) {
     bool on = (f[1] == "on");
-    if (on) s.keepOnHold &= ~(1 << (ch - 1));
-    if ((s.keepOnMask & (1 << (ch - 1))) && !(s.keepOnHold & (1 << (ch - 1))) && !on) {
-      sendLine(s, "up:onoff:" + String(ch) + ":on");
-      if (isEvent) {
-        static uint32_t last[MAX_STRIPS][4] = {0};
-        uint32_t now = millis();
-        if (!last[i][ch - 1] || now - last[i][ch - 1] > 60000) { addEvent("lock", s.mac, ch, "keep_on"); last[i][ch - 1] = now ? now : 1; }
-      }
+    uint8_t kb = 1 << (ch - 1);
+    if (on) s.keepHold &= ~kb;
+    if ((s.keepMask & kb) && !on && !(s.keepHold & kb)) {
+      s.o[ch - 1].on = false;
+      keepRestore(s, ch);
+      stateDirty = true;
     } else if (isEvent && (s.lockMask & (1 << (ch - 1)))) {
       bool want = s.lockState & (1 << (ch - 1));
       if (on != want) sendLine(s, "up:onoff:" + String(ch) + ":" + (want ? "on" : "off"));
       addEvent("lock", s.mac, ch, "");
     } else {
+      bool changed = s.o[ch - 1].on != on;
       s.o[ch - 1].on = on;
       if (isEvent) noteCommanded(s, ch, on);
+      if (isEvent && changed && millis() - s.cmdAt[ch - 1] > 8000) { s.cmdAt[ch - 1] = millis(); addEvent("button", s.mac, ch, on ? "on" : "off"); }
       stateDirty = true;
     }
   } else if (isEvent && ch == 0) {
@@ -712,21 +897,82 @@ void pollStrips() {
   }
 }
 
-// ---------- timers (RAM) ----------
-String addTimer(const String& mac, int outlet, int kind, bool on, uint32_t delayS, uint32_t offS) {
+// ---------- timers (kept in NVS) ----------
+bool timersRestored = false;
+TimerNV timersNV[MAX_TIMERS];
+uint8_t timersNVCount = 0;
+
+void saveTimers() {
+  static TimerNV out[MAX_TIMERS];
+  uint8_t n = 0;
+  uint32_t now = millis();
+  uint32_t epoch = timeOk() ? (uint32_t)time(nullptr) : 0;
+  for (int t = 0; t < MAX_TIMERS; t++) {
+    const Timer& x = timers[t];
+    if (!x.used) continue;
+    TimerNV& v = out[n++];
+    memset(&v, 0, sizeof v);
+    v.id = x.id; memcpy(v.mac, x.mac, sizeof v.mac); v.outlet = x.outlet; v.kind = x.kind; v.on = x.on; v.phase = x.phase;
+    v.offS = x.offMs / 1000; v.onS = x.onMs / 1000; v.periodS = x.periodS;
+    int32_t left = (int32_t)(x.at - now) / 1000;
+    v.remainS = left < 0 ? 0 : left;
+    v.dueEpoch = epoch ? epoch + v.remainS : 0;
+  }
+  cfg.putUChar("tmN", n);
+  cfg.putBytes("tm", out, sizeof(TimerNV) * MAX_TIMERS);
+}
+
+void loadTimers() {
+  timersNVCount = 0;
+  if (cfg.getBytesLength("tm") == sizeof(TimerNV) * MAX_TIMERS) {
+    cfg.getBytes("tm", timersNV, sizeof(TimerNV) * MAX_TIMERS);
+    timersNVCount = min((int)cfg.getUChar("tmN", 0), (int)MAX_TIMERS);
+  }
+}
+
+// called once the clock is set (or after 30 s without internet time)
+void restoreTimers() {
+  if (timersRestored || (!timeOk() && millis() < 30000)) return;
+  timersRestored = true;
+  uint32_t now = millis();
+  uint32_t epoch = timeOk() ? (uint32_t)time(nullptr) : 0;
+  bool changed = false;
+  for (int i = 0; i < timersNVCount && i < MAX_TIMERS; i++) {
+    const TimerNV& v = timersNV[i];
+    int32_t left = (epoch && v.dueEpoch) ? (int32_t)(v.dueEpoch - epoch) : (int32_t)v.remainS;
+    bool repeating = v.kind == 2 || v.periodS > 0;
+    if (left < 0 && !repeating && -left > 600) { addEvent("missed", v.mac, v.outlet, "timer"); changed = true; continue; }
+    Timer& x = timers[i];
+    x = Timer();
+    x.used = true; x.id = v.id; memcpy(x.mac, v.mac, sizeof x.mac); x.outlet = v.outlet; x.kind = v.kind; x.on = v.on; x.phase = v.phase;
+    x.offMs = v.offS * 1000; x.onMs = v.onS * 1000; x.periodS = v.periodS;
+    x.at = now + (uint32_t)(left > 2 ? left : 2) * 1000;
+    if (x.id >= nextTimerId) nextTimerId = x.id + 1;
+  }
+  Serial.printf("[timers] restored %d\n", timersNVCount);
+  if (changed) saveTimers();
+  stateDirty = true;
+}
+
+String addTimer(const String& mac, int outlet, int kind, bool on, uint32_t delayS, uint32_t offS, uint32_t onS, uint32_t periodS) {
   int idx = stripFor(mac);
   if (idx < 0) return "device offline";
   if (outlet < 0 || outlet > 4) return "bad outlet";
   if (kind == 1 && (offS < 3 || offS > 3600)) return "off time must be 3..3600 s";
-  if (delayS > 86400) return "delay too long";
+  if (kind == 2 && (onS < 10 || offS < 10 || onS > 604800 || offS > 604800)) return "on/off time must be 10 s .. 7 days";
+  if (periodS && (periodS < 60 || periodS > 604800)) return "repeat every 1 min .. 7 days";
+  if (kind == 1 && periodS && periodS <= offS) return "repeat must be longer than the off time";
+  if (delayS > 604800) return "delay too long";
   for (int t = 0; t < MAX_TIMERS; t++) {
     if (timers[t].used) continue;
     Timer& x = timers[t];
     x = Timer();
     x.used = true; x.id = nextTimerId++;
     strlcpy(x.mac, strips[idx].mac.c_str(), sizeof x.mac);
-    x.outlet = outlet; x.kind = kind; x.on = on; x.offMs = offS * 1000; x.phase = 0;
+    x.outlet = outlet; x.kind = kind; x.on = on; x.offMs = offS * 1000; x.onMs = onS * 1000; x.phase = 0;
+    x.periodS = kind == 2 ? 0 : periodS;
     x.at = millis() + delayS * 1000;
+    saveTimers();
     stateDirty = true;
     return "";
   }
@@ -734,33 +980,49 @@ String addTimer(const String& mac, int outlet, int kind, bool on, uint32_t delay
 }
 
 void tickTimers() {
+  restoreTimers();
   uint32_t now = millis();
+  bool changed = false;
   for (int t = 0; t < MAX_TIMERS; t++) {
     Timer& x = timers[t];
     if (!x.used || (int32_t)(now - x.at) < 0) continue;
+    changed = true;
+    bool repeating = x.kind == 2 || x.periodS > 0;
     int idx = findStrip(x.mac);
-    if (idx < 0) {                                   // strip offline: keep trying the "back on" step for 10 min
-      if (x.kind == 1 && x.phase == 1 && x.tries++ < 120) { x.at = now + 5000; continue; }
+    if (idx < 0) {                                   // strip offline
+      if (x.kind == 1 && x.phase == 1 && x.tries++ < 120) { x.at = now + 5000; continue; }   // keep trying "back on" for 10 min
       addEvent("missed", x.mac, x.outlet, "timer");
-      x.used = false; stateDirty = true;
+      if (!repeating) { x.used = false; continue; }
+      x.tries = 0;
+      x.phase = 0;
+      x.at = now + (x.kind == 2 ? x.onMs + x.offMs : x.periodS * 1000);
       continue;
     }
     Strip& s = strips[idx];
+    x.tries = 0;
     if (x.kind == 0) {
       sendOnOff(s, x.outlet, x.on);
       addEvent("timer", s.mac, x.outlet, x.on ? "on" : "off");
-      x.used = false;
-    } else if (x.phase == 0) {
-      sendOnOff(s, x.outlet, false);
-      x.phase = 1;
-      x.at = now + x.offMs;
-    } else {
-      sendOnOff(s, x.outlet, true);
-      addEvent("cycle", s.mac, x.outlet, String(x.offMs / 1000) + " s");
-      x.used = false;
+      if (x.periodS) x.at = now + x.periodS * 1000; else x.used = false;
+    } else if (x.kind == 1) {
+      if (x.phase == 0) {
+        sendOnOff(s, x.outlet, false);
+        x.phase = 1;
+        x.at = now + x.offMs;
+      } else {
+        sendOnOff(s, x.outlet, true);
+        addEvent("cycle", s.mac, x.outlet, String(x.offMs / 1000) + " s");
+        if (x.periodS) { x.phase = 0; x.at = now + x.periodS * 1000 - x.offMs; } else x.used = false;
+      }
+    } else {                                         // loop
+      bool turnOn = x.phase == 0;
+      sendOnOff(s, x.outlet, turnOn);
+      x.phase = turnOn ? 1 : 0;
+      x.at = now + (turnOn ? x.onMs : x.offMs);
     }
     stateDirty = true;
   }
+  if (changed) saveTimers();
 }
 
 // ---------- schedules (NVS, run inside the hub) ----------
@@ -785,6 +1047,17 @@ void tickSchedules() {
 }
 
 // ---------- JSON builders ----------
+bool hasSched(const String& mac, int outlet) {      // outlet 0 asks for whole-strip items only
+  for (int i = 0; i < schedCount; i++)
+    if (scheds[i].enabled && mac.equalsIgnoreCase(scheds[i].mac) && (scheds[i].outlet == outlet || scheds[i].outlet == 0)) return true;
+  return false;
+}
+bool hasRule(const String& mac, int outlet) {
+  for (int i = 0; i < autoCount; i++)
+    if (autos[i].enabled && mac.equalsIgnoreCase(autos[i].mac) && (autos[i].outlet == outlet || autos[i].outlet == 0)) return true;
+  return false;
+}
+
 String stripJson(int i) {
   const Strip& s = strips[i];
   float pw = 0, en = 0;
@@ -800,8 +1073,10 @@ String stripJson(int i) {
     outs += "{\"n\":" + String(k + 1) + ",\"on\":" + (o.on ? "true" : "false") + ",\"power_w\":" + String(o.powerW, 2) +
             ",\"energy_kwh\":" + String(o.energyWh / 1000.0f, 3) + ",\"temp_c\":" + String(o.tempC) +
             ",\"label\":\"" + jsonEsc(s.olabel[k]) + "\",\"locked\":" + ((s.lockMask & (1 << k)) ? "true" : "false") +
-            ",\"keep_on\":" + ((s.keepOnMask & (1 << k)) ? "true" : "false") + ",\"protected\":" + ((s.protMask & (1 << k)) ? "true" : "false") + ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
-            ",\"auto_off_in_s\":" + String(left < 0 ? -1 : left) + "}";
+            ",\"protected\":" + ((s.protMask & (1 << k)) ? "true" : "false") + ",\"keep_on\":" + ((s.keepMask & (1 << k)) ? "true" : "false") +
+            ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
+            ",\"auto_off_in_s\":" + String(left < 0 ? -1 : left) + ",\"sched\":" + (hasSched(s.mac, k + 1) ? "true" : "false") +
+            ",\"rule\":" + (hasRule(s.mac, k + 1) ? "true" : "false") + "}";
   }
   outs += "]";
   return "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"label\":\"" + jsonEsc(s.label) +
@@ -809,7 +1084,9 @@ String stripJson(int i) {
          ",\"power_w\":" + String(pw, 2) + ",\"energy_kwh\":" + String(en, 3) +
          ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
          ",\"current_a\":" + (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2)) +
-         ",\"rssi\":" + (s.hasRssi ? String(s.rssi) : String("null")) + ",\"notify\":" + String(s.notifyMask) + ",\"outlets\":" + outs + "}";
+         ",\"rssi\":" + (s.hasRssi ? String(s.rssi) : String("null")) + ",\"up_s\":" + String((millis() - s.connectedAt) / 1000) +
+         ",\"notify\":" + String(s.notifyMask) +
+         ",\"sched\":" + (hasSched(s.mac, 0) ? "true" : "false") + ",\"rule\":" + (hasRule(s.mac, 0) ? "true" : "false") + ",\"outlets\":" + outs + "}";
 }
 
 String timersJson() {
@@ -823,8 +1100,9 @@ String timersJson() {
     first = false;
     long in = (int32_t)(x.at - now) / 1000;
     j += "{\"tid\":" + String(x.id) + ",\"mac\":\"" + String(x.mac) + "\",\"outlet\":" + String(x.outlet) +
-         ",\"kind\":\"" + (x.kind == 1 ? "cycle" : (x.on ? "on" : "off")) + "\",\"phase\":" + String(x.phase) +
-         ",\"in_s\":" + String(in < 0 ? 0 : in) + ",\"off_s\":" + String(x.offMs / 1000) + "}";
+         ",\"kind\":\"" + (x.kind == 2 ? "loop" : x.kind == 1 ? "cycle" : (x.on ? "on" : "off")) + "\",\"phase\":" + String(x.phase) +
+         ",\"in_s\":" + String(in < 0 ? 0 : in) + ",\"off_s\":" + String(x.offMs / 1000) + ",\"on_s\":" + String(x.onMs / 1000) +
+         ",\"repeat_s\":" + String(x.periodS) + "}";
   }
   return j + "]";
 }
@@ -832,15 +1110,23 @@ String timersJson() {
 String buildStateJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
              "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
+             ",\"uptime_s\":" + String(millis() / 1000) +
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
-             ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + "}" +
+             ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
+             "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
     if (!strips[i].used || !strips[i].identified) continue;
     if (!first) j += ",";
     j += stripJson(i);
+    first = false;
+  }
+  for (int k = 0; k < knownCount; k++) {
+    if (findStrip(known[k].mac) >= 0) continue;
+    if (!first) j += ",";
+    j += offlineStripJson(known[k]);
     first = false;
   }
   return j + "]}";
@@ -854,7 +1140,7 @@ String schedJson(const Sched& c) {
 String autoJson(const Autom& r) {
   return "{\"aid\":" + String(r.id) + ",\"mac\":\"" + String(r.mac) + "\",\"outlet\":" + String(r.outlet) + ",\"above\":" + (r.above ? "true" : "false") +
          ",\"watts\":" + String(r.watts, 1) + ",\"hold_s\":" + String(r.holdS) + ",\"act\":" + String(r.act) +
-         ",\"enabled\":" + (r.enabled ? "true" : "false") + ",\"metric\":" + String(r.metric) + ",\"label\":\"" + jsonEsc(String(r.label)) + "\"}";
+         ",\"enabled\":" + (r.enabled ? "true" : "false") + ",\"metric\":" + String(r.metric) + ",\"limit2\":" + String(r.limit2, 0) + ",\"label\":\"" + jsonEsc(String(r.label)) + "\"}";
 }
 String eventsJson() {
   String j = "{\"events\":[";
@@ -877,7 +1163,8 @@ String energyJson(int i) {
     uint32_t c = s.o[k].energyWh;
     j += String(el.day && c >= el.base[k] ? c - el.base[k] : 0);
   }
-  j += "],\"days\":[";
+  const PeakLog& pl = peaks[i];
+  j += "],\"today_peak_w\":" + String(pl.day == el.day ? pl.today : 0) + ",\"days\":[";
   bool first = true;
   for (int back = 1; back <= ELOG_DAYS; back++) {
     int32_t d = el.day - back;
@@ -885,8 +1172,9 @@ String energyJson(int i) {
     if (!el.day || el.dayOf[idx] != d) continue;
     if (!first) j += ",";
     first = false;
+    int pk = pl.dayOf[idx] == d ? pl.pk[idx] : -1;
     j += "{\"date\":" + String(civilFromDays(d)) + ",\"wh\":[" + String(el.wh[idx][0]) + "," + String(el.wh[idx][1]) + "," +
-         String(el.wh[idx][2]) + "," + String(el.wh[idx][3]) + "]}";
+         String(el.wh[idx][2]) + "," + String(el.wh[idx][3]) + "],\"peak_w\":" + String(pk) + "}";
   }
   return j + "]}";
 }
@@ -906,9 +1194,11 @@ ApiRes api(String path, const String& b) {
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
     if (outlet < 0 || outlet > 4 || !jsonHas(b, "on")) return errRes("bad request");
-    return setOutlets(strips[idx], outlet, jsonBool(b, "on")) ? okRes() : errRes("not confirmed");
+    bool on = jsonBool(b, "on");
+    if (!setOutlets(strips[idx], outlet, on)) return errRes("not confirmed");
+    addEvent("remote", strips[idx].mac, outlet, on ? "on" : "off");
+    return okRes();
   }
-
   if (path == "refresh") {
     for (int i = 0; i < MAX_STRIPS; i++) {
       Strip& s = strips[i];
@@ -940,10 +1230,11 @@ ApiRes api(String path, const String& b) {
         } else s.lockMask &= ~bit;
         saveLocks(s);
       } else if (path == "keepon") {
-        if (outlet < 1 || outlet > 4) return errRes("bad outlet");
-        if (jsonBool(b, "on")) s.keepOnMask |= bit; else s.keepOnMask &= ~bit;
-        cfg.putUChar(("k" + s.mac).c_str(), s.keepOnMask);
-        if ((s.keepOnMask & bit) && !s.o[outlet - 1].on) sendOnOff(s, outlet, true);
+        bool en = jsonBool(b, "on");
+        if (en) s.keepMask |= bit; else s.keepMask &= ~bit;
+        s.keepHold &= ~bit;
+        cfg.putUChar(("q" + s.mac).c_str(), s.keepMask);
+        if (en && !s.o[outlet - 1].on) sendOnOff(s, outlet, true);
       } else if (path == "protect") {
         if (jsonBool(b, "protected")) s.protMask |= bit; else s.protMask &= ~bit;
         cfg.putUChar(("p" + s.mac).c_str(), s.protMask);
@@ -955,20 +1246,46 @@ ApiRes api(String path, const String& b) {
         s.autoOffAt[outlet - 1] = (m && s.o[outlet - 1].on) ? millis() + (uint32_t)m * 60000UL : 0;
       }
     }
+    refreshKnown(s.mac);
+    stateDirty = true;
+    return okRes();
+  }
+  if (path == "wifi") {
+    String ns = jsonValue(b, "ssid"), np = jsonValue(b, "pass");
+    ns.trim();
+    if (!ns.length() || ns.length() > 32 || np.length() > 63) return errRes("bad wifi name/password");
+    if (ns.indexOf(':') >= 0 || np.indexOf(':') >= 0) return errRes("wifi name/password contains ':'");
+    if (np.length() && np.length() < 8) return errRes("password must be at least 8 characters");
+    wifiTestSsid = ns; wifiTestPass = np; wifiTestReq = true;
+    wifiTestState = "queued"; wifiTestMsg = ns;
+    stateDirty = true;
+    return okRes();
+  }
+  if (path == "forget") {
+    String m = mac; m.toUpperCase();
+    if (m.length() != 12) return errRes("bad mac");
+    setBlocked(m, true);                         // it keeps dialling in; ignore it until it is added again
+    cfg.remove(("q" + m).c_str());
+    int idx = findStrip(m);
+    if (idx >= 0) dropStrip(strips[idx], "removed");
+    int off = offlineMacs.indexOf(m + ",");
+    if (off >= 0) offlineMacs.remove(off, 13);
+    forgetKnown(m);
     stateDirty = true;
     return okRes();
   }
   if (path == "timer") {
     String kind = jsonValue(b, "kind");
-    int k = kind == "cycle" ? 1 : 0;
+    int k = kind == "loop" ? 2 : kind == "cycle" ? 1 : 0;
     bool on = kind == "on";
-    if (k == 0 && kind != "on" && kind != "off") return errRes("kind: on|off|cycle");
-    String e = addTimer(mac, outlet, k, on, (uint32_t)jsonValue(b, "delay_s").toInt(), (uint32_t)jsonValue(b, "off_s").toInt());
+    if (k == 0 && kind != "on" && kind != "off") return errRes("kind: on|off|cycle|loop");
+    String e = addTimer(mac, outlet, k, on, (uint32_t)jsonValue(b, "delay_s").toInt(), (uint32_t)jsonValue(b, "off_s").toInt(),
+                        (uint32_t)jsonValue(b, "on_s").toInt(), (uint32_t)jsonValue(b, "repeat_s").toInt());
     return e.length() ? errRes(e) : okRes();
   }
   if (path == "timer_cancel") {
     uint32_t id = (uint32_t)jsonValue(b, "tid").toInt();
-    for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used && timers[t].id == id) { timers[t].used = false; stateDirty = true; return okRes(); }
+    for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used && timers[t].id == id) { timers[t].used = false; saveTimers(); stateDirty = true; return okRes(); }
     return errRes("no such timer");
   }
   if (path == "scan") {                         // list strips that are in setup mode right now
@@ -991,7 +1308,7 @@ ApiRes api(String path, const String& b) {
   }
   if (path == "provision") {
     if (provState == "running" || provState == "waiting" || provRequested) return errRes("already running");
-    if (strchr(WIFI_SSID, ':') || strchr(WIFI_PASS, ':')) return errRes("wifi name/password contains ':'");
+    if (secSsid.indexOf(':') >= 0 || secWifi.indexOf(':') >= 0) return errRes("wifi name/password contains ':'");
     provSsid = jsonValue(b, "ssid");
     requestProvision();
     return okRes();
@@ -1063,8 +1380,10 @@ ApiRes api(String path, const String& b) {
     m.toUpperCase();
     strlcpy(r.mac, m.c_str(), sizeof r.mac);
     r.outlet = constrain(outlet, 0, 4);
-    r.metric = jsonValue(b, "metric").toInt() == 1 ? 1 : 0;
-    r.above = jsonBool(b, "above");
+    r.metric = constrain(jsonValue(b, "metric").toInt(), 0, 2);
+    r.limit2 = jsonHas(b, "limit2") ? jsonValue(b, "limit2").toFloat() : 70;
+    if (r.metric == 2) r.above = 1;
+    if (r.metric != 2) r.above = jsonBool(b, "above");
     r.watts = jsonValue(b, "watts").toFloat();
     r.holdS = constrain(jsonValue(b, "hold_s").toInt(), 5, 65535);
     r.act = constrain(jsonValue(b, "act").toInt(), 1, 3);
@@ -1113,8 +1432,9 @@ ApiRes api(String path, const String& b) {
       if (idx < 0) return errRes("device offline");
       strips[idx].notifyMask = jsonValue(b, "mask").toInt() & 0x1F;
       cfg.putUChar(("m" + strips[idx].mac).c_str(), strips[idx].notifyMask);
+      refreshKnown(strips[idx].mac);
     }
-    if (jsonBool(b, "test")) queueNotify("test", "", 0, "Fisha");
+    if (jsonBool(b, "test")) addEvent("test", "", 0, "Fisha");   // reaches the app service and ntfy
     stateDirty = true;
     return okRes();
   }
@@ -1167,6 +1487,7 @@ void handleOther() {
   if (web.method() == HTTP_POST && web.uri().startsWith("/api/")) {
     if (!guard()) return;
     ApiRes r = api(web.uri(), web.arg("plain"));
+    stateDirty = true;
     web.send(r.ok ? 200 : 400, "application/json", apiJson(r));
     return;
   }
@@ -1193,7 +1514,7 @@ load();setInterval(load,3000);
 void handleRoot() { if (guard()) web.send_P(200, "text/html; charset=utf-8", PAGE); }
 
 // ---------- firmware update from the browser / curl (no inbound port needed on the PC) ----------
-bool otaAuth() { return web.authenticate("admin", OTA_PASS); }
+bool otaAuth() { return web.authenticate("admin", secOta.c_str()); }
 void handleUpdatePage() {
   if (!otaAuth()) return web.requestAuthentication();
   web.send(200, "text/html; charset=utf-8",
@@ -1315,7 +1636,7 @@ void mqttStart() {
   cfgm.broker.verification.certificate = MQTT_CA;
   cfgm.credentials.username = MQTT_USER;
   cfgm.credentials.client_id = mqttClientId;
-  cfgm.credentials.authentication.password = MQTT_PASS;
+  cfgm.credentials.authentication.password = secMqtt.c_str();
   cfgm.session.last_will.topic = tStatus.c_str();
   cfgm.session.last_will.msg = "offline";
   cfgm.session.last_will.qos = 1;
@@ -1325,7 +1646,7 @@ void mqttStart() {
   cfgm.buffer.size = 8192;
   cfgm.buffer.out_size = 8192;
 #else
-  cfgm.uri = MQTT_URI; cfgm.cert_pem = MQTT_CA; cfgm.username = MQTT_USER; cfgm.client_id = mqttClientId; cfgm.password = MQTT_PASS;
+  cfgm.uri = MQTT_URI; cfgm.cert_pem = MQTT_CA; cfgm.username = MQTT_USER; cfgm.client_id = mqttClientId; cfgm.password = secMqtt.c_str();
   cfgm.lwt_topic = tStatus.c_str(); cfgm.lwt_msg = "offline"; cfgm.lwt_qos = 1; cfgm.lwt_retain = 1; cfgm.keepalive = 30;
   cfgm.reconnect_timeout_ms = 5000; cfgm.buffer_size = 8192; cfgm.out_buffer_size = 8192;
 #endif
@@ -1347,7 +1668,7 @@ String relaySignature() {
     if (!s.used || !s.identified) continue;
     sig += s.mac;
     for (int k = 0; k < 4; k++) sig += s.o[k].on ? '1' : '0';
-    sig += String(s.lockMask) + String(s.protMask) + String(s.keepOnMask);
+    sig += String(s.lockMask) + String(s.protMask) + String(s.keepMask);
   }
   for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used) sig += String(timers[t].id) + String(timers[t].phase);
   return sig;
@@ -1450,10 +1771,10 @@ bool setupSession(const String& hubIp, String& r) {
   readSetupLine(c, reply, 4000);
   Serial.printf("[prov] >> %s  << %s\n", cmd.c_str(), reply.c_str());
   if (reply.indexOf("ip_ok") < 0) { r = reply; c.stop(); return false; }
-  cmd = "up:connect:" + String(WIFI_SSID) + ":" + WIFI_PASS;
+  cmd = "up:connect:" + secSsid + ":" + secWifi;
   c.print(cmd + "\r\n");
   readSetupLine(c, reply, 4000);
-  Serial.printf("[prov] >> up:connect:%s:****  << %s\n", WIFI_SSID, reply.c_str());
+  Serial.printf("[prov] >> up:connect:%s:****  << %s\n", secSsid.c_str(), reply.c_str());
   if (reply.indexOf("connect_ok") < 0) { r = reply; c.stop(); return false; }
   c.print("up:reboot:0\r\n");
   readSetupLine(c, reply, 2500);     // the strip may answer or just drop the link
@@ -1531,7 +1852,9 @@ void runProvision() {
 }
 
 // ---------- WiFi / setup / loop ----------
-void connectWiFi() {
+void saveWifi(const String& ssid, const String& pass);
+
+bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
 #if USE_STATIC_IP
@@ -1539,12 +1862,97 @@ void connectWiFi() {
 #endif
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.printf("Connecting to %s", WIFI_SSID);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  Serial.printf("Connecting to %s", ssid.c_str());
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) { delay(500); Serial.print("."); }
-  if (WiFi.status() != WL_CONNECTED) { Serial.println("\nWiFi failed, rebooting in 10s"); delay(10000); ESP.restart(); }
-  Serial.printf("\nWiFi OK  IP=%s  RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < ms) { delay(500); Serial.print("."); }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
+// The home Wi-Fi is not reachable (router changed?): open "Fisha-Hub-XXXX" so the phone can give it the new network.
+void setupPortal() {
+  uint8_t m[6];
+  WiFi.macAddress(m);
+  char ap[24];
+  snprintf(ap, sizeof ap, "Fisha-Hub-%02X%02X", m[4], m[5]);
+  String apPass = (secOta.length() >= 8 && secOta != "change-me") ? secOta : String("fisha1234");
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(ap, apPass.c_str());
+  Serial.printf("[portal] Wi-Fi '%s' failed. Join '%s' and open http://192.168.4.1\n", secSsid.c_str(), ap);
+  WebServer portal(80);
+  bool saved = false;
+  portal.on("/", HTTP_GET, [&]() {
+    String opts;
+    int n = WiFi.scanNetworks();
+    for (int i = 0; i < n && i < 20; i++) opts += "<option>" + jsonEsc(WiFi.SSID(i)) + "</option>";
+    WiFi.scanDelete();
+    portal.send(200, "text/html; charset=utf-8",
+                "<meta name=viewport content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;background:#070d19;color:#e9f2ff;padding:20px'>"
+                "<h3>Fisha Hub &mdash; Wi-Fi</h3><p>The hub can't reach <b>" + jsonEsc(secSsid) + "</b>. Choose the home network (2.4 GHz):</p>"
+                "<form method=POST action=/save><input name=s list=n placeholder='Wi-Fi name' style='width:100%;padding:10px'><datalist id=n>" + opts +
+                "</datalist><br><br><input name=p type=password placeholder='Password' style='width:100%;padding:10px'><br><br>"
+                "<button style='padding:12px 20px'>Save &amp; restart</button></form></body>");
+  });
+  portal.on("/save", HTTP_POST, [&]() {
+    String ns = portal.arg("s"), np = portal.arg("p");
+    ns.trim();
+    if (!ns.length() || ns.indexOf(':') >= 0 || np.indexOf(':') >= 0) { portal.send(400, "text/plain", "Name/password can't be empty or contain ':'"); return; }
+    saveWifi(ns, np);
+    portal.send(200, "text/plain", "Saved. The hub restarts and joins " + ns + ".");
+    saved = true;
+  });
+  portal.begin();
+  uint32_t lastTry = millis();
+  while (true) {
+    portal.handleClient();
+    if (saved) { delay(1500); ESP.restart(); }
+    if (millis() - lastTry > 120000) {           // the old network may simply have been down: retry it now and then
+      lastTry = millis();
+      WiFi.begin(secSsid.c_str(), secWifi.c_str());
+      uint32_t t0 = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) { portal.handleClient(); delay(50); }
+      if (WiFi.status() == WL_CONNECTED) { Serial.println("[portal] home Wi-Fi is back"); delay(500); ESP.restart(); }
+    }
+    delay(5);
+  }
+}
+
+void connectWiFi() {
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (tryWiFi(secSsid, secWifi, 20000)) {
+      Serial.printf("WiFi OK  IP=%s  RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      return;
+    }
+  }
+  setupPortal();                                 // never returns
+}
+
+// switch to a new home network from the app; keep the old one if the new one does not work
+void runWifiTest() {
+  wifiTestReq = false;
+  wifiTestState = "testing";
+  wifiTestMsg = wifiTestSsid;
+  stateDirty = true;
+  ssePump();
+  delay(300);
+  for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "wifi change");
+  WiFi.disconnect();
+  delay(300);
+  if (tryWiFi(wifiTestSsid, wifiTestPass, 20000)) {
+    saveWifi(wifiTestSsid, wifiTestPass);
+    wifiTestState = "ok";
+    Serial.printf("[wifi] switched to %s\n", secSsid.c_str());
+  } else {
+    wifiTestState = "failed";
+    Serial.printf("[wifi] %s failed, back to %s\n", wifiTestSsid.c_str(), secSsid.c_str());
+    WiFi.disconnect();
+    delay(300);
+    connectWiFi();
+  }
+  wifiTestPass = "";
+  stateDirty = true;
 }
 
 void serialRaw() {
@@ -1555,12 +1963,54 @@ void serialRaw() {
   if (cmd.startsWith("up:") && i >= 0) sendLine(strips[i], cmd);
 }
 
+// A value typed in the code wins only when it changed since the last build; values set from the app stay otherwise.
+String pickSecret(Preferences& sp, const char* key, const char* compiled, const char* placeholder) {
+  String stored = sp.getString(key, "");
+  String lastCompiled = sp.getString((String("c") + key).c_str(), "");
+  bool real = strlen(compiled) && strcmp(compiled, placeholder) != 0;
+  if (real && lastCompiled != compiled) {
+    sp.putString((String("c") + key).c_str(), compiled);
+    sp.putString(key, compiled);
+    return String(compiled);
+  }
+  return stored.length() ? stored : String(compiled);
+}
+
+void saveWifi(const String& ssid, const String& pass) {
+  Preferences sp;
+  sp.begin("sec", false);
+  sp.putString("ssid", ssid);
+  sp.putString("wifi", pass);
+  sp.end();
+  secSsid = ssid;
+  secWifi = pass;
+}
+
+void loadSecrets() {
+  Preferences sp;
+  sp.begin("sec", false);
+  secSsid = pickSecret(sp, "ssid", WIFI_SSID, "YOUR_WIFI_NAME");
+  secWifi = pickSecret(sp, "wifi", WIFI_PASS, "YOUR_WIFI_PASSWORD");
+  secMqtt = pickSecret(sp, "mqtt", MQTT_PASS, "YOUR_MQTT_PASSWORD");
+  secOta = pickSecret(sp, "ota", OTA_PASS, "change-me");
+  sp.end();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== Fisha Hub v2.2 — @ahmadalhelly ===");
+  Serial.println("\n=== Fisha Hub v2.8 — @ahmadalhelly ===");
+  loadSecrets();
   cfg.begin("mttl", false);
   loadGlobals();
+  loadKnown();
+  loadTimers();
+  if (cfg.getUChar("nver", 0) < 2) {             // v2.6: every event, every outlet by default
+    notifyTypes = 0xFFFFFFFF;
+    cfg.putUInt("ntypes", notifyTypes);
+    for (int i = 0; i < knownCount; i++) { cfg.remove(("m" + known[i].mac).c_str()); refreshKnown(known[i].mac); }
+    cfg.putUChar("nver", 2);
+  }
   for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
@@ -1582,7 +2032,7 @@ void setup() {
   web.begin();
 
   ArduinoOTA.setHostname(HOSTNAME);
-  ArduinoOTA.setPassword(OTA_PASS);
+  ArduinoOTA.setPassword(secOta.c_str());
   ArduinoOTA.begin();
   MDNS.addService("http", "tcp", WEB_PORT);
 
@@ -1616,6 +2066,8 @@ void loop() {
   mqttProcess();
   sendNotes();
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();
+  static uint32_t wifiReqAt = 0;
+  if (wifiTestReq) { if (!wifiReqAt) wifiReqAt = millis(); else if (millis() - wifiReqAt > 1500) { wifiReqAt = 0; runWifiTest(); } }
   if (provState == "waiting" && millis() - provAt > 120000) {
     Serial.println("[prov] the new strip never dialed the hub");
     // did the strip keep its setup AP? then it never accepted the settings
