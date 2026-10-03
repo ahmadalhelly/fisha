@@ -91,7 +91,7 @@ struct Strip {
   bool used = false, identified = false, hasRssi = false, gotInfo = false, poked = false;
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
   String label, olabel[4];
-  uint8_t lockMask = 0, lockState = 0, protMask = 0, notifyMask = 0x1F;
+  uint8_t lockMask = 0, lockState = 0, protMask = 0, keepOnMask = 0, notifyMask = 0x1F;
   uint16_t autoOffMin[4] = {0, 0, 0, 0};
   uint32_t autoOffAt[4] = {0, 0, 0, 0};
   uint32_t hotSince[4] = {0, 0, 0, 0};
@@ -344,6 +344,7 @@ void loadStripCfg(int i) {
   s.lockMask = cfg.getUChar(("l" + s.mac).c_str(), 0);
   s.lockState = cfg.getUChar(("s" + s.mac).c_str(), 0);
   s.protMask = cfg.getUChar(("p" + s.mac).c_str(), 0);
+  s.keepOnMask = cfg.getUChar(("k" + s.mac).c_str(), 0);
   s.notifyMask = cfg.getUChar(("m" + s.mac).c_str(), 0x1F);
   if (cfg.getBytesLength(("a" + s.mac).c_str()) == sizeof(s.autoOffMin)) cfg.getBytes(("a" + s.mac).c_str(), s.autoOffMin, sizeof(s.autoOffMin));
   else memset(s.autoOffMin, 0, sizeof(s.autoOffMin));
@@ -408,6 +409,7 @@ void noteCommanded(Strip& s, int outlet, bool on) {
 void sendOnOff(Strip& s, int outlet, bool on) {
   noteCommanded(s, outlet, on);
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (!on && (s.keepOnMask & (1 << (ch - 1)))) continue;
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     s.o[ch - 1].on = on;
   }
@@ -427,6 +429,7 @@ bool waitForInfo(Strip& s, uint32_t seq, uint32_t ms) {
 bool setOutlets(Strip& s, int outlet, bool on) {
   noteCommanded(s, outlet, on);
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (!on && (s.keepOnMask & (1 << (ch - 1)))) continue;
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     pumpFor(120);
   }
@@ -563,10 +566,13 @@ bool tryParseInfo(int i) {
   s.gotInfo = true;
   s.pendingInfo = "";
   s.infoSeq++;
-  for (int k = 0; k < 4; k++) {                  // child lock: keep a locked outlet where it belongs
-    if (!(s.lockMask & (1 << k))) continue;
-    bool want = s.lockState & (1 << k);
-    if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
+  for (int k = 0; k < 4; k++) {                  // enforce keep_on and child lock
+    if ((s.keepOnMask & (1 << k)) && !s.o[k].on) {
+      sendLine(s, "up:onoff:" + String(k + 1) + ":on");
+    } else if (s.lockMask & (1 << k)) {
+      bool want = s.lockState & (1 << k);
+      if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
+    }
   }
   energyUpdate(i);
   evalStrip(i);
@@ -619,7 +625,14 @@ void handleLine(int i, const String& line) {
   bool isEvent = l.startsWith("up:event:");
   if (ch >= 1 && ch <= 4) {
     bool on = (f[1] == "on");
-    if (isEvent && (s.lockMask & (1 << (ch - 1)))) {
+    if ((s.keepOnMask & (1 << (ch - 1))) && !on) {
+      sendLine(s, "up:onoff:" + String(ch) + ":on");
+      if (isEvent) {
+        static uint32_t last[MAX_STRIPS][4] = {0};
+        uint32_t now = millis();
+        if (now - last[i][ch - 1] > 60000) { addEvent("lock", s.mac, ch, "keep_on"); last[i][ch - 1] = now; }
+      }
+    } else if (isEvent && (s.lockMask & (1 << (ch - 1)))) {
       bool want = s.lockState & (1 << (ch - 1));
       if (on != want) sendLine(s, "up:onoff:" + String(ch) + ":" + (want ? "on" : "off"));
       addEvent("lock", s.mac, ch, "");
@@ -779,7 +792,7 @@ String stripJson(int i) {
     outs += "{\"n\":" + String(k + 1) + ",\"on\":" + (o.on ? "true" : "false") + ",\"power_w\":" + String(o.powerW, 2) +
             ",\"energy_kwh\":" + String(o.energyWh / 1000.0f, 3) + ",\"temp_c\":" + String(o.tempC) +
             ",\"label\":\"" + jsonEsc(s.olabel[k]) + "\",\"locked\":" + ((s.lockMask & (1 << k)) ? "true" : "false") +
-            ",\"protected\":" + ((s.protMask & (1 << k)) ? "true" : "false") + ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
+            ",\"keep_on\":" + ((s.keepOnMask & (1 << k)) ? "true" : "false") + ",\"protected\":" + ((s.protMask & (1 << k)) ? "true" : "false") + ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
             ",\"auto_off_in_s\":" + String(left < 0 ? -1 : left) + "}";
   }
   outs += "]";
@@ -897,7 +910,7 @@ ApiRes api(String path, const String& b) {
     }
     return okRes();
   }
-  if (path == "label" || path == "lock" || path == "protect" || path == "autooff") {
+  if (path == "label" || path == "lock" || path == "protect" || path == "autooff" || path == "keepon") {
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
     Strip& s = strips[idx];
@@ -917,6 +930,10 @@ ApiRes api(String path, const String& b) {
           if (s.o[outlet - 1].on) s.lockState |= bit; else s.lockState &= ~bit;
         } else s.lockMask &= ~bit;
         saveLocks(s);
+      } else if (path == "keepon") {
+        if (jsonBool(b, "on")) s.keepOnMask |= bit; else s.keepOnMask &= ~bit;
+        cfg.putUChar(("k" + s.mac).c_str(), s.keepOnMask);
+        if ((s.keepOnMask & bit) && !s.o[outlet - 1].on) sendOnOff(s, outlet, true);
       } else if (path == "protect") {
         if (jsonBool(b, "protected")) s.protMask |= bit; else s.protMask &= ~bit;
         cfg.putUChar(("p" + s.mac).c_str(), s.protMask);
@@ -1320,7 +1337,7 @@ String relaySignature() {
     if (!s.used || !s.identified) continue;
     sig += s.mac;
     for (int k = 0; k < 4; k++) sig += s.o[k].on ? '1' : '0';
-    sig += String(s.lockMask) + String(s.protMask);
+    sig += String(s.lockMask) + String(s.protMask) + String(s.keepOnMask);
   }
   for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used) sig += String(timers[t].id) + String(timers[t].phase);
   return sig;

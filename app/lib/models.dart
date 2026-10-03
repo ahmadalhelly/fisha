@@ -12,6 +12,7 @@ class Outlet {
   final String label;
   final bool locked;
   final bool protected;
+  final bool keepOn;
   final int autoOffMin;
   final int autoOffInS; // -1 = not running
   final bool hasSchedule; // an enabled schedule targets this outlet (or the whole strip)
@@ -26,6 +27,7 @@ class Outlet {
     this.label = '',
     this.locked = false,
     this.protected = false,
+    this.keepOn = false,
     this.autoOffMin = 0,
     this.autoOffInS = -1,
     this.hasSchedule = false,
@@ -41,13 +43,14 @@ class Outlet {
         label: _s(j['label']),
         locked: j['locked'] == true,
         protected: j['protected'] == true,
+        keepOn: j['keep_on'] == true,
         autoOffMin: _i(j['auto_off_min']),
         autoOffInS: _i(j['auto_off_in_s'], -1),
         hasSchedule: j['sched'] == true,
         hasRule: j['rule'] == true,
       );
 
-  Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, int? autoOffMin}) => Outlet(
+  Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, bool? keepOn, int? autoOffMin}) => Outlet(
         n: n,
         on: on ?? this.on,
         powerW: powerW,
@@ -56,6 +59,7 @@ class Outlet {
         label: label ?? this.label,
         locked: locked ?? this.locked,
         protected: protected ?? this.protected,
+        keepOn: keepOn ?? this.keepOn,
         autoOffMin: autoOffMin ?? this.autoOffMin,
         autoOffInS: autoOffInS,
         hasSchedule: hasSchedule,

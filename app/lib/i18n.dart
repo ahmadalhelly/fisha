@@ -82,6 +82,8 @@ const Map<String, List<String>> _s = {
   'rssi': ['قوة الإشارة', 'Signal'],
   'child_lock': ['قفل الأطفال', 'Child lock'],
   'child_lock_sub': ['زرار المشترك نفسه مش هيغيّر المخرج ده', "The strip's own button won't change this outlet"],
+  'keep_on': ['إبقاء دائمًا شغال', 'Keep always on'],
+  'keep_on_sub': ['المخرج هيفضل شغال ومفيش حاجة هتقفله', 'Outlet stays on always and skips off commands'],
   'protect': ['حماية من القفل بالغلط', 'Protect from accidental off'],
   'protect_sub': ['يطلب تأكيد قبل ما يتقفل من الأبلكيشن، ومناسب للراوتر', 'Asks for confirmation before turning off — ideal for the router'],
   'auto_off': ['قفل تلقائي بعد التشغيل', 'Auto-off after turning on'],

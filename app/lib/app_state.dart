@@ -686,6 +686,8 @@ class AppState extends ChangeNotifier {
       _flag(s, outlet, 'lock', {'locked': v}, (o) => o.copyWith(locked: v));
   Future<void> setProtected(Strip s, int outlet, bool v) =>
       _flag(s, outlet, 'protect', {'protected': v}, (o) => o.copyWith(protected: v));
+  Future<void> setKeepOn(Strip s, int outlet, bool v) =>
+      _flag(s, outlet, 'keepon', {'on': v}, (o) => o.copyWith(keepOn: v));
   Future<void> setAutoOff(Strip s, int outlet, int minutes) =>
       _flag(s, outlet, 'autooff', {'minutes': minutes}, (o) => o.copyWith(autoOffMin: minutes));
 

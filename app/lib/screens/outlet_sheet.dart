@@ -147,6 +147,8 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                     (v) => state.setRequiresBio(s.mac, n, v)),
                 _switchTile(Icons.lock_outline, t('child_lock'), t('child_lock_sub'), o.locked, state.hubHasConfig,
                     (v) => state.setLock(s, n, v)),
+                _switchTile(Icons.push_pin_outlined, t('keep_on'), t('keep_on_sub'), o.keepOn, state.hubHasConfig,
+                    (v) => state.setKeepOn(s, n, v)),
                 _tile(
                     Icons.timer_outlined,
                     t('auto_off'),

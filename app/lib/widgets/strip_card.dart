@@ -8,6 +8,7 @@ import '../models.dart';
 import '../screens/outlet_sheet.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'wifi_arcs.dart';
 
 /// Switch an outlet, asking first if it needs biometric or is protected and being turned off.
 Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet o, bool on) async {
@@ -40,6 +41,21 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
     );
     if (ok != true) return;
   }
+  if (!on && o.keepOn) {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        icon: Icon(Icons.push_pin_outlined, color: C.accent),
+        title: Text(Tr.isAr ? 'المخرج محمي (مفتوح دائمًا)' : 'Outlet kept always on', style: const TextStyle(fontSize: 18)),
+        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «إبقاء دائمًا شغال» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        ],
+      ),
+    );
+    return;
+  }
   await state.setOutlet(s.mac, o.n, on);
 }
 
@@ -70,12 +86,12 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
     final reason = Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off';
     bioOk = await authenticateBio(reason);
   }
-  final targets = s.outlets.where((o) => o.on && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
+  final targets = s.outlets.where((o) => o.on && !o.keepOn && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
   if (targets.isEmpty) return;
 
   final protectedOn = targets.where((o) => o.protected).toList();
   if (protectedOn.isEmpty) {
-    if (bioOk && targets.length == s.onCount) {
+    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       return state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
@@ -107,7 +123,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
       if (!o.protected) await state.setOutlet(s.mac, o.n, false);
     }
   } else if (choice == 2) {
-    if (bioOk && targets.length == s.onCount) {
+    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       await state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
@@ -117,14 +133,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
   }
 }
 
-/// Wi-Fi bars for rssi ≥ -55 / ≥ -67 / ≥ -75 / < -75 / null
-(IconData, Color) wifiBars(int? rssi) {
-  if (rssi == null) return (Icons.signal_wifi_off, C.faint);
-  if (rssi >= -55) return (Icons.signal_wifi_4_bar, levelColor(0));
-  if (rssi >= -67) return (Icons.network_wifi_3_bar, levelColor(1));
-  if (rssi >= -75) return (Icons.network_wifi_2_bar, levelColor(2));
-  return (Icons.network_wifi_1_bar, levelColor(3));
-}
+
 
 /// Rated load: the MTTL-W01 is a 16 A strip (about 3500 W in total, and any single outlet may take the full load).
 const double kStripMaxW = 3500;
@@ -185,6 +194,7 @@ List<Widget> badgesFor(AppState state, Strip s, Outlet? o, {double size = 13}) {
     for (final x in timers) (timerIcon(x), C.accent, timerText(x)),
     if (o != null && o.autoOffMin > 0) (Icons.timer_outlined, C.accent, t('auto_off')),
     if (o != null && o.protected) (Icons.shield, C.accent, t('protect')),
+    if (o != null && o.keepOn) (Icons.push_pin_outlined, C.accent, Tr.isAr ? 'إبقاء دائمًا شغال' : 'Keep always on'),
     if (o != null && state.requiresBio(s.mac, o.n)) (Icons.fingerprint, C.accent, Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected'),
     if (o != null && o.locked) (Icons.lock, C.muted, t('child_lock')),
   ];
@@ -234,11 +244,10 @@ class StripCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Builder(builder: (_) {
-                      final (icon, color) = wifiBars(s.rssi);
                       final tip = s.rssi != null ? '${s.rssi} dBm' : (online ? '—' : t('offline'));
                       return Tooltip(
                         message: tip,
-                        child: Icon(icon, size: 16, color: color),
+                        child: WifiArcs(rssi: s.rssi),
                       );
                     }),
                   ]),
@@ -256,9 +265,9 @@ class StripCard extends StatelessWidget {
                       Text('${s.maxTemp}°C', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: tempColor(s.maxTemp), fontWeight: FontWeight.w600)),
                     if (online && s.voltage != null) ...[
                       const SizedBox(width: 8),
-                      Text('·', style: TextStyle(fontSize: 11.5, color: C.faint)),
+                      Container(width: 1, height: 10, color: C.border),
                       const SizedBox(width: 8),
-                      Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: C.muted)),
+                      Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: voltColor(s.voltage!), fontWeight: FontWeight.w600)),
                     ],
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
