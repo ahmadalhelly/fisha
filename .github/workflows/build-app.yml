@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, fisha-1.8]
     paths: ['app/**', '.github/workflows/build-app.yml']
   workflow_dispatch:
 
@@ -21,6 +21,14 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read app version
+        id: ver
+        run: |
+          f=pubspec.yaml; [ -f app/pubspec.yaml ] && f=app/pubspec.yaml
+          v=$(grep -m1 '^version:' "$f" | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          [ -n "$v" ] || { echo "version not found"; exit 1; }
+          echo "v=$v" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -45,8 +53,8 @@ jobs:
             dart run flutter_native_splash:create
             flutter analyze --no-fatal-infos --no-fatal-warnings
             flutter test
-            flutter build apk --release --build-name=1.1.0 --build-number=${{ github.run_number }}
-            cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-1.1.0-${{ github.run_number }}.apk
+            flutter build apk --release --build-name=${{ steps.ver.outputs.v }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=${{ steps.ver.outputs.v }}
+            cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 
       # open the APK on an Android emulator and keep the crash report (if any) in the build log
@@ -82,23 +90,24 @@ jobs:
           working-directory: .
           script: |
             echo "===== LAUNCH TEST (emulator started) =====" >> build.log
-            adb install -r Fisha-1.1.0-${{ github.run_number }}.apk
+            adb install -r Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
             adb logcat -c
-            adb shell am start -n com.mttlhub.mttl_hub/.MainActivity
+            adb shell monkey -p com.fisha.app -c android.intent.category.LAUNCHER 1
             sleep 25
             adb logcat -d > launch.log || true
-            (adb shell pidof com.mttlhub.mttl_hub && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
-            grep -A60 -E "FATAL EXCEPTION|Process: com.mttlhub" launch.log | head -150 >> build.log || true
+            (adb shell pidof com.fisha.app && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
+            grep -A60 -E "FATAL EXCEPTION|Process: com.fisha" launch.log | head -150 >> build.log || true
             grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
 
       - name: Publish APK as a release
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0-build-${{ github.run_number }}
-          name: Fisha 1.1.0 (build ${{ github.run_number }})
-          make_latest: true
-          files: Fisha-1.1.0-${{ github.run_number }}.apk
+          tag_name: v${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
+          name: Fisha ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
+          prerelease: ${{ github.ref_name != 'main' }}
+          make_latest: ${{ github.ref_name == 'main' }}
+          files: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           body: "Commit ${{ github.sha }}"
 
       - name: Save build log to the ci-logs branch
