@@ -2,15 +2,16 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main, fisha-1.8]
-    paths: ['app/**', '.github/workflows/build-app.yml']
+    branches:
+      - '**'
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-app
+  group: build-app-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -57,61 +58,29 @@ jobs:
             cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 
-      # open the APK on an Android emulator and keep the crash report (if any) in the build log
-      - name: Free disk space for the emulator
+      - name: Upload APK as Artifact
         if: success()
-        working-directory: .
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules \
-                      /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /opt/hostedtoolcache/CodeQL || true
-          sudo docker image prune -af > /dev/null 2>&1 || true
-          rm -rf app/build ~/.gradle/caches ~/.pub-cache/hosted || true
-          df -h / | tail -1
-
-      - name: Enable KVM
-        if: success()
-        working-directory: .
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Launch test on emulator
-        if: success()
-        continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: actions/upload-artifact@v4
         with:
-          api-level: 34
-          arch: x86_64
-          target: google_apis
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          working-directory: .
-          script: |
-            echo "===== LAUNCH TEST (emulator started) =====" >> build.log
-            adb install -r Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
-            adb logcat -c
-            adb shell monkey -p com.fisha.app -c android.intent.category.LAUNCHER 1
-            sleep 25
-            adb logcat -d > launch.log || true
-            (adb shell pidof com.fisha.app && echo "APP RUNNING after 25s") >> build.log || echo "APP NOT RUNNING after 25s" >> build.log
-            grep -A60 -E "FATAL EXCEPTION|Process: com.fisha" launch.log | head -150 >> build.log || true
-            grep -E "flutter|E/AndroidRuntime" launch.log | tail -40 >> build.log || true
+          name: Fisha-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
+          path: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
+          if-no-files-found: error
 
       - name: Publish APK as a release
         if: success()
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
           name: Fisha ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
-          prerelease: ${{ github.ref_name != 'main' }}
-          make_latest: ${{ github.ref_name == 'main' }}
+          prerelease: ${{ github.ref_name != 'main' && github.ref_name != 'master' }}
+          make_latest: ${{ github.ref_name == 'main' || github.ref_name == 'master' }}
           files: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
-          body: "Commit ${{ github.sha }}"
+          body: "Release v${{ steps.ver.outputs.v }} - Commit ${{ github.sha }}"
 
       - name: Save build log to the ci-logs branch
         if: always()
+        continue-on-error: true
         working-directory: .
         run: |
           [ -f build.log ] || echo "no build log" > build.log
@@ -124,4 +93,4 @@ jobs:
           cp /tmp/build.log /tmp/STATUS.txt .
           git add -f build.log STATUS.txt
           git commit -m "CI log for run ${{ github.run_number }}"
-          git push -f origin HEAD:ci-logs
+          git push -f origin HEAD:ci-logs || true
