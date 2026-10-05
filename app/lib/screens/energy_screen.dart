@@ -151,7 +151,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
           child: RefreshIndicator(
             color: C.accent,
             onRefresh: _load,
-            child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 24), children: [
+            child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 115), children: [
               Text(t('energy_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 16),
               if (!s.hubV2)
@@ -159,7 +159,12 @@ class _EnergyScreenState extends State<EnergyScreen> {
               else ...[
                 Segmented<int>(
                   value: _range,
-                  items: {7: t('range_days', {'n': 7}), 30: t('range_days', {'n': 30}), 90: t('range_days', {'n': 90})},
+                  items: {
+                    7: _tr('٧ أيام', '7 Days'),
+                    14: _tr('أسبوعين', '2 Weeks'),
+                    30: _tr('شهر', 'Month'),
+                    90: _tr('٩٠ يوم', '90 Days'),
+                  },
                   onChanged: (v) => setState(() => _range = v),
                 ),
                 const SizedBox(height: 14),
@@ -180,6 +185,10 @@ class _EnergyScreenState extends State<EnergyScreen> {
                 if (!_loading && daily.isEmpty) emptyCard(t('energy_empty'), icon: Icons.bar_chart),
                 if (daily.isNotEmpty) ...[
                   section(t('daily_usage'), [SizedBox(height: 190, child: _Bars(daily: daily.reversed.toList(), range: _range))]),
+                  const SizedBox(height: 14),
+                  section(_tr('استهلاك كل يوم', 'Daily Consumption'), [
+                    _dailyList(daily),
+                  ]),
                   const SizedBox(height: 14),
                   Row(children: [
                     Expanded(child: Text(_tr('حسب المشترك', 'By strip'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w700))),
@@ -262,6 +271,73 @@ class _EnergyScreenState extends State<EnergyScreen> {
       ),
     ]);
   }
+
+  Widget _dailyList(List<_DayStat> daily) {
+    if (daily.isEmpty) return const SizedBox.shrink();
+    final maxWh = daily.fold<int>(1, (a, e) => math.max(a, e.wh));
+    return Column(
+      children: [
+        for (final d in daily) _dailyRow(d, maxWh),
+      ],
+    );
+  }
+
+  Widget _dailyRow(_DayStat d, int maxWh) {
+    final kwh = d.wh / 1000;
+    final cost = kwh * s.tariff;
+    final ratio = maxWh > 0 ? (d.wh / maxWh).clamp(0.0, 1.0) : 0.0;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: C.border.withValues(alpha: 0.5)))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(_formatDate(d.date), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+              const Spacer(),
+              Text('${kwh.toStringAsFixed(2)} kWh', textDirection: TextDirection.ltr, style: mono(13.5, color: C.accent, weight: FontWeight.w600)),
+              const SizedBox(width: 10),
+              Text('${cost.toStringAsFixed(2)} ${t('egp')}', style: TextStyle(fontSize: 12, color: C.muted)),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: ratio,
+                    minHeight: 6,
+                    backgroundColor: C.surface2,
+                    color: C.accent,
+                  ),
+                ),
+              ),
+              if (d.peakW > 0) ...[
+                const SizedBox(width: 12),
+                Text('⚡ ${d.peakW} W', textDirection: TextDirection.ltr, style: mono(11, color: C.textSoft)),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDate(int k) {
+    final y = k ~/ 10000;
+    final m = (k ~/ 100) % 100;
+    final d = k % 100;
+    final now = DateTime.now();
+    final todayK = now.year * 10000 + now.month * 100 + now.day;
+    if (k == todayK) return _tr('اليوم', 'Today');
+    final yest = now.subtract(const Duration(days: 1));
+    final yestK = yest.year * 10000 + yest.month * 100 + yest.day;
+    if (k == yestK) return _tr('أمس', 'Yesterday');
+    return '$d/$m/$y';
+  }
 }
 
 class _Bars extends StatefulWidget {
@@ -290,21 +366,18 @@ class _BarsState extends State<_Bars> {
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Column(children: [
-        if (widget.range != 7) ...[
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '${_d(selectedDay.date)} · ${(selectedDay.wh / 1000).toStringAsFixed(2)} kWh · ⚡ ${selectedDay.peakW > 0 ? selectedDay.peakW : '—'} W',
-                  style: mono(12, color: C.accent),
-                  textDirection: TextDirection.ltr,
-                ),
-              ],
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
+            child: Text(
+              '${_d(selectedDay.date)} · ${(selectedDay.wh / 1000).toStringAsFixed(2)} kWh${selectedDay.peakW > 0 ? " · ⚡ ${selectedDay.peakW} W" : ""}',
+              style: mono(12, color: C.accent),
+              textDirection: TextDirection.ltr,
             ),
           ),
-        ],
+        ),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {

@@ -469,44 +469,90 @@ Future<void> _pickRoomDialog(BuildContext ctx, AppState state, String mac) async
 }
 
 Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected) async {
-  const icons = ['⚡', '🔌', '🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺', '🖥️', '🎵'];
+  final customCtrl = TextEditingController();
+  const icons = [
+    '⚡', '🔌', '🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺',
+    '🖥️', '🎵', '🖨️', '🔊', '🔋', '🏠', '🏢', '🚿', '🧹', '🍽️', '⏰', '🔒', '📶', '📷', '📽️', '🕹️', '📱', '🎧'
+  ];
   await showDialog<void>(
     context: ctx,
     builder: (dCtx) => AlertDialog(
       backgroundColor: C.surface,
       title: Text(Tr.isAr ? 'اختر أيقونة المشترك' : 'Choose Strip Icon', style: const TextStyle(fontSize: 18)),
-      content: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        alignment: WrapAlignment.center,
-        children: [
-          ActionChip(
-            label: Text(Tr.isAr ? 'بدون أيقونة' : 'Clear'),
-            onPressed: () {
-              onSelected('');
-              Navigator.pop(dCtx);
-            },
-          ),
-          for (final ico in icons)
-            InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () {
-                onSelected(ico);
-                Navigator.pop(dCtx);
-              },
-              child: Container(
-                width: 46,
-                height: 46,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: C.surface2,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: C.border),
-                ),
-                child: Text(ico, style: const TextStyle(fontSize: 22)),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: customCtrl,
+                      decoration: InputDecoration(
+                        hintText: Tr.isAr ? 'اكتب أو الصق إيموجي مخصص...' : 'Type/paste custom emoji...',
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: C.accent,
+                      foregroundColor: C.onAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    ),
+                    onPressed: () {
+                      final val = customCtrl.text.trim();
+                      if (val.isNotEmpty) {
+                        onSelected(val);
+                        Navigator.pop(dCtx);
+                      }
+                    },
+                    child: Text(Tr.isAr ? 'تطبيق' : 'Apply'),
+                  ),
+                ],
               ),
-            ),
-        ],
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.center,
+                children: [
+                  ActionChip(
+                    label: Text(Tr.isAr ? 'بدون أيقونة' : 'Clear'),
+                    onPressed: () {
+                      onSelected('');
+                      Navigator.pop(dCtx);
+                    },
+                  ),
+                  for (final ico in icons)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () {
+                        onSelected(ico);
+                        Navigator.pop(dCtx);
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: C.surface2,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: C.border),
+                        ),
+                        child: Text(ico, style: const TextStyle(fontSize: 22)),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),

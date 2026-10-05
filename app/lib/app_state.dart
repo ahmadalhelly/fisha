@@ -631,6 +631,7 @@ class AppState extends ChangeNotifier {
         if (settings.isShared && settings.sharedUser.isNotEmpty) ...{
           'X-User': settings.sharedUser,
           'X-Token': settings.password,
+          'Authorization': 'Basic ${base64Encode(utf8.encode('${settings.sharedUser}:${settings.password}'))}',
         }
       };
 
@@ -878,6 +879,11 @@ class AppState extends ChangeNotifier {
         }
       }
       final hid = (j['hub'] ?? '').toString().toUpperCase();
+      final lip = (j['lip'] ?? '').toString();
+      if (lip.isNotEmpty && settings.isShared && settings.localHost.isEmpty) {
+        settings.localHost = lip;
+        _prefs?.setString('settings', jsonEncode(settings.toJson()));
+      }
       if (fromLocal && hid.length == 12 && hid != settings.hubId.toUpperCase() && !settings.isShared) {
         settings.hubId = hid;               // the hub knows its own id; a wrong one breaks the remote link
         _prefs?.setString('settings', jsonEncode(settings.toJson()));
@@ -1081,13 +1087,14 @@ class AppState extends ChangeNotifier {
   Future<bool> joinWithCode(String code) async {
     final j = decodeInvite(code);
     if (j == null) return false;
+    final lip = (j['lip'] ?? j['lh'] ?? '').toString();
     await saveSettings(HubSettings(
       hubId: j['hub'].toString().toUpperCase(),
       brokerHost: j['h'].toString(),
       brokerPort: (j['p'] as num?)?.toInt() ?? 8883,
       username: j['u'].toString(),
       password: j['pw'].toString(),
-      localHost: '',
+      localHost: lip,
       sharedUser: j['u'].toString(),
       sharedName: (j['n'] ?? '').toString(),
       sharedRole: (j['r'] as num?)?.toInt() ?? 0,

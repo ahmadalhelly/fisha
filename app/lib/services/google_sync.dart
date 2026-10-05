@@ -21,8 +21,12 @@ class GoogleSync {
 
   /// Interactive sign-in. Returns the e-mail, or null if the user cancelled.
   Future<String?> signIn() async {
-    _acc = await _g.signIn();
-    return _acc?.email;
+    try {
+      _acc = await _g.signIn();
+      return _acc?.email;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Quiet sign-in at start-up (no UI).
@@ -39,49 +43,90 @@ class GoogleSync {
     try {
       await _g.disconnect();
     } catch (_) {
-      await _g.signOut();
+      try {
+        await _g.signOut();
+      } catch (_) {}
     }
     _acc = null;
   }
 
   Future<Map<String, String>> _headers() async {
-    final a = _acc ?? await _g.signInSilently();
+    var a = _acc;
+    if (a == null) {
+      try {
+        a = await _g.signInSilently();
+      } catch (_) {}
+    }
     if (a == null) throw StateError('not signed in');
     _acc = a;
-    return a.authHeaders;
+    return await a.authHeaders;
   }
 
   Future<String?> _fileId(Map<String, String> h) async {
-    final q = Uri.encodeQueryComponent("name='$_fileName'");
-    final r = await http.get(Uri.parse('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=$q&fields=files(id,modifiedTime)'), headers: h);
-    if (r.statusCode != 200) throw StateError('drive ${r.statusCode}');
-    final files = (jsonDecode(r.body) as Map<String, dynamic>)['files'];
-    if (files is List && files.isNotEmpty) return (files.first as Map)['id']?.toString();
+    try {
+      final q = Uri.encodeQueryComponent("name='$_fileName' and trashed=false");
+      final r = await http.get(
+        Uri.parse('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=$q&fields=files(id,name,trashed)'),
+        headers: h,
+      );
+      if (r.statusCode == 200) {
+        final j = jsonDecode(r.body);
+        if (j is Map && j['files'] is List && (j['files'] as List).isNotEmpty) {
+          for (final f in j['files'] as List) {
+            if (f is Map && f['trashed'] != true) return f['id']?.toString();
+          }
+        }
+      }
+      // Fallback: list without query
+      final r2 = await http.get(
+        Uri.parse('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,trashed)'),
+        headers: h,
+      );
+      if (r2.statusCode == 200) {
+        final j2 = jsonDecode(r2.body);
+        if (j2 is Map && j2['files'] is List) {
+          for (final f in j2['files'] as List) {
+            if (f is Map && f['name'] == _fileName && f['trashed'] != true) {
+              return f['id']?.toString();
+            }
+          }
+        }
+      }
+    } catch (_) {}
     return null;
   }
 
   /// Uploads (creates or replaces) the sync file.
   Future<void> upload(Map<String, dynamic> data) async {
     final h = await _headers();
-    final id = await _fileId(h);
+    var id = await _fileId(h);
     final body = utf8.encode(jsonEncode(data));
-    if (id != null) {
-      final r = await http.patch(Uri.parse('https://www.googleapis.com/upload/drive/v3/files/$id?uploadType=media'),
-          headers: {...h, 'Content-Type': 'application/json'}, body: body);
-      if (r.statusCode != 200) throw StateError('drive ${r.statusCode}');
-      return;
+
+    if (id == null) {
+      // Step 1: Create file in appDataFolder
+      final createRes = await http.post(
+        Uri.parse('https://www.googleapis.com/drive/v3/files'),
+        headers: {...h, 'Content-Type': 'application/json; charset=UTF-8'},
+        body: jsonEncode({'name': _fileName, 'parents': ['appDataFolder']}),
+      );
+      if (createRes.statusCode != 200 && createRes.statusCode != 201) {
+        throw StateError('drive create ${createRes.statusCode}: ${createRes.body}');
+      }
+      final created = jsonDecode(createRes.body);
+      if (created is Map && created['id'] != null) {
+        id = created['id'].toString();
+      } else {
+        throw StateError('drive: missing file id');
+      }
     }
-    const boundary = 'fisha_sync_boundary';
-    final meta = jsonEncode({'name': _fileName, 'parents': ['appDataFolder']});
-    final multipart = <int>[
-      ...utf8.encode('--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$meta\r\n'),
-      ...utf8.encode('--$boundary\r\nContent-Type: application/json\r\n\r\n'),
-      ...body,
-      ...utf8.encode('\r\n--$boundary--\r\n'),
-    ];
-    final r = await http.post(Uri.parse('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart'),
-        headers: {...h, 'Content-Type': 'multipart/related; boundary=$boundary'}, body: multipart);
-    if (r.statusCode != 200) throw StateError('drive ${r.statusCode}');
+
+    // Step 2: Patch content to media upload endpoint
+    final r = await http.patch(
+      Uri.parse('https://www.googleapis.com/upload/drive/v3/files/$id?uploadType=media'),
+      headers: {...h, 'Content-Type': 'application/json'},
+      body: body,
+    );
+    if (r.statusCode != 200) throw StateError('drive patch ${r.statusCode}: ${r.body}');
   }
 
   /// The last synced data, or null when this Google account has none yet.

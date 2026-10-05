@@ -39,7 +39,7 @@
 
 // ================== CONFIG ==================
 const char* WIFI_SSID = "YAYA";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
-const char* WIFI_PASS = "";   // no ':' allowed (strip protocol limit)
+const char* WIFI_PASS = "Sasa6711071+*";   // no ':' allowed (strip protocol limit)
 #define USE_STATIC_IP 1
 IPAddress LOCAL_IP(192, 168, 1, 110);
 IPAddress GATEWAY(192, 168, 1, 1);
@@ -47,10 +47,10 @@ IPAddress SUBNET(255, 255, 255, 0);
 IPAddress DNS1(192, 168, 1, 1);
 const char* API_TOKEN = "";                     // empty = no auth (LAN only)
 const char* HOSTNAME  = "mttl-hub";
-const char* OTA_PASS  = "";
+const char* OTA_PASS  = "f&hANe4NM33Swt";
 const char* MQTT_URI  = "mqtts://t0eb1112.ala.eu-central-1.emqxsl.com:8883";
 const char* MQTT_USER = "ESP32_hub";
-const char* MQTT_PASS = "";
+const char* MQTT_PASS = "f&hANe4NM33Swt";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
 // From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
@@ -1539,7 +1539,8 @@ void exCollect() {
       saveUsers();
       publishUserState(j.u);
       j.data = "{\"code\":\"" + b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(j.u.id) +
-                                     "\",\"pw\":\"" + j.pw + "\",\"n\":\"" + jsonEsc(String(j.u.name)) + "\",\"r\":" + String(j.u.role) + "}") +
+                                     "\",\"pw\":\"" + j.pw + "\",\"n\":\"" + jsonEsc(String(j.u.name)) + "\",\"r\":" + String(j.u.role) +
+                                     ",\"lip\":\"" + WiFi.localIP().toString() + "\"}") +
                "\",\"user\":" + userJson(j.u) + "}";
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) ? j.c2 : j.c1);
     j.pw = "";
@@ -1602,7 +1603,7 @@ String actionMac(const String& p, const String& b) {
 }
 String userStateJson(const HubUser& u) {
   String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
-             ",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
+             ",\"lip\":\"" + WiFi.localIP().toString() + "\",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
   bool first = true;
   uint32_t now = millis();
   for (int t = 0; t < MAX_TIMERS; t++) {
@@ -2067,17 +2068,12 @@ int apiUserIdx = -1;
 bool authorized() {
   apiUserIdx = -1;
   apiSrc = 0;
-  if (!strlen(API_TOKEN)) return true;
   String tok = web.header("X-Token");
   String uid = web.header("X-User");
   if (!tok.length()) tok = web.arg("t");
   if (!uid.length()) uid = web.arg("u");
 
-  // 1. Owner check
-  if (tok == API_TOKEN) return true;
-  if (web.authenticate("hub", API_TOKEN)) return true;
-
-  // 2. Shared users local access
+  // 1. Shared users local access
   for (int i = 0; i < userCount; i++) {
     if (!users[i].id[0] || !strlen(users[i].pw)) continue;
     if (web.authenticate(users[i].id, users[i].pw)) {
@@ -2091,6 +2087,12 @@ bool authorized() {
       return true;
     }
   }
+
+  // 2. Owner check
+  if (!strlen(API_TOKEN)) return true;
+  if (tok == API_TOKEN) return true;
+  if (web.authenticate("hub", API_TOKEN)) return true;
+
   return false;
 }
 
@@ -2236,20 +2238,14 @@ void ssePump() {
     if (!x.ready) {
       while (x.c.available() && x.req.length() < 1024) x.req += (char)x.c.read();
       if (x.req.indexOf("\r\n\r\n") >= 0) {
-        bool ok = !strlen(API_TOKEN);
         int matchedUser = -1;
-        if (!ok) {
-          if (x.req.indexOf(String("t=") + API_TOKEN) >= 0) ok = true;
-          else {
-            for (int k = 0; k < userCount; k++) {
-              if (strlen(users[k].pw) && x.req.indexOf(String("t=") + users[k].pw) >= 0) {
-                ok = true;
-                matchedUser = k;
-                break;
-              }
-            }
+        for (int k = 0; k < userCount; k++) {
+          if (strlen(users[k].pw) && (x.req.indexOf(String("t=") + users[k].pw) >= 0 || (strlen(users[k].id) && x.req.indexOf(String("u=") + users[k].id) >= 0))) {
+            matchedUser = k;
+            break;
           }
         }
+        bool ok = (matchedUser >= 0) || !strlen(API_TOKEN) || (x.req.indexOf(String("t=") + API_TOKEN) >= 0);
         if (!ok || !x.req.startsWith("GET /events")) {
           x.c.print("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
           x.c.stop(); x = SseClient(); continue;

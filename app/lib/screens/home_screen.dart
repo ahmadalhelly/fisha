@@ -183,7 +183,7 @@ class _HomeScreenState extends State<HomeScreen> {
             isLabelVisible: s.unread > 0,
             label: Text('${s.unread}'),
             backgroundColor: C.danger,
-            child: Icon(Icons.history, size: 22, color: C.textSoft),
+            child: Icon(Icons.notifications_outlined, size: 22, color: C.textSoft),
           ),
         ),
       ]),

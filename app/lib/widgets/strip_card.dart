@@ -247,22 +247,26 @@ class StripCard extends StatelessWidget {
         ),
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
             if (dragHandle != null) dragHandle!,
-            if (stripIcon.isNotEmpty) ...[
-              Text(stripIcon, style: const TextStyle(fontSize: 20)),
-              const SizedBox(width: 4),
-            ] else ...[
-              PulseDot(color: online ? C.green : C.faint, active: online),
-              const SizedBox(width: 4),
-            ],
+            PulseDot(color: online ? C.green : C.faint, active: online),
+            const SizedBox(width: 6),
             Expanded(
               child: InkWell(
                 onTap: () => openStripSheet(context, state, s.mac),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    if (stripIcon.isNotEmpty) ...[
+                      Text(stripIcon, style: const TextStyle(fontSize: 16)),
+                      const SizedBox(width: 5),
+                    ],
                     Flexible(
-                      child: Text(state.stripName(s), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, height: 1.3)),
+                      child: Text(
+                        state.stripName(s),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700, height: 1.25),
+                      ),
                     ),
                     const SizedBox(width: 6),
                     Builder(builder: (_) {
@@ -273,7 +277,7 @@ class StripCard extends StatelessWidget {
                       );
                     }),
                   ]),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   Row(children: [
                     Flexible(
                       child: Text(
@@ -314,27 +318,30 @@ class StripCard extends StatelessWidget {
             ),
           ]),
           if (state.showMac)
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: s.mac));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(Tr.isAr ? 'تم نسخ الماك آدرس: ${s.mac}' : 'MAC copied: ${s.mac}'),
-                    duration: const Duration(seconds: 2),
-                    behavior: SnackBarBehavior.floating,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: s.mac));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(Tr.isAr ? 'تم نسخ الماك آدرس: ${s.mac}' : 'MAC copied: ${s.mac}'),
+                      duration: const Duration(seconds: 2),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
+                      const SizedBox(width: 4),
+                      Icon(Icons.copy, size: 10, color: C.faint),
+                    ],
                   ),
-                );
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
-                    const SizedBox(width: 4),
-                    Icon(Icons.copy, size: 10, color: C.faint),
-                  ],
                 ),
               ),
             ),
