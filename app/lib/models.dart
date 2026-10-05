@@ -12,10 +12,12 @@ class Outlet {
   final String label;
   final bool locked;
   final bool protected;
+  final bool keepOn;
   final int autoOffMin;
   final int autoOffInS; // -1 = not running
   final bool hasSchedule; // an enabled schedule targets this outlet (or the whole strip)
   final bool hasRule; // an enabled watts/temperature rule watches it
+  final double ampLimit; // per-outlet current limit (0 = disabled)
 
   const Outlet({
     required this.n,
@@ -26,10 +28,12 @@ class Outlet {
     this.label = '',
     this.locked = false,
     this.protected = false,
+    this.keepOn = false,
     this.autoOffMin = 0,
     this.autoOffInS = -1,
     this.hasSchedule = false,
     this.hasRule = false,
+    this.ampLimit = 0.0,
   });
 
   factory Outlet.fromJson(Map<String, dynamic> j) => Outlet(
@@ -41,13 +45,15 @@ class Outlet {
         label: _s(j['label']),
         locked: j['locked'] == true,
         protected: j['protected'] == true,
+        keepOn: j['keep_on'] == true,
         autoOffMin: _i(j['auto_off_min']),
         autoOffInS: _i(j['auto_off_in_s'], -1),
         hasSchedule: j['sched'] == true,
         hasRule: j['rule'] == true,
+        ampLimit: _d(j['amp_limit'], 0.0),
       );
 
-  Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, int? autoOffMin}) => Outlet(
+  Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, bool? keepOn, int? autoOffMin, double? ampLimit}) => Outlet(
         n: n,
         on: on ?? this.on,
         powerW: powerW,
@@ -56,10 +62,12 @@ class Outlet {
         label: label ?? this.label,
         locked: locked ?? this.locked,
         protected: protected ?? this.protected,
+        keepOn: keepOn ?? this.keepOn,
         autoOffMin: autoOffMin ?? this.autoOffMin,
         autoOffInS: autoOffInS,
         hasSchedule: hasSchedule,
         hasRule: hasRule,
+        ampLimit: ampLimit ?? this.ampLimit,
       );
 }
 
@@ -219,11 +227,12 @@ class Automation {
   int act; // 1 notify, 2 off, 3 both
   bool enabled;
   String label;
-  int metric; // 0 = power (W), 1 = temperature (°C), 2 = either; outlet 0 = whole strip
+  int metric; // 0 = power (W), 1 = temperature (°C), 2 = either, 3 = current (A); outlet 0 = whole strip
   double limit2; // °C limit when metric == 2
   Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = '', this.metric = 0, this.limit2 = 70});
   bool get isTemp => metric == 1;
   bool get isBoth => metric == 2;
+  bool get isCurrent => metric == 3;
   factory Automation.fromJson(Map<String, dynamic> j) => Automation(
         aid: _i(j['aid']),
         mac: _s(j['mac']).toUpperCase(),
@@ -311,23 +320,44 @@ class Room {
   final String id;
   final String name;
   final List<String> stripMacs;
-  const Room({required this.id, required this.name, this.stripMacs = const []});
+  final String icon;
+  const Room({required this.id, required this.name, this.stripMacs = const [], this.icon = ''});
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'strips': stripMacs,
+        'icon': icon,
       };
 
   factory Room.fromJson(Map<String, dynamic> j) => Room(
         id: (j['id'] ?? '').toString(),
         name: (j['name'] ?? '').toString(),
         stripMacs: (j['strips'] as List?)?.map((e) => e.toString().toUpperCase()).toList() ?? const [],
+        icon: (j['icon'] ?? '').toString(),
       );
 
-  Room copyWith({String? id, String? name, List<String>? stripMacs}) => Room(
+  Room copyWith({String? id, String? name, List<String>? stripMacs, String? icon}) => Room(
         id: id ?? this.id,
         name: name ?? this.name,
         stripMacs: stripMacs ?? this.stripMacs,
+        icon: icon ?? this.icon,
+      );
+}
+
+/// A person the owner shared the hub with (hub 2.9+). role 0 view · 1 control · 2 admin.
+class HubUser {
+  final String id;
+  String name;
+  int role;
+  bool all;
+  List<String> strips;
+  HubUser({required this.id, this.name = '', this.role = 1, this.all = true, List<String>? strips}) : strips = strips ?? [];
+  factory HubUser.fromJson(Map<String, dynamic> j) => HubUser(
+        id: _s(j['id']),
+        name: _s(j['name']),
+        role: _i(j['role'], 1),
+        all: j['all'] == true,
+        strips: j['strips'] is List ? (j['strips'] as List).map((e) => e.toString().toUpperCase()).toList() : [],
       );
 }

@@ -4,16 +4,19 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'account_screen.dart';
+import 'backup_screen.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
+import 'users_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
 import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-const appVersion = '1.6.0';
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 
 /// Settings home: short, grouped, every detail lives one tap deeper.
 class SettingsScreen extends StatelessWidget {
@@ -63,6 +66,27 @@ class SettingsScreen extends StatelessWidget {
               _group(_tr('الحساب', 'Account'), [
                 _row(
                   context,
+                  Icons.account_circle_outlined,
+                  C.accent,
+                  t('acc_title'),
+                  st.isShared
+                      ? t('shared_short')
+                      : st.accountType == 'google'
+                          ? (st.googleEmail.isEmpty ? t('acc_google') : st.googleEmail)
+                          : t('acc_local'),
+                  () => _open(context, AccountScreen(state: st)),
+                ),
+                if (!st.isShared)
+                  _row(
+                    context,
+                    Icons.group_outlined,
+                    C.accent2,
+                    t('users_title'),
+                    st.usersCount == 0 ? '—' : '${st.usersCount}',
+                    () => _open(context, UsersScreen(state: st)),
+                  ),
+                _row(
+                  context,
                   Icons.person_outline,
                   C.accent,
                   _tr('اسمك', 'Your name'),
@@ -87,7 +111,11 @@ class SettingsScreen extends StatelessWidget {
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
-                _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st)),
+                _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
+                if (!st.isShared)
+                  _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
+                      () => _reboot(context, st)),
+                _row(context, Icons.settings_backup_restore, C.accent2, t('backup_title'), '', () => _open(context, BackupScreen(state: st)),
                     last: true),
               ]),
               const SizedBox(height: 18),
@@ -169,6 +197,13 @@ class SettingsScreen extends StatelessWidget {
           ]),
         ),
       );
+
+  Future<void> _reboot(BuildContext context, AppState st) async {
+    if (!await confirmDialog(context, t('reboot_title'), t('reboot_body'), ok: t('reboot_btn'), danger: true)) return;
+    final r = await st.rebootHub();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.ok ? t('reboot_ok') : (r.error ?? t('err_failed')))));
+  }
 
   Widget _group(String title, List<Widget> children) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(

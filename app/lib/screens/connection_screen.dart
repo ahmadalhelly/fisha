@@ -25,12 +25,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   late final _pass = TextEditingController(text: _s.password);
   late final _local = TextEditingController(text: _s.localHost);
   late final _localPort = TextEditingController(text: '${_s.localPort}');
+  late final _hubPass = TextEditingController(text: _s.hubPass);
   bool _obscure = true;
+  bool _obscureHub = true;
   bool _advanced = false;
 
   @override
   void dispose() {
-    for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort]) {
+    for (final c in [_hub, _host, _port, _user, _pass, _local, _localPort, _hubPass]) {
       c.dispose();
     }
     super.dispose();
@@ -45,10 +47,27 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       password: _pass.text,
       localHost: _local.text.trim(),
       localPort: int.tryParse(_localPort.text.trim()) ?? 8080,
+      hubPass: _hubPass.text,
+      sharedUser: _s.sharedUser,
+      sharedName: _s.sharedName,
+      sharedRole: _s.sharedRole,
     );
     FocusScope.of(context).unfocus();
     await widget.state.saveSettings(s);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('saved'))));
+    var msg = t('saved');
+    if (s.hubPass.isNotEmpty && !s.isShared) {
+      // give the local link a moment after the restart, then hand the hub its server password
+      for (var i = 0; i < 6 && widget.state.mode != ConnMode.local; i++) {
+        await Future.delayed(const Duration(milliseconds: 700));
+      }
+      if (widget.state.mode == ConnMode.local) {
+        final r = await widget.state.pushHubPass(force: true);
+        msg = r.ok ? t('cloud_pass_sent') : (r.error ?? t('err_failed'));
+      } else {
+        msg = t('cloud_pass_later');
+      }
+    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -66,6 +85,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               _status(t('st_live'), st.sseLive),
               _status(t('st_cloud'), st.mqttConnected),
               _status(t('st_hub'), st.hubOnline),
+              if (st.hubCloudUp == false && st.hubCloudErr.isNotEmpty)
+                Text(t('cloud_err_${st.hubCloudErr}'), style: TextStyle(color: C.warn, fontSize: 12, height: 1.5)),
               if (st.hubUptimeS != null && st.hubUptimeS! > 0)
                 Row(children: [
                   Container(width: 8, height: 8, decoration: BoxDecoration(color: C.accent, shape: BoxShape.circle)),
@@ -75,6 +96,10 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 ]),
             ]),
             const SizedBox(height: 14),
+            if (st.isShared) ...[
+              emptyCard(t('shared_banner', {'x': st.settings.sharedName.isEmpty ? st.settings.sharedUser : st.settings.sharedName}), icon: Icons.group_outlined),
+              const SizedBox(height: 14),
+            ],
             section(t('sec_local'), [
               _field(_local, t('f_local'), hint: '192.168.1.110'),
             ]),
@@ -93,6 +118,22 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                 ),
               ),
+              if (!st.isShared)
+                TextField(
+                  controller: _hubPass,
+                  obscureText: _obscureHub,
+                  textDirection: TextDirection.ltr,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    labelText: t('f_hub_pass'),
+                    helperText: t('f_hub_pass_sub'),
+                    helperMaxLines: 3,
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscureHub ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: C.muted),
+                      onPressed: () => setState(() => _obscureHub = !_obscureHub),
+                    ),
+                  ),
+                ),
               InkWell(
                 onTap: () => setState(() => _advanced = !_advanced),
                 child: Row(children: [

@@ -40,10 +40,18 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                   final v = await askName(ctx, t('strip_name'), state.stripName(s));
                   if (v != null) state.rename(s, 0, v);
                 }),
+                _tile(Icons.category_outlined, Tr.isAr ? 'أيقونة المشترك' : 'Strip icon', state.stripIcon(s.mac).isEmpty ? (Tr.isAr ? 'بدون أيقونة' : 'None') : state.stripIcon(s.mac), () => _pickIconDialog(ctx, (ico) => state.setStripIcon(s.mac, ico))),
                 _tile(Icons.meeting_room_outlined, Tr.isAr ? 'الغرفة' : 'Room', state.roomForStrip(s.mac)?.name ?? (Tr.isAr ? 'بدون غرفة' : 'Unassigned'), () => _pickRoomDialog(ctx, state, s.mac)),
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
+                _switchTile(
+                    Icons.fingerprint,
+                    Tr.isAr ? 'بصمة للمفتاح الرئيسي' : 'Fingerprint for master switch',
+                    Tr.isAr ? 'يطلب البصمة قبل تشغيل أو إيقاف المشترك كله' : 'Asks for fingerprint before switching the whole strip',
+                    state.requiresBio(s.mac, 0),
+                    true,
+                    (v) => state.setRequiresBio(s.mac, 0, v)),
                 _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
                     (v) => state.setNotifyMask(s, v ? s.notifyMask | 0x10 : s.notifyMask & ~0x10)),
                 const SizedBox(height: 8),
@@ -136,6 +144,47 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
                 }),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: cardBox(radius: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.electric_meter_outlined, color: o.ampLimit > 0 ? C.warn : C.muted, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              Tr.isAr ? 'حد التيار (أمبير)' : 'Current limit (A)',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                            ),
+                          ),
+                          Text(
+                            o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
+                            style: mono(14, color: o.ampLimit > 0 ? C.accent : C.muted),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: o.ampLimit.clamp(0.0, 16.0),
+                        min: 0.0,
+                        max: 16.0,
+                        activeColor: C.accent,
+                        label: o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
+                        onChanged: v2 ? (v) => state.setOutletAmpLimit(s.mac, n, (v * 2).round() / 2) : null,
+                      ),
+                      Text(
+                        Tr.isAr
+                            ? (o.ampLimit <= 0 ? 'لا يوجد حد أقصى للتيار لهذا المخرج' : 'يفصل المخرج فور تجاوز ${o.ampLimit.toStringAsFixed(1)} أمبير لحماية الأجهزة')
+                            : (o.ampLimit <= 0 ? 'No current limit set' : 'Trips outlet if current exceeds ${o.ampLimit.toStringAsFixed(1)} A'),
+                        style: TextStyle(color: C.muted, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
                 _switchTile(Icons.shield_outlined, t('protect'), t('protect_sub'), o.protected, v2,
                     (v) => state.setProtected(s, n, v)),
                 _switchTile(
@@ -147,6 +196,8 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                     (v) => state.setRequiresBio(s.mac, n, v)),
                 _switchTile(Icons.lock_outline, t('child_lock'), t('child_lock_sub'), o.locked, state.hubHasConfig,
                     (v) => state.setLock(s, n, v)),
+                _switchTile(Icons.push_pin_outlined, t('keep_on'), t('keep_on_sub'), o.keepOn, state.hubHasConfig,
+                    (v) => state.setKeepOn(s, n, v)),
                 _tile(
                     Icons.timer_outlined,
                     t('auto_off'),
@@ -416,3 +467,51 @@ Future<void> _pickRoomDialog(BuildContext ctx, AppState state, String mac) async
     ),
   );
 }
+
+Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected) async {
+  const icons = ['⚡', '🔌', '🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺', '🖥️', '🎵'];
+  await showDialog<void>(
+    context: ctx,
+    builder: (dCtx) => AlertDialog(
+      backgroundColor: C.surface,
+      title: Text(Tr.isAr ? 'اختر أيقونة المشترك' : 'Choose Strip Icon', style: const TextStyle(fontSize: 18)),
+      content: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        alignment: WrapAlignment.center,
+        children: [
+          ActionChip(
+            label: Text(Tr.isAr ? 'بدون أيقونة' : 'Clear'),
+            onPressed: () {
+              onSelected('');
+              Navigator.pop(dCtx);
+            },
+          ),
+          for (final ico in icons)
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                onSelected(ico);
+                Navigator.pop(dCtx);
+              },
+              child: Container(
+                width: 46,
+                height: 46,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: C.surface2,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: C.border),
+                ),
+                child: Text(ico, style: const TextStyle(fontSize: 22)),
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+      ],
+    ),
+  );
+}
+

@@ -5,6 +5,7 @@ import 'app_state.dart';
 import 'i18n.dart';
 import 'screens/energy_screen.dart';
 import 'screens/events_screen.dart';
+import 'screens/welcome_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
@@ -54,7 +55,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  String _signature() => '${s.themePref.index}-${s.langPref.index}';
+  String _signature() => '${s.themePref.index}-${s.langPref.index}-${s.accountType.isEmpty}';
 
   void _onState() {
     final sig = _signature();
@@ -113,7 +114,11 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
       ],
       home: AnimatedSwitcher(
         duration: const Duration(milliseconds: 500),
-        child: _booted ? Shell(key: const ValueKey('shell'), state: s) : const BootScreen(key: ValueKey('boot')),
+        child: !_booted
+            ? const BootScreen(key: ValueKey('boot'))
+            : s.accountType.isEmpty
+                ? WelcomeScreen(key: const ValueKey('welcome'), state: s)
+                : Shell(key: const ValueKey('shell'), state: s),
       ),
     );
   }
@@ -207,41 +212,68 @@ class _ShellState extends State<Shell> {
           SettingsScreen(state: state),
         ];
         return Scaffold(
+          extendBody: true,
           body: IndexedStack(index: state.tab, children: pages),
-          bottomNavigationBar: NavigationBarTheme(
-            data: NavigationBarThemeData(
-              backgroundColor: C.nav,
-              indicatorColor: C.accentBg,
-              labelTextStyle: WidgetStateProperty.resolveWith(
-                (st) => TextStyle(
-                  fontSize: 11,
-                  fontWeight: st.contains(WidgetState.selected) ? FontWeight.w600 : FontWeight.w400,
-                  color: st.contains(WidgetState.selected) ? C.accent : C.muted,
+          bottomNavigationBar: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 7),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: C.nav.withValues(alpha: C.dark ? 0.88 : 0.92),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(color: C.border.withValues(alpha: 0.8)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: C.dark ? 0.35 : 0.08),
+                      blurRadius: 18,
+                      spreadRadius: 1,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: NavigationBarTheme(
+                  data: NavigationBarThemeData(
+                    height: 60,
+                    backgroundColor: Colors.transparent,
+                    indicatorColor: C.accentBg,
+                    labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                    labelTextStyle: WidgetStateProperty.resolveWith(
+                      (st) => TextStyle(
+                        fontSize: 11,
+                        fontWeight: st.contains(WidgetState.selected) ? FontWeight.w600 : FontWeight.w400,
+                        color: st.contains(WidgetState.selected) ? C.accent : C.muted,
+                      ),
+                    ),
+                    iconTheme: WidgetStateProperty.resolveWith(
+                      (st) => IconThemeData(color: st.contains(WidgetState.selected) ? C.accent : C.muted),
+                    ),
+                  ),
+                  child: NavigationBar(
+                    height: 60,
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                    selectedIndex: state.tab,
+                    onDestinationSelected: state.setTab,
+                    destinations: [
+                      NavigationDestination(
+                          icon: const Icon(Icons.home_outlined), selectedIcon: const Icon(Icons.home), label: t('nav_home')),
+                      NavigationDestination(
+                          icon: const Icon(Icons.schedule_outlined),
+                          selectedIcon: const Icon(Icons.schedule),
+                          label: t('nav_sched')),
+                      NavigationDestination(
+                          icon: const Icon(Icons.bar_chart_outlined),
+                          selectedIcon: const Icon(Icons.bar_chart),
+                          label: t('nav_energy')),
+                      NavigationDestination(
+                          icon: const Icon(Icons.settings_outlined),
+                          selectedIcon: const Icon(Icons.settings),
+                          label: t('nav_settings')),
+                    ],
+                  ),
                 ),
               ),
-              iconTheme: WidgetStateProperty.resolveWith(
-                (st) => IconThemeData(color: st.contains(WidgetState.selected) ? C.accent : C.muted),
-              ),
-            ),
-            child: NavigationBar(
-              selectedIndex: state.tab,
-              onDestinationSelected: state.setTab,
-              destinations: [
-                NavigationDestination(
-                    icon: const Icon(Icons.home_outlined), selectedIcon: const Icon(Icons.home), label: t('nav_home')),
-                NavigationDestination(
-                    icon: const Icon(Icons.schedule_outlined),
-                    selectedIcon: const Icon(Icons.schedule),
-                    label: t('nav_sched')),
-                NavigationDestination(
-                    icon: const Icon(Icons.bar_chart_outlined),
-                    selectedIcon: const Icon(Icons.bar_chart),
-                    label: t('nav_energy')),
-                NavigationDestination(
-                    icon: const Icon(Icons.settings_outlined),
-                    selectedIcon: const Icon(Icons.settings),
-                    label: t('nav_settings')),
-              ],
             ),
           ),
         );

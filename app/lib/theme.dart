@@ -206,3 +206,9 @@ BoxDecoration cardBox({double radius = 22, Color? color, Color? border}) => BoxD
       borderRadius: BorderRadius.circular(radius),
       border: Border.all(color: border ?? C.border),
     );
+
+Color voltColor(double volts) {
+  if (volts < 200 || volts > 250) return C.dark ? const Color(0xFFEF5350) : const Color(0xFFB71C1C);
+  if (volts <= 210 || volts >= 240) return Colors.amber;
+  return C.dark ? const Color(0xFF26A69A) : const Color(0xFF00897B);
+}

@@ -55,12 +55,19 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: C.bg,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _push(AddStripScreen(state: s)),
-        backgroundColor: C.accent,
-        foregroundColor: C.onAccent,
-        icon: const Icon(Icons.add),
-        label: Text(t('add_strip'), style: const TextStyle(fontWeight: FontWeight.w700)),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 74),
+        child: SizedBox(
+          height: 44,
+          child: FloatingActionButton.extended(
+            onPressed: () => _push(AddStripScreen(state: s)),
+            elevation: 4,
+            backgroundColor: C.accent,
+            foregroundColor: C.onAccent,
+            icon: const Icon(Icons.add, size: 20),
+            label: Text(t('add_strip'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          ),
+        ),
       ),
       body: SafeArea(
         child: ListenableBuilder(
@@ -68,20 +75,20 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (context, _) {
             final strips = s.strips;
             final header = _header();
-            const pad = EdgeInsets.fromLTRB(18, 16, 18, 96);
+            const pad = EdgeInsets.fromLTRB(18, 12, 18, 96);
             Widget body;
             if (strips.isEmpty) {
-              body = ListView(controller: _scroll, padding: pad, children: [header, const SizedBox(height: 16), _empty()]);
+              body = ListView(controller: _scroll, padding: pad, children: [header, const SizedBox(height: 10), _empty()]);
             } else if (s.rooms.isNotEmpty) {
               body = ListView(controller: _scroll, padding: pad, children: [
                 header,
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 ..._buildRoomSections(strips),
               ]);
             } else if (s.viewMode == ViewMode.grid) {
               body = ListView(controller: _scroll, padding: pad, children: [
                 header,
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 GridView.count(
                   crossAxisCount: 2,
                   shrinkWrap: true,
@@ -96,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
               body = ReorderableListView.builder(
                 scrollController: _scroll,
                 padding: pad,
-                header: Padding(padding: const EdgeInsets.only(bottom: 16), child: header),
+                header: Padding(padding: const EdgeInsets.only(bottom: 10), child: header),
                 buildDefaultDragHandles: false,
                 itemCount: strips.length,
                 onReorder: s.reorder,
@@ -116,7 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
             } else {
               body = ListView(controller: _scroll, padding: pad, children: [
                 header,
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 for (final st in strips) Padding(padding: const EdgeInsets.only(bottom: 14), child: StripCard(state: s, strip: st)),
               ]);
             }
@@ -158,36 +165,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
-        const BrandMark(size: 40),
+        const BrandMark(size: 32),
         const SizedBox(width: 6),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(kicker, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: C.accent, fontWeight: FontWeight.w700)),
-            Text(t('home_title'), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+            Text(kicker, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: C.accent, fontWeight: FontWeight.w700)),
+            Text(t('home_title'), style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
           ]),
         ),
         _modePill(),
+        const SizedBox(width: 6),
+        IconButton(
+          tooltip: t('q_events'),
+          visualDensity: VisualDensity.compact,
+          onPressed: () => _push(EventsScreen(state: s)),
+          icon: Badge(
+            isLabelVisible: s.unread > 0,
+            label: Text('${s.unread}'),
+            backgroundColor: C.danger,
+            child: Icon(Icons.history, size: 22, color: C.textSoft),
+          ),
+        ),
       ]),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       _summary(),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       Row(children: [
         Expanded(child: _quick(Icons.auto_awesome, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenesScreen(state: s)))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.schedule, t('q_sched'), () => s.setTab(1))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.bolt, t('q_auto'), () => _push(AutomationsScreen(state: s)))),
-        const SizedBox(width: 8),
-        Expanded(child: _quick(Icons.notifications_none, t('q_events'), () => _push(EventsScreen(state: s)), badge: s.unread)),
       ]),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       Row(children: [
         Expanded(
           child: SizedBox(
-            height: 44,
+            height: 38,
             child: TextField(
               onChanged: s.setQuery,
-              style: const TextStyle(fontSize: 14),
+              style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 hintText: t('search_hint'),
                 prefixIcon: Icon(Icons.search, color: C.muted, size: 20),
@@ -261,12 +278,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ConnMode.offline => (t('mode_offline'), C.danger),
     };
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: cardBox(radius: 999),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         PulseDot(color: color, active: s.mode != ConnMode.offline),
         const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, color: C.textSoft)),
+        Text(label, style: TextStyle(fontSize: 10, color: C.textSoft)),
       ]),
     );
   }
@@ -281,22 +298,22 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: cardBox(),
       child: Column(children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
           child: Column(children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(t('power_now'), style: TextStyle(fontSize: 13, color: C.muted)),
-                  const SizedBox(height: 6),
+                  Text(t('power_now'), style: TextStyle(fontSize: 11, color: C.muted)),
+                  const SizedBox(height: 4),
                   Row(
                     textDirection: TextDirection.ltr,
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
                     children: [
-                      AnimatedNumber(value: s.totalPower, style: mono(42, color: loadColor(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW))),
-                      const SizedBox(width: 6),
-                      Text('W', style: mono(16, color: C.muted, weight: FontWeight.w500)),
+                      AnimatedNumber(value: s.totalPower, style: mono(34, color: loadColor(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW))),
+                      const SizedBox(width: 4),
+                      Text('W', style: mono(13, color: C.muted, weight: FontWeight.w500)),
                     ],
                   ),
                 ],
@@ -304,19 +321,19 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 Text(v == null ? '— V' : '${v.toStringAsFixed(0)} V',
-                    textDirection: TextDirection.ltr, style: mono(13, color: C.textSoft, weight: FontWeight.w500)),
-                const SizedBox(height: 8),
+                    textDirection: TextDirection.ltr, style: mono(11, color: C.textSoft, weight: FontWeight.w500)),
+                const SizedBox(height: 6),
                 Row(mainAxisSize: MainAxisSize.min, children: [
                   PulseDot(color: fresh ? C.green : C.faint, active: fresh),
                   const SizedBox(width: 2),
                   Text(
                     ago == null ? '—' : (ago < 3 ? t('live_now') : t('updated_ago', {'s': ago})),
-                    style: TextStyle(fontSize: 12, color: C.muted),
+                    style: TextStyle(fontSize: 10, color: C.muted),
                   ),
                 ]),
               ]),
             ]),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             Row(children: [
               Expanded(child: _stat('${s.onlineCount}', t('stat_online'))),
               const SizedBox(width: 8),
@@ -332,12 +349,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _stat(String value, String label, {Color? color}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value, textDirection: TextDirection.ltr, style: mono(17, color: color)),
+          Text(value, textDirection: TextDirection.ltr, style: mono(14, color: color)),
           const SizedBox(height: 2),
-          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: C.muted)),
+          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 10, color: C.muted)),
         ]),
       );
 
@@ -348,7 +365,7 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(16),
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(vertical: 9),
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: C.border)),
             child: Column(children: [
               Badge(
@@ -357,8 +374,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 backgroundColor: C.danger,
                 child: Icon(icon, color: C.accent, size: 22),
               ),
-              const SizedBox(height: 8),
-              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 6),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
             ]),
           ),
         ),

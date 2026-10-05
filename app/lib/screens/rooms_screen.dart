@@ -6,6 +6,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/strip_card.dart';
+import 'backup_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -149,6 +150,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
             backgroundColor: C.bg,
             surfaceTintColor: Colors.transparent,
             title: Text(_tr('الغرف', 'Rooms'), style: const TextStyle(fontWeight: FontWeight.w700)),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings_backup_restore),
+                tooltip: t('backup_title'),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BackupScreen(state: s))),
+              ),
+            ],
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _addRoom,
@@ -232,6 +240,53 @@ class _RoomsScreenState extends State<RoomsScreen> {
     }
   }
 
+  Future<void> _pickRoomIcon(Room room) async {
+    const icons = ['🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺', '🖥️', '🎵', '⚡', '🔌'];
+    await showDialog<void>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        backgroundColor: C.surface,
+        title: Text(_tr('اختر أيقونة الغرفة', 'Choose Room Icon'), style: const TextStyle(fontSize: 18)),
+        content: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          alignment: WrapAlignment.center,
+          children: [
+            ActionChip(
+              label: Text(_tr('بدون أيقونة', 'Clear')),
+              onPressed: () {
+                s.setRoomIcon(room.id, '');
+                Navigator.pop(dCtx);
+              },
+            ),
+            for (final ico in icons)
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () {
+                  s.setRoomIcon(room.id, ico);
+                  Navigator.pop(dCtx);
+                },
+                child: Container(
+                  width: 46,
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: C.surface2,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: C.border),
+                  ),
+                  child: Text(ico, style: const TextStyle(fontSize: 22)),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        ],
+      ),
+    );
+  }
+
   Widget _roomCard(Room room) {
     final roomStrips = s.allStrips.where((st) => room.stripMacs.contains(st.mac)).toList();
     final roomW = roomStrips.fold<double>(0.0, (sum, st) => sum + (st.online ? st.livePower : 0));
@@ -243,7 +298,22 @@ class _RoomsScreenState extends State<RoomsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            Icon(Icons.meeting_room, color: C.accent, size: 22),
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => _pickRoomIcon(room),
+              child: Container(
+                width: 42,
+                height: 42,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: C.accentBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: room.icon.isNotEmpty
+                    ? Text(room.icon, style: const TextStyle(fontSize: 22))
+                    : Icon(Icons.meeting_room, color: C.accent, size: 22),
+              ),
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -272,11 +342,13 @@ class _RoomsScreenState extends State<RoomsScreen> {
               icon: Icon(Icons.more_vert, color: C.muted),
               color: C.surface2,
               onSelected: (action) {
+                if (action == 'icon') _pickRoomIcon(room);
                 if (action == 'rename') _renameRoom(room);
                 if (action == 'manage') _manageStrips(room);
                 if (action == 'delete') _deleteRoom(room);
               },
               itemBuilder: (ctx) => [
+                PopupMenuItem(value: 'icon', child: Text(_tr('اختيار أيقونة', 'Choose icon'))),
                 PopupMenuItem(value: 'manage', child: Text(_tr('تحديد المشتركات', 'Manage strips'))),
                 PopupMenuItem(value: 'rename', child: Text(_tr('تغيير الاسم', 'Rename'))),
                 PopupMenuItem(value: 'delete', child: Text(_tr('حذف', 'Delete'), style: TextStyle(color: C.danger))),

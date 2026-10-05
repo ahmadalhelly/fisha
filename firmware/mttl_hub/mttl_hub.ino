@@ -12,7 +12,13 @@
 
   POST actions: onoff, refresh, label, lock, protect, autooff, timer, timer_cancel, provision,
                 schedules, schedule_save, schedule_delete, automations, automation_save, automation_delete,
-                events, energy, config
+                events, energy, config, amplimit (v2.11), local_key (v2.11, shared users)
+
+  v2.11: the loop never blocks on a phone/strip that stopped reading (asleep, out of range, unplugged):
+         every socket write is non-blocking and a stuck peer is dropped instead of freezing the hub for
+         10 s per write. Phone notifications (ntfy) run in their own task. Wi-Fi loss no longer reboots
+         the hub after 60 s. Under-voltage limit, per-outlet current limit, near-limit warnings,
+         current (A) automations, and shared users can talk to the hub directly on the home Wi-Fi.
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -25,6 +31,10 @@
 #include <time.h>
 #include "mqtt_client.h"
 #include "esp_idf_version.h"
+#include "mbedtls/base64.h"
+#include "esp_task_wdt.h"
+#include "lwip/sockets.h"
+#include <errno.h>
 #include <vector>
 
 // ================== CONFIG ==================
@@ -49,7 +59,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.8";
+const char* FW_VERSION = "2.11";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -112,6 +122,12 @@ struct Strip {
   uint32_t autoOffAt[4] = {0, 0, 0, 0};
   uint32_t hotSince[4] = {0, 0, 0, 0};
   uint32_t loadEventAt = 0, voltEventAt = 0;
+  uint32_t ocSince = 0, vOkSince = 0;            // v2.10 over-current timer · voltage back to normal since
+  uint8_t ovCount = 0, vCutMask = 0;             // consecutive high readings · outlets cut for over-voltage
+  uint8_t ampX2[4] = {0, 0, 0, 0};               // v2.11 per-outlet current limit in 0.5 A steps (0 = none)
+  uint32_t ocoSince[4] = {0, 0, 0, 0};           // per-outlet over-current timer
+  uint8_t warnA = 0, warnT = 0;                  // near-limit warning already sent (bit per outlet): current · temperature
+  bool dead = false;                             // a write could not go out: dropped on the next pump
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
@@ -124,17 +140,21 @@ struct Timer { bool used = false; uint32_t id = 0; char mac[13] = {0}; uint8_t o
 // kind: 0 = switch on/off (once, or every periodS), 1 = reboot: off, wait, on (once, or every periodS),
 //       2 = loop: on for onMs, off for offMs, forever. All kept in NVS, so they survive a hub restart.
 struct TimerNV { uint32_t id; char mac[13]; uint8_t outlet, kind, on, phase; uint32_t offS, onS, periodS, dueEpoch, remainS; };
-struct Known { String mac, label, olabel[4]; uint8_t lock, prot, notify, keep; };
+struct Known { String mac, label, olabel[4]; uint8_t lock, prot, notify, keep; uint8_t amp[4]; };
 
 struct Sched { uint32_t id; char mac[13]; uint8_t outlet, on, days, hh, mm, enabled; uint32_t date; char label[40]; };
 struct AutomV2 { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; };
 struct Autom { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; float limit2; };
 // metric 2 = watts OR temperature: "watts" is the W limit and "limit2" the °C limit
-// outlet 0 = whole strip (total W / hottest outlet) · metric 0 = power (W), 1 = temperature (°C) · "watts" holds the threshold
+// outlet 0 = whole strip (total W / hottest outlet) · metric 0 = power (W), 1 = temperature (°C), 3 = current (A, v2.11) · "watts" holds the threshold
 // act: 1 notify, 2 switch off, 3 both
 struct Ev { uint32_t ts = 0; String type, mac, msg; int outlet = 0; };
 struct ApiRes { bool ok; String err; String data; };
 struct Note { String type, mac, msg; int outlet; };   // queued phone notification (defined early for Arduino auto-prototypes)
+struct NoteMsg { char topic[68]; char title[200]; char body[160]; uint8_t high; };   // handed to the notification task
+// v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
+struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };
+struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
 
 Strip strips[MAX_STRIPS];
 ELog elogs[MAX_STRIPS];
@@ -146,12 +166,19 @@ uint8_t schedCount = 0;
 Autom autos[MAX_AUTO];
 uint8_t autoCount = 0;
 bool autoArmed[MAX_AUTO];
+bool autoWarned[MAX_AUTO];                         // v2.11 near-limit warning sent for this crossing
 uint32_t autoSince[MAX_AUTO];
 Ev events[MAX_EVENTS];
 uint8_t evHead = 0, evCount = 0;
 uint32_t nextTimerId = 1;
 uint8_t tempMax = 70;
 bool tempProtect = true;
+// v2.10 whole-strip protections
+bool vProt = true, vRestore = true, aProt = true;
+uint16_t vMax = 250;
+uint16_t vMin = 190;                               // v2.11 under-voltage limit (180..260)
+float aMax = 16.0f;
+volatile uint32_t rebootAt = 0;
 
 WiFiServer stripServer(STRIP_PORT);
 WiFiServer sseServer(SSE_PORT);
@@ -161,12 +188,21 @@ uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
 
 // MQTT
-struct MqttCmd { char payload[640]; };
+struct MqttCmd { char payload[640]; char topic[96]; };
 esp_mqtt_client_handle_t mqtt = nullptr;
 QueueHandle_t mqttQ = nullptr;
 volatile bool mqttUp = false, mqttFreshConnect = false;
 String hubId, tStatus, tInfo, tState, tEvent, tCmd, tAck;
 char mqttClientId[32];
+// v2.9: why the cloud link is down, and who sent the command being handled
+volatile int mqttErrKind = 0, mqttErrCode = 0, mqttErrTls = 0;   // written by the MQTT task
+String mqttErr = "";                                               // "" | no_pass | auth | refused | tls | net
+volatile bool mqttRestartReq = false;
+uint8_t apiSrc = 0;                                                // 0 local HTTP · 1 owner MQTT · 2 shared user
+const uint8_t MAX_USERS = 10;
+HubUser users[MAX_USERS];
+uint8_t userCount = 0;
+String exUrl, exKey, exSec, exLast;                                // EMQX management API (NVS "sec"), never returned
 
 // provisioning
 volatile bool provRequested = false;
@@ -271,24 +307,58 @@ int firstStrip() {
 }
 int stripFor(const String& mac) { return mac.length() ? findStrip(mac) : firstStrip(); }
 
+// ---------- non-blocking socket writes (v2.11) ----------
+// WiFiClient::write() waits up to 10 x 1 s for room in the send buffer. A phone that went to sleep with the
+// live page open, or a strip that lost power, never drains it, so every write froze the whole hub for seconds:
+// strips went stale and dropped, keep-on/lock reverts and schedules were late. These writes give up quickly.
+bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
+  int fd = c.fd();
+  if (fd < 0 || !c.connected()) return false;
+  uint32_t t0 = millis();
+  while (len) {
+    int r = lwip_send(fd, p, len, MSG_DONTWAIT);
+    if (r > 0) { p += r; len -= r; continue; }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && millis() - t0 < maxMs) { delay(1); continue; }
+    return false;
+  }
+  return true;
+}
+bool sendStr(WiFiClient& c, const String& s, uint32_t maxMs) { return sendNB(c, s.c_str(), s.length(), maxMs); }
+
+// TCP keep-alive so a peer that vanished without closing is noticed in ~25 s
+void tcpKeepAlive(WiFiClient& c) {
+  int fd = c.fd();
+  if (fd < 0) return;
+  int on = 1, idle = 10, intvl = 5, cnt = 3;
+  lwip_setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+  lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
+  lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+  lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
+}
+
 void sendLine(Strip& s, const String& line) {
-  if (!s.c.connected()) return;
-  s.c.print(line);
-  s.c.print("\r\n");
+  if (s.dead || !s.c.connected()) return;
+  if (!sendStr(s.c, line + "\r\n", 400)) {
+    s.dead = true;                               // dropped by pumpStrips(), the strip re-dials by itself
+    Serial.printf("[tx %s] stuck, dropping\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str());
+    return;
+  }
   Serial.printf("[tx %s] %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), line.c_str());
 }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain);
 void sseSend(const char* ev, const String& data);
+void sseEvent(const String& data, const String& mac);
 
 // ---------- phone notifications through ntfy (free, works while the app is closed) ----------
 String ntfyTopic;
 uint32_t notifyTypes = 0xFFFFFFFF;
 const char* EV_TYPES[] = {"temp", "load", "auto_off", "automation", "schedule", "missed", "timer", "cycle", "lock", "added", "test",
-                          "button", "remote", "online", "offline", "voltage"};
-const int EV_COUNT = 16;
+                          "button", "remote", "online", "offline", "voltage", "overvolt", "overcurrent", "undervolt", "warn"};
+const int EV_COUNT = 20;
 Note notes[6];
 uint8_t noteCount = 0;
+volatile bool tlsBusy = false;                    // the EMQX job holds the only spare TLS session
 int stripFor(const String& mac);
 int typeBit(const String& t) { for (int i = 0; i < EV_COUNT; i++) if (t == EV_TYPES[i]) return i; return -1; }
 
@@ -319,29 +389,62 @@ String noteTitle(const Note& n) {
                 : n.type == "timer" ? "Timer ran" : n.type == "cycle" ? "Rebooted" : n.type == "lock" ? "Child lock reverted a button press"
                 : n.type == "added" ? "New strip connected" : n.type == "button" ? "Switched on the strip"
                 : n.type == "remote" ? "Switched from the app" : n.type == "online" ? "Strip back online" : n.type == "offline" ? "Strip offline"
-                : n.type == "voltage" ? "Unusual voltage" : "Test notification";
+                : n.type == "voltage" ? "Unusual voltage" : n.type == "overvolt" ? "High voltage - strip turned off"
+                : n.type == "undervolt" ? "Low voltage - strip turned off" : n.type == "warn" ? "Close to the safety limit"
+                : n.type == "overcurrent" ? "Over current - turned off" : "Test notification";
   return who.length() ? String(t) + " | " + who : String(t);
+}
+
+// v2.11: the HTTPS call runs in its own task. On the loop it froze switching for 1-3 s per notification,
+// and up to 2 minutes when the internet was slow (no handshake timeout).
+QueueHandle_t noteQ = nullptr;
+static void noteTask(void*) {
+  static NoteMsg m;
+  for (;;) {
+    if (xQueueReceive(noteQ, &m, portMAX_DELAY) != pdTRUE) continue;
+    if (WiFi.status() != WL_CONNECTED) continue;
+    // TLS needs ~40 kB in one piece next to the MQTT session; fall back to plain HTTP rather than starve the hub
+    bool tls = !tlsBusy && ESP.getMaxAllocHeap() > 45000;
+    WiFiClientSecure sc;
+    WiFiClient pc;
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
+    http.setReuse(false);
+    bool ok;
+    if (tls) {
+      sc.setInsecure();                         // public push relay; the message carries no secrets
+      sc.setHandshakeTimeout(8);
+      ok = http.begin(sc, String("https://ntfy.sh/") + m.topic);
+    } else ok = http.begin(pc, String("http://ntfy.sh/") + m.topic);
+    if (!ok) continue;
+    http.addHeader("Title", m.title);
+    http.addHeader("Tags", m.high ? "warning" : "electric_plug");
+    if (m.high) http.addHeader("Priority", "high");
+    int code = http.POST(String(m.body));
+    http.end();
+    Serial.printf("[notify] %s -> %d%s\n", m.title, code, tls ? "" : " (http)");
+    vTaskDelay(pdMS_TO_TICKS(700));
+  }
 }
 
 void sendNotes() {
   if (!noteCount || !ntfyTopic.length() || provRequested || provState == "running") return;
-  static uint32_t last = 0;
-  if (millis() - last < 1500) return;
-  last = millis();
+  if (!noteQ) {
+    noteQ = xQueueCreate(6, sizeof(NoteMsg));
+    if (!noteQ || xTaskCreatePinnedToCore(noteTask, "ntfy", 10240, nullptr, 1, nullptr, 0) != pdPASS) { noteCount = 0; return; }
+  }
+  if (uxQueueSpacesAvailable(noteQ) == 0) return;
   Note n = notes[0];
   for (int i = 1; i < noteCount; i++) notes[i - 1] = notes[i];
   noteCount--;
-  WiFiClientSecure tls;
-  tls.setInsecure();                          // public push relay; the message carries no secrets
-  HTTPClient http;
-  http.setTimeout(4000);
-  if (!http.begin(tls, "https://ntfy.sh/" + ntfyTopic)) return;
-  http.addHeader("Title", noteTitle(n));
-  http.addHeader("Tags", n.type == "temp" || n.type == "load" ? "warning" : "electric_plug");
-  if (n.type == "temp" || n.type == "load") http.addHeader("Priority", "high");
-  int code = http.POST(n.msg.length() ? n.msg : String("Fisha Hub"));
-  http.end();
-  Serial.printf("[notify] %s -> %d\n", n.type.c_str(), code);
+  static NoteMsg m;
+  memset(&m, 0, sizeof m);
+  strlcpy(m.topic, ntfyTopic.c_str(), sizeof m.topic);
+  strlcpy(m.title, noteTitle(n).c_str(), sizeof m.title);
+  strlcpy(m.body, n.msg.length() ? n.msg.c_str() : "Fisha Hub", sizeof m.body);
+  m.high = n.type == "temp" || n.type == "load" || n.type == "overvolt" || n.type == "undervolt" || n.type == "overcurrent" || n.type == "warn";
+  xQueueSend(noteQ, &m, 0);
 }
 
 void addEvent(const String& type, const String& mac, int outlet, const String& msg) {
@@ -354,6 +457,8 @@ void addEvent(const String& type, const String& mac, int outlet, const String& m
              ",\"msg\":\"" + jsonEsc(msg) + "\"}";
   Serial.printf("[event] %s\n", j.c_str());
   mqttPub(tEvent, j, 1, false);
+  for (int u = 0; u < userCount; u++)
+    if (mac.length() ? userHas(users[u], mac) : users[u].all) mqttPub("mttl/" + hubId + "/u/" + users[u].id + "/event", j, 1, false);
   sseSend("event", j);
   queueNotify(type, mac, outlet, msg);
 }
@@ -377,6 +482,8 @@ void loadStripCfg(int i) {
   s.notifyMask = cfg.getUChar(("m" + s.mac).c_str(), 0x1F);
   if (cfg.getBytesLength(("a" + s.mac).c_str()) == sizeof(s.autoOffMin)) cfg.getBytes(("a" + s.mac).c_str(), s.autoOffMin, sizeof(s.autoOffMin));
   else memset(s.autoOffMin, 0, sizeof(s.autoOffMin));
+  if (cfg.getBytesLength(("x" + s.mac).c_str()) == sizeof(s.ampX2)) cfg.getBytes(("x" + s.mac).c_str(), s.ampX2, sizeof(s.ampX2));
+  else memset(s.ampX2, 0, sizeof(s.ampX2));
   ELog& el = elogs[i];
   if (cfg.getBytesLength(("e" + s.mac).c_str()) == sizeof(ELog)) cfg.getBytes(("e" + s.mac).c_str(), &el, sizeof(ELog));
   if (el.magic != 0xE1E1) {
@@ -421,6 +528,12 @@ void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, s
 void loadGlobals() {
   tempMax = cfg.getUChar("tmax", 70);
   tempProtect = cfg.getBool("tprot", true);
+  vProt = cfg.getBool("vprot", true);
+  vRestore = cfg.getBool("vrest", true);
+  vMax = cfg.getUShort("vmax", 250);
+  vMin = cfg.getUShort("vmin", 190);
+  aProt = cfg.getBool("aprot", true);
+  aMax = cfg.getFloat("amax", 16.0f);
   schedCount = 0;
   if (cfg.getBytesLength("sch") == sizeof(Sched) * MAX_SCHED) {
     cfg.getBytes("sch", scheds, sizeof(Sched) * MAX_SCHED);
@@ -469,6 +582,8 @@ void refreshKnown(const String& mac) {
   n.prot = cfg.getUChar(("p" + mac).c_str(), 0);
   n.keep = cfg.getUChar(("q" + mac).c_str(), 0);
   n.notify = cfg.getUChar(("m" + mac).c_str(), 0x1F);
+  if (cfg.getBytesLength(("x" + mac).c_str()) == sizeof(n.amp)) cfg.getBytes(("x" + mac).c_str(), n.amp, sizeof(n.amp));
+  else memset(n.amp, 0, sizeof(n.amp));
 }
 
 void loadKnown() {
@@ -500,6 +615,7 @@ String offlineStripJson(const Known& n) {
     outs += "{\"n\":" + String(k + 1) + ",\"on\":false,\"power_w\":0,\"energy_kwh\":0,\"temp_c\":0,\"label\":\"" + jsonEsc(n.olabel[k]) +
             "\",\"locked\":" + ((n.lock & (1 << k)) ? "true" : "false") + ",\"protected\":" + ((n.prot & (1 << k)) ? "true" : "false") +
             ",\"keep_on\":" + ((n.keep & (1 << k)) ? "true" : "false") +
+            ",\"amp_limit\":" + (n.amp[k] ? String(n.amp[k] * 0.5f, 1) : "0") +
             ",\"auto_off_min\":0,\"auto_off_in_s\":-1,\"sched\":" + (hasSched(n.mac, k + 1) ? "true" : "false") +
             ",\"rule\":" + (hasRule(n.mac, k + 1) ? "true" : "false") + "}";
   }
@@ -622,15 +738,52 @@ void energyUpdate(int i) {
   if (changed) saveElog(i);
 }
 
+
+// v2.10 over-voltage + v2.11 under-voltage protection for the whole strip
+void voltCheck(Strip& s) {
+  if (isnan(s.voltage)) return;
+  uint32_t now = millis();
+  bool badV = (vProt && s.voltage > vMax) || (vProt && vMin > 0 && s.voltage < vMin);
+  if (badV) {
+    s.vOkSince = 0;
+    if (s.ovCount < 255) s.ovCount++;
+    bool far = s.voltage > vMax + 15 || (vMin > 0 && s.voltage < vMin - 15);
+    if (s.vCutMask || (s.ovCount < 2 && !far)) return;   // two readings in a row, or one far outside
+    uint8_t cut = 0;
+    for (int k = 0; k < 4; k++)
+      if (s.o[k].on && !(s.protMask & (1 << k))) { sendOnOffF(s, k + 1, false, true); cut |= 1 << k; }
+    s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
+    bool over = s.voltage > vMax;
+    addEvent(over ? "overvolt" : "undervolt", s.mac, 0, String(s.voltage, 0) + " V");
+    stateDirty = true;
+    return;
+  }
+  s.ovCount = 0;
+  if (!s.vCutMask) return;
+  // back inside the safe window with a 5 V hysteresis
+  if (s.voltage > vMax - 5 || (vMin > 0 && s.voltage < vMin + 5)) { s.vOkSince = 0; return; }
+  if (!s.vOkSince) { s.vOkSince = now ? now : 1; return; }
+  if (now - s.vOkSince < 60000) return;
+  if (vRestore)
+    for (int k = 0; k < 4; k++) if (s.vCutMask & (1 << k)) sendOnOff(s, k + 1, true);
+  addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V ok");
+  s.vCutMask = 0;
+  s.vOkSince = 0;
+  stateDirty = true;
+}
+
 // ---------- automations / protections (evaluated after every poll) ----------
 void evalStrip(int i) {
   Strip& s = strips[i];
   uint32_t now = millis();
   float total = 0;
+  float volts = (!isnan(s.voltage) && s.voltage > 50) ? s.voltage : 220.0f;
   for (int k = 0; k < 4; k++) {
     Outlet& o = s.o[k];
     total += o.on ? o.powerW : 0;
-    // over-temperature protection
+    float oAmps = o.on ? (o.powerW / volts) : 0;
+
+    // over-temperature protection & near-limit warning (v2.11)
     if (tempProtect && o.on && o.tempC >= tempMax) {
       if (!s.hotSince[k]) s.hotSince[k] = now ? now : 1;
       else if (now - s.hotSince[k] > 30000) {
@@ -641,6 +794,28 @@ void evalStrip(int i) {
     } else {
       s.hotSince[k] = 0;
     }
+    // near temperature limit: 5 °C before tempMax (orange band)
+    if (tempProtect && o.on && o.tempC >= tempMax - 5 && o.tempC < tempMax) {
+      if (!(s.warnT & (1 << k))) { s.warnT |= (1 << k); addEvent("warn", s.mac, k + 1, String(o.tempC) + "°C (near " + String(tempMax) + "°C)"); }
+    } else if (!o.on || o.tempC < tempMax - 8) s.warnT &= ~(1 << k);
+
+    // v2.11 per-outlet current limit (ampX2 in 0.5 A steps) & near-limit warning
+    float oMaxA = s.ampX2[k] ? (s.ampX2[k] * 0.5f) : 0;
+    if (oMaxA > 0 && o.on) {
+      if (oAmps >= oMaxA) {
+        if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
+        else if (now - s.ocoSince[k] > 3000) {
+          sendOnOffF(s, k + 1, false, true);
+          addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
+          s.ocoSince[k] = 0;
+        }
+      } else s.ocoSince[k] = 0;
+      // near current limit (>= 85 %)
+      if (oAmps >= oMaxA * 0.85f && oAmps < oMaxA) {
+        if (!(s.warnA & (1 << k))) { s.warnA |= (1 << k); addEvent("warn", s.mac, k + 1, String(oAmps, 1) + " A (near " + String(oMaxA, 1) + " A)"); }
+      } else if (!o.on || oAmps < oMaxA * 0.75f) s.warnA &= ~(1 << k);
+    } else { s.ocoSince[k] = 0; s.warnA &= ~(1 << k); }
+
     // auto-off
     if (s.autoOffAt[k] && (int32_t)(now - s.autoOffAt[k]) >= 0) {
       s.autoOffAt[k] = 0;
@@ -650,6 +825,17 @@ void evalStrip(int i) {
       }
     }
   }
+
+  // v2.10 over-current on the whole strip
+  float amps = total / volts;
+  if (aProt && amps > aMax) {
+    if (!s.ocSince) s.ocSince = now ? now : 1;
+    else if (now - s.ocSince > 3000) {
+      for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+      addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
+      s.ocSince = 0;
+    }
+  } else s.ocSince = 0;
   if (total > 3300 && now - s.loadEventAt > 300000) {
     s.loadEventAt = now;
     addEvent("load", s.mac, 0, String((int)total) + " W");
@@ -657,37 +843,50 @@ void evalStrip(int i) {
   int hottest = 0;
   bool anyOn = false;
   for (int k = 0; k < 4; k++) { hottest = max(hottest, s.o[k].tempC); anyOn |= s.o[k].on; }
+
+  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A (v2.11)
   for (int a = 0; a < autoCount; a++) {
     Autom& r = autos[a];
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
-    float pw, tc;
+    float pw, tc, cur;
     bool on;
-    if (r.outlet == 0) { pw = total; tc = hottest; on = anyOn; }
-    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; on = o.on; }
-    float p = r.metric == 1 ? tc : pw;
+    if (r.outlet == 0) { pw = total; tc = hottest; cur = amps; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = o.on ? (o.powerW / volts) : 0; on = o.on; }
+    float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
     bool cond;
-    if (r.metric == 2) {                         // either limit
-      if (pw < r.watts && tc < r.limit2) { autoArmed[a] = true; autoSince[a] = 0; continue; }
+    if (r.metric == 2) {                         // either limit (watts or temp)
+      if (pw < r.watts && tc < r.limit2) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
       cond = autoArmed[a] && on;
       if (tc >= r.limit2) p = tc;
     } else if (r.above) {
-      if (p < r.watts) { autoArmed[a] = true; autoSince[a] = 0; continue; }
+      if (p < r.watts) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
       cond = autoArmed[a] && on;
     } else {
-      if (p > r.watts) { autoArmed[a] = true; autoSince[a] = 0; continue; }   // it went above first -> arm
+      if (p > r.watts) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }   // it went above first -> arm
       cond = autoArmed[a] && on;
+    }
+    // near-threshold warning (color-code alert) before the countdown trips (v2.11)
+    if (r.above && autoArmed[a] && on && !autoWarned[a]) {
+      float warnAt = r.watts * 0.85f;
+      if (r.metric == 1) warnAt = max(r.watts - 5.0f, 40.0f);
+      if (p >= warnAt && p < r.watts) {
+        autoWarned[a] = true;
+        addEvent("warn", s.mac, r.outlet, String(p, r.metric == 1 ? 0 : 1) + (r.metric == 1 ? "°C" : (r.metric == 3 ? " A" : " W")) + " (near " + String(r.watts, r.metric == 1 ? 0 : 1) + ")");
+      }
     }
     if (!cond) continue;
     if (!autoSince[a]) autoSince[a] = now ? now : 1;
     if (now - autoSince[a] >= (uint32_t)r.holdS * 1000) {
       autoArmed[a] = false;
+      autoWarned[a] = false;
       autoSince[a] = 0;
       if (r.act & 2) {
         if (r.outlet == 0) {                       // whole strip: never cut protected outlets (router)
           for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
         } else sendOnOffF(s, r.outlet, false, true);
       }
-      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, (r.metric == 1 || (r.metric == 2 && p == tc)) ? 0 : 1) + ((r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : " W"));
+      String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : " W");
+      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, (unit == " C") ? 0 : 1) + unit);
     }
   }
 }
@@ -802,6 +1001,7 @@ void handleLine(int i, const String& line) {
         s.voltEventAt = millis();
         addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V");
       }
+      voltCheck(s);
     }
     return;
   }
@@ -850,6 +1050,7 @@ void acceptStrips() {
       strips[i].ip = n.remoteIP().toString();
       strips[i].lastRx = millis();
       n.setNoDelay(true);
+      tcpKeepAlive(strips[i].c);
       Serial.printf("[+] connection from %s\n", strips[i].ip.c_str());
       return;
     }
@@ -862,6 +1063,7 @@ void pumpStrips() {
   for (int i = 0; i < MAX_STRIPS; i++) {
     Strip& s = strips[i];
     if (!s.used) continue;
+    if (s.dead) { dropStrip(s, "socket stuck"); continue; }
     while (s.c.available()) {
       char ch = s.c.read();
       s.lastRx = millis();
@@ -875,6 +1077,7 @@ void pumpStrips() {
       else s.rx = "";
     }
     if (!s.used) continue;
+    if (s.dead) { dropStrip(s, "socket stuck"); continue; }
     if (!s.identified && !s.poked && millis() - s.lastRx > 6000) {   // a strip that connected but never introduced itself
       s.poked = true;
       Serial.printf("[?] %s connected but sent no bootinfo, asking it\n", s.ip.c_str());
@@ -1074,6 +1277,7 @@ String stripJson(int i) {
             ",\"energy_kwh\":" + String(o.energyWh / 1000.0f, 3) + ",\"temp_c\":" + String(o.tempC) +
             ",\"label\":\"" + jsonEsc(s.olabel[k]) + "\",\"locked\":" + ((s.lockMask & (1 << k)) ? "true" : "false") +
             ",\"protected\":" + ((s.protMask & (1 << k)) ? "true" : "false") + ",\"keep_on\":" + ((s.keepMask & (1 << k)) ? "true" : "false") +
+            ",\"amp_limit\":" + (s.ampX2[k] ? String(s.ampX2[k] * 0.5f, 1) : "0") +
             ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
             ",\"auto_off_in_s\":" + String(left < 0 ? -1 : left) + ",\"sched\":" + (hasSched(s.mac, k + 1) ? "true" : "false") +
             ",\"rule\":" + (hasRule(s.mac, k + 1) ? "true" : "false") + "}";
@@ -1113,8 +1317,15 @@ String buildStateJson() {
              ",\"uptime_s\":" + String(millis() / 1000) +
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
+             ",\"v_protect\":" + (vProt ? "true" : "false") + ",\"v_restore\":" + (vRestore ? "true" : "false") +
+             ",\"v_max\":" + String(vMax) + ",\"v_min\":" + String(vMin) +
+             ",\"a_protect\":" + (aProt ? "true" : "false") + ",\"a_max\":" + String(aMax, 1) +
              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
              "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
+             ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +
+             ",\"user\":\"" + String(MQTT_USER) + "\",\"host\":\"" + mqttHost() + "\"}" +
+             ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
+             ",\"reset\":\"" + resetText() + "\"" +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
@@ -1177,6 +1388,287 @@ String energyJson(int i) {
          String(el.wh[idx][2]) + "," + String(el.wh[idx][3]) + "],\"peak_w\":" + String(pk) + "}";
   }
   return j + "]}";
+}
+
+
+// ---------- v2.9 shared users ----------
+ApiRes api(String path, const String& b);
+ApiRes okRes(const String& data);
+ApiRes okRes();
+ApiRes errRes(const String& e);
+void publishUserState(const HubUser& u);
+const uint32_t USERS_MAGIC = 0x55535231;
+void loadUsers() {
+  Preferences up; up.begin("users", true);
+  static UsersNV nv;
+  memset(&nv, 0, sizeof nv);
+  if (up.getBytesLength("list") == sizeof nv) up.getBytes("list", &nv, sizeof nv);
+  up.end();
+  userCount = 0;
+  if (nv.magic != USERS_MAGIC) return;
+  for (int i = 0; i < nv.count && i < MAX_USERS; i++) if (nv.u[i].id[0]) users[userCount++] = nv.u[i];
+}
+void saveUsers() {
+  static UsersNV nv;
+  memset(&nv, 0, sizeof nv);
+  nv.magic = USERS_MAGIC; nv.count = userCount;
+  for (int i = 0; i < userCount; i++) nv.u[i] = users[i];
+  Preferences up; up.begin("users", false); up.putBytes("list", &nv, sizeof nv); up.end();
+}
+void loadEmqx() {
+  Preferences sp; sp.begin("sec", true);
+  exUrl = sp.getString("ex_url", ""); exKey = sp.getString("ex_key", ""); exSec = sp.getString("ex_sec", "");
+  sp.end();
+}
+bool emqxReady() { return exUrl.length() && exKey.length() && exSec.length(); }
+int findUser(const String& id) { for (int i = 0; i < userCount; i++) if (id == users[i].id) return i; return -1; }
+bool userHas(const HubUser& u, const String& macIn) {
+  if (u.all) return true;
+  String m = macIn; m.toUpperCase();
+  for (int k = 0; k < u.n && k < 6; k++) if (m == u.strips[k]) return true;
+  return false;
+}
+void parseStrips(HubUser& u, const String& list) {
+  u.n = 0; memset(u.strips, 0, sizeof u.strips);
+  for (String p : split(list, ',')) {
+    p.trim(); p.toUpperCase();
+    if (p.length() == 12 && isHex(p) && u.n < 6) strlcpy(u.strips[u.n++], p.c_str(), 13);
+  }
+}
+String userJson(const HubUser& u) {
+  String j = "{\"id\":\"" + String(u.id) + "\",\"name\":\"" + jsonEsc(String(u.name)) + "\",\"role\":" + String(u.role) +
+             ",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
+  for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
+  return j + "]}";
+}
+String randText(int len) {
+  static const char A[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  String s; for (int i = 0; i < len; i++) s += A[esp_random() % (sizeof(A) - 1)];
+  return s;
+}
+String b64url(const String& in) {
+  size_t olen = 0;
+  size_t cap = ((in.length() + 2) / 3) * 4 + 4;
+  std::vector<unsigned char> out(cap);
+  if (mbedtls_base64_encode(out.data(), cap, &olen, (const unsigned char*)in.c_str(), in.length()) != 0) return "";
+  String r;
+  for (size_t i = 0; i < olen; i++) { char c = out[i]; if (c == '+') c = '-'; else if (c == '/') c = '_'; else if (c == '=') continue; r += c; }
+  return r;
+}
+String mqttHost() {
+  String u = MQTT_URI;
+  int s = u.indexOf("://"); if (s >= 0) u = u.substring(s + 3);
+  int c = u.indexOf(':'); if (c > 0) u = u.substring(0, c);
+  return u;
+}
+bool http2xx(int c) { return c >= 200 && c < 300; }
+const char* EX_AUTHN = "/api/v5/authentication/password_based:built_in_database/users";
+const char* EX_AUTHZ = "/api/v5/authorization/sources/built_in_database/rules/users";
+// One HTTPS call to the EMQX management API (runs only inside the job task). Returns the HTTP code (<0 = no connection).
+int emqxCall(const char* method, const String& path, const String& body) {
+  int code;
+  WiFiClientSecure tls;
+  tls.setCACert(MQTT_CA);
+  tls.setHandshakeTimeout(12);
+  tls.setTimeout(12);
+  HTTPClient h;
+  h.setConnectTimeout(8000);
+  h.setTimeout(10000);
+  h.setReuse(false);
+  if (!h.begin(tls, exUrl + path)) code = -1;
+  else {
+    h.setAuthorization(exKey.c_str(), exSec.c_str());
+    h.addHeader("Content-Type", "application/json");
+    code = h.sendRequest(method, body);
+    exLast = code > 0 ? h.getString().substring(0, 160) : HTTPClient::errorToString(code);
+    h.end();
+  }
+  Serial.printf("[emqx] %s %s -> %d %s\n", method, path.c_str(), code, exLast.c_str());
+  return code;
+}
+// EMQX work runs in its own task so the hub keeps switching strips meanwhile.
+// kind 1 invite · 2 revoke · 3 test the API details. state 0 idle · 1 running · 2 finished (loop collects) · 3 result ready
+struct ExJob { volatile uint8_t state = 0; uint8_t kind = 0; HubUser u; String pw, base, err; int c1 = 0, c2 = 0; bool ok = false; String data; };
+ExJob exJob;
+static void exTask(void*) {
+  ExJob& j = exJob;
+  tlsBusy = true;
+  bool paused = false;
+  if (mqtt) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; }   // two TLS sessions don't fit in RAM
+  vTaskDelay(pdMS_TO_TICKS(300));
+  if (j.kind == 1) {
+    j.c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(j.u.id) + "\",\"password\":\"" + j.pw + "\"}");
+    if (http2xx(j.c1)) {
+      String rules = "[{\"username\":\"" + String(j.u.id) + "\",\"rules\":["
+                     "{\"topic\":\"" + j.base + "u/" + j.u.id + "/cmd\",\"permission\":\"allow\",\"action\":\"publish\"},"
+                     "{\"topic\":\"" + j.base + "u/" + j.u.id + "/#\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
+                     "{\"topic\":\"" + j.base + "status\",\"permission\":\"allow\",\"action\":\"subscribe\"},"
+                     "{\"topic\":\"#\",\"permission\":\"deny\",\"action\":\"all\"}]}]";
+      j.c2 = emqxCall("POST", EX_AUTHZ, rules);
+      if (!http2xx(j.c2)) emqxCall("DELETE", String(EX_AUTHN) + "/" + j.u.id, "");   // rollback
+    }
+  } else if (j.kind == 2) {
+    j.c1 = emqxCall("DELETE", String(EX_AUTHN) + "/" + j.u.id, "");
+    j.c2 = emqxCall("DELETE", String(EX_AUTHZ) + "/" + j.u.id, "");
+  } else {
+    j.c1 = emqxCall("GET", String(EX_AUTHN) + "?limit=1", "");
+    j.c2 = 200;
+  }
+  if (paused && mqtt) esp_mqtt_client_start(mqtt);
+  tlsBusy = false;
+  j.state = 2;
+  vTaskDelete(nullptr);
+}
+bool exStart(uint8_t kind) {
+  if (exJob.state == 1) return false;
+  exJob.kind = kind; exJob.c1 = exJob.c2 = 0; exJob.ok = false; exJob.err = ""; exJob.data = "";
+  exJob.state = 1;
+  if (xTaskCreatePinnedToCore(exTask, "emqx", 12288, nullptr, 1, nullptr, 0) != pdPASS) { exJob.state = 0; return false; }
+  return true;
+}
+String exCodeText(int c) { return c < 0 ? "no connection (" + exLast + ")" : "HTTP " + String(c) + (exLast.length() ? " " + exLast : ""); }
+// called from loop(): applies a finished job (users[] is only touched here)
+void exCollect() {
+  if (exJob.state != 2) return;
+  ExJob& j = exJob;
+  if (j.kind == 1) {
+    j.ok = http2xx(j.c1) && http2xx(j.c2);
+    if (j.ok && userCount < MAX_USERS) {
+      strlcpy(j.u.pw, j.pw.c_str(), sizeof(j.u.pw));
+      users[userCount++] = j.u;
+      saveUsers();
+      publishUserState(j.u);
+      j.data = "{\"code\":\"" + b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(j.u.id) +
+                                     "\",\"pw\":\"" + j.pw + "\",\"n\":\"" + jsonEsc(String(j.u.name)) + "\",\"r\":" + String(j.u.role) + "}") +
+               "\",\"user\":" + userJson(j.u) + "}";
+    } else j.err = "emqx " + exCodeText(http2xx(j.c1) ? j.c2 : j.c1);
+    j.pw = "";
+  } else if (j.kind == 2) {
+    j.ok = (http2xx(j.c1) || j.c1 == 404) && (http2xx(j.c2) || j.c2 == 404);
+    if (j.ok) {
+      int i = findUser(j.u.id);
+      mqttPub("mttl/" + hubId + "/u/" + String(j.u.id) + "/state", "", 1, true);
+      if (i >= 0) { for (int k = i; k < userCount - 1; k++) users[k] = users[k + 1]; userCount--; saveUsers(); }
+    } else j.err = "emqx " + exCodeText(http2xx(j.c1) || j.c1 == 404 ? j.c2 : j.c1);
+  } else {
+    j.ok = http2xx(j.c1);
+    if (!j.ok) j.err = "emqx " + exCodeText(j.c1);
+  }
+  j.state = 3;
+  stateDirty = true;
+}
+String resetText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT: case ESP_RST_TASK_WDT: case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default: return "other";
+  }
+}
+
+// what a shared user may call · 0 view · 1 control · 2 admin · -1 never
+int needRole(const String& p) {
+  if (p == "state" || p == "events" || p == "energy" || p == "schedules" || p == "automations") return 0;
+  if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete") return 1;
+  if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit" || p == "automation_save" || p == "automation_delete") return 2;
+  return -1;
+}
+// the mac an action touches ("" = none / global)
+String actionMac(const String& p, const String& b) {
+  if (p == "timer_cancel") {
+    uint32_t id = (uint32_t)jsonValue(b, "tid").toInt();
+    for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used && timers[t].id == id) return String(timers[t].mac);
+    return "?";
+  }
+  if (p == "schedule_delete" || (p == "schedule_save" && jsonValue(b, "sid").toInt())) {
+    uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
+    for (int i = 0; i < schedCount; i++) if (scheds[i].id == id) {
+      if (p == "schedule_save" && jsonHas(b, "mac") && !jsonValue(b, "mac").equalsIgnoreCase(scheds[i].mac)) return "?";
+      return String(scheds[i].mac);
+    }
+    return p == "schedule_delete" ? "?" : jsonValue(b, "mac");
+  }
+  if (p == "automation_delete" || (p == "automation_save" && jsonValue(b, "aid").toInt())) {
+    uint32_t id = (uint32_t)jsonValue(b, "aid").toInt();
+    for (int i = 0; i < autoCount; i++) if (autos[i].id == id) {
+      if (p == "automation_save" && jsonHas(b, "mac") && !jsonValue(b, "mac").equalsIgnoreCase(autos[i].mac)) return "?";
+      return String(autos[i].mac);
+    }
+    return p == "automation_delete" ? "?" : jsonValue(b, "mac");
+  }
+  return jsonValue(b, "mac");
+}
+String userStateJson(const HubUser& u) {
+  String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
+             ",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
+  bool first = true;
+  uint32_t now = millis();
+  for (int t = 0; t < MAX_TIMERS; t++) {
+    const Timer& x = timers[t];
+    if (!x.used || !userHas(u, x.mac)) continue;
+    if (!first) j += ",";
+    first = false;
+    long in = (int32_t)(x.at - now) / 1000;
+    j += "{\"tid\":" + String(x.id) + ",\"mac\":\"" + String(x.mac) + "\",\"outlet\":" + String(x.outlet) +
+         ",\"kind\":\"" + (x.kind == 2 ? "loop" : x.kind == 1 ? "cycle" : (x.on ? "on" : "off")) + "\",\"phase\":" + String(x.phase) +
+         ",\"in_s\":" + String(in < 0 ? 0 : in) + ",\"off_s\":" + String(x.offMs / 1000) + ",\"on_s\":" + String(x.onMs / 1000) +
+         ",\"repeat_s\":" + String(x.periodS) + "}";
+  }
+  j += "],\"devices\":[";
+  first = true;
+  for (int i = 0; i < MAX_STRIPS; i++) {
+    if (!strips[i].used || !strips[i].identified || !userHas(u, strips[i].mac)) continue;
+    if (!first) j += ",";
+    j += stripJson(i);
+    first = false;
+  }
+  for (int k = 0; k < knownCount; k++) {
+    if (findStrip(known[k].mac) >= 0 || !userHas(u, known[k].mac)) continue;
+    if (!first) j += ",";
+    j += offlineStripJson(known[k]);
+    first = false;
+  }
+  return j + "]}";
+}
+// list actions answered per user (filtered to the user's strips)
+bool userList(const HubUser& u, const String& p, ApiRes& r) {
+  String j;
+  if (p == "schedules") {
+    j = "{\"schedules\":["; bool f = true;
+    for (int i = 0; i < schedCount; i++) if (userHas(u, scheds[i].mac)) { if (!f) j += ","; f = false; j += schedJson(scheds[i]); }
+    r = okRes(j + "]}"); return true;
+  }
+  if (p == "automations") {
+    j = "{\"automations\":["; bool f = true;
+    for (int i = 0; i < autoCount; i++) if (userHas(u, autos[i].mac)) { if (!f) j += ","; f = false; j += autoJson(autos[i]); }
+    r = okRes(j + "]}"); return true;
+  }
+  if (p == "events") {
+    j = "{\"events\":["; bool f = true;
+    for (int n = 0; n < evCount; n++) {
+      const Ev& e = events[((int)evHead - 1 - n + MAX_EVENTS) % MAX_EVENTS];
+      if (e.mac.length() ? !userHas(u, e.mac) : !u.all) continue;
+      if (!f) j += ","; f = false;
+      j += "{\"ts\":" + String(e.ts) + ",\"type\":\"" + e.type + "\",\"mac\":\"" + e.mac + "\",\"outlet\":" + String(e.outlet) +
+           ",\"msg\":\"" + jsonEsc(e.msg) + "\"}";
+    }
+    r = okRes(j + "]}"); return true;
+  }
+  if (p == "state") { r = okRes(userStateJson(u)); return true; }
+  return false;
+}
+ApiRes userApi(const HubUser& u, String path, const String& b) {
+  if (path.startsWith("/api/")) path = path.substring(5);
+  int need = needRole(path);
+  if (need < 0 || u.role < need) return errRes("forbidden");
+  ApiRes r;
+  if (userList(u, path, r)) return r;
+  String m = actionMac(path, b);
+  if (path == "refresh") { if (!u.all) return errRes("forbidden"); }
+  else if (!m.length() || m == "?" || !userHas(u, m)) return errRes("forbidden");
+  return api(path, b);
 }
 
 // ---------- API (shared by HTTP and MQTT) ----------
@@ -1250,6 +1742,109 @@ ApiRes api(String path, const String& b) {
     stateDirty = true;
     return okRes();
   }
+  // ---- v2.9: cloud password + shared users (owner only) ----
+  if (path == "cloud") {                          // {"pass":"..."} local network only
+    if (apiSrc != 0) return errRes("local_only");
+    bool changed = false;
+    if (jsonHas(b, "pass")) {
+      String np = jsonValue(b, "pass");
+      if (!np.length() || np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
+      changed = np != secMqtt;
+      if (changed) { Preferences sp; sp.begin("sec", false); sp.putString("mqtt", np); sp.end(); secMqtt = np; }
+    }
+    if (changed || !mqttUp) mqttRestartReq = true;   // same password and already online: nothing to do
+    stateDirty = true;
+    return okRes();
+  }
+  if (path == "emqx_config") {                    // {"url","key","secret"} local network only
+    if (apiSrc != 0) return errRes("local_only");
+    String u = jsonValue(b, "url"), k = jsonValue(b, "key"), sc = jsonValue(b, "secret");
+    u.trim(); k.trim(); sc.trim();
+    while (u.endsWith("/")) u.remove(u.length() - 1);
+    if (u.endsWith("/api/v5")) u.remove(u.length() - 7);
+    if (!u.startsWith("https://") || !k.length() || !sc.length()) return errRes("url (https://...), key and secret are required");
+    Preferences sp; sp.begin("sec", false); sp.putString("ex_url", u); sp.putString("ex_key", k); sp.putString("ex_sec", sc); sp.end();
+    exUrl = u; exKey = k; exSec = sc;
+    stateDirty = true;
+    if (!exStart(3)) return errRes("busy");
+    return okRes("{\"job\":true}");
+  }
+  if (path == "users") {
+    if (apiSrc == 2) return errRes("forbidden");
+    String j = "{\"users\":[";
+    for (int i = 0; i < userCount; i++) { if (i) j += ","; j += userJson(users[i]); }
+    return okRes(j + "],\"emqx\":" + (emqxReady() ? "true" : "false") + "}");
+  }
+  if (path == "user_invite") {                    // {"name","role","all","strips":"MAC1,MAC2"} local network only
+    if (apiSrc != 0) return errRes("local_only");
+    if (!emqxReady()) return errRes("emqx_not_set");
+    if (userCount >= MAX_USERS) return errRes("max 10 users");
+    HubUser u; memset(&u, 0, sizeof u);
+    String nm = jsonValue(b, "name"); nm.trim();
+    if (!nm.length()) return errRes("name required");
+    strlcpy(u.name, nm.c_str(), sizeof u.name);
+    u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
+    u.all = jsonBool(b, "all") ? 1 : 0;
+    parseStrips(u, jsonValue(b, "strips"));
+    if (!u.all && !u.n) return errRes("pick at least one strip");
+    do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
+    if (exJob.state == 1) return errRes("busy");
+    exJob.u = u;
+    exJob.pw = randText(18);
+    exJob.base = "mttl/" + hubId + "/";
+    if (!exStart(1)) return errRes("busy");
+    return okRes("{\"job\":true}");
+  }
+  if (path == "user_update") {                    // {"id","name","role","all","strips"}
+    if (apiSrc == 2) return errRes("forbidden");
+    int i = findUser(jsonValue(b, "id"));
+    if (i < 0) return errRes("no such user");
+    HubUser u = users[i];
+    if (jsonHas(b, "name")) { String nm = jsonValue(b, "name"); nm.trim(); if (nm.length()) strlcpy(u.name, nm.c_str(), sizeof u.name); }
+    if (jsonHas(b, "role")) u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
+    if (jsonHas(b, "all")) u.all = jsonBool(b, "all") ? 1 : 0;
+    if (jsonHas(b, "strips")) parseStrips(u, jsonValue(b, "strips"));
+    if (!u.all && !u.n) return errRes("pick at least one strip");
+    users[i] = u;
+    saveUsers();
+    publishUserState(u);
+    return okRes();
+  }
+  if (path == "user_revoke") {                    // {"id"} local network only
+    if (apiSrc != 0) return errRes("local_only");
+    int i = findUser(jsonValue(b, "id"));
+    if (i < 0) return errRes("no such user");
+    if (!emqxReady()) {                           // nothing on the server to remove
+      mqttPub("mttl/" + hubId + "/u/" + String(users[i].id) + "/state", "", 1, true);
+      for (int j = i; j < userCount - 1; j++) users[j] = users[j + 1];
+      userCount--;
+      saveUsers();
+      stateDirty = true;
+      return okRes();
+    }
+    if (exJob.state == 1) return errRes("busy");
+    exJob.u = users[i];
+    if (!exStart(2)) return errRes("busy");
+    return okRes("{\"job\":true}");
+  }
+  if (path == "ujob") {                           // result of the last EMQX job
+    if (apiSrc == 2) return errRes("forbidden");
+    if (exJob.state == 1 || exJob.state == 2) return okRes("{\"state\":\"running\"}");
+    if (exJob.state == 0) return okRes("{\"state\":\"idle\"}");
+    String d = "{\"state\":\"done\",\"ok\":" + String(exJob.ok ? "true" : "false") + ",\"error\":\"" + jsonEsc(exJob.err) + "\"" +
+               (exJob.data.length() ? ",\"data\":" + exJob.data : String("")) + "}";
+    exJob.state = 0;
+    exJob.data = "";
+    return okRes(d);
+  }
+  if (path == "reboot") {                         // owner only, local or remote
+    if (apiSrc == 2) return errRes("forbidden");
+    rebootAt = millis() + 1200;
+    if (!rebootAt) rebootAt = 1;
+    addEvent("cycle", "", 0, "hub reboot");
+    return okRes();
+  }
+
   if (path == "wifi") {
     String ns = jsonValue(b, "ssid"), np = jsonValue(b, "pass");
     ns.trim();
@@ -1411,11 +2006,29 @@ ApiRes api(String path, const String& b) {
     if (idx < 0) return errRes("device offline");
     return okRes(energyJson(idx));
   }
+  if (path == "amplimit") {
+    int idx = stripFor(mac);
+    if (idx < 0) return errRes("device offline");
+    if (outlet < 1 || outlet > 4) return errRes("bad outlet");
+    float maxA = jsonValue(b, "max_a").toFloat();
+    if (maxA < 0 || maxA > 16.0f) return errRes("max_a 0..16");
+    strips[idx].ampX2[outlet - 1] = (uint8_t)round(maxA * 2.0f);
+    cfg.putBytes(("i" + strips[idx].mac).c_str(), strips[idx].ampX2, sizeof(strips[idx].ampX2));
+    refreshKnown(strips[idx].mac);
+    stateDirty = true;
+    return okRes();
+  }
   if (path == "config") {
     if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 40, 90); cfg.putUChar("tmax", tempMax); }
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
+    if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
+    if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
+    if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 225, 270); cfg.putUShort("vmax", vMax); }
+    if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 180, 260); cfg.putUShort("vmin", vMin); }
+    if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
+    if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
     stateDirty = true;
-    return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") + "}");
+    return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") + ",\"v_min\":" + String(vMin) + ",\"v_max\":" + String(vMax) + "}");
   }
   if (path == "notify") {                        // {"ntfy":"topic","types":bitmask} and/or {"mac","mask"}
     if (jsonHas(b, "ntfy")) {
@@ -1449,12 +2062,38 @@ String apiJson(const ApiRes& r) {
 }
 
 // ---------- HTTP ----------
+int apiUserIdx = -1;
+
 bool authorized() {
+  apiUserIdx = -1;
+  apiSrc = 0;
   if (!strlen(API_TOKEN)) return true;
-  if (web.header("X-Token") == API_TOKEN) return true;
-  if (web.arg("t") == API_TOKEN) return true;
-  return web.authenticate("hub", API_TOKEN);
+  String tok = web.header("X-Token");
+  String uid = web.header("X-User");
+  if (!tok.length()) tok = web.arg("t");
+  if (!uid.length()) uid = web.arg("u");
+
+  // 1. Owner check
+  if (tok == API_TOKEN) return true;
+  if (web.authenticate("hub", API_TOKEN)) return true;
+
+  // 2. Shared users local access
+  for (int i = 0; i < userCount; i++) {
+    if (!users[i].id[0] || !strlen(users[i].pw)) continue;
+    if (web.authenticate(users[i].id, users[i].pw)) {
+      apiUserIdx = i;
+      apiSrc = 2;
+      return true;
+    }
+    if ((!uid.length() || uid == users[i].id) && tok == users[i].pw) {
+      apiUserIdx = i;
+      apiSrc = 2;
+      return true;
+    }
+  }
+  return false;
 }
+
 bool guard() {
   if (authorized()) return true;
   web.sendHeader("WWW-Authenticate", "Basic realm=\"mttl-hub\"");
@@ -1462,18 +2101,27 @@ bool guard() {
   return false;
 }
 
-void handleState() { if (guard()) web.send(200, "application/json", buildStateJson()); }
+void handleState() {
+  if (!guard()) return;
+  if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) {
+    web.send(200, "application/json", userStateJson(users[apiUserIdx]));
+  } else {
+    web.send(200, "application/json", buildStateJson());
+  }
+}
 
 void handleHealth() {
   int n = 0;
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
-           ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
+           ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
+           ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
 void handleRaw() {
   if (!guard()) return;
+  if (apiSrc == 2) { web.send(403, "application/json", "{\"ok\":false,\"error\":\"forbidden\"}"); return; }
   String cmd = web.arg("cmd");
   cmd.trim();
   int i = firstStrip();
@@ -1486,7 +2134,13 @@ void handleRaw() {
 void handleOther() {
   if (web.method() == HTTP_POST && web.uri().startsWith("/api/")) {
     if (!guard()) return;
-    ApiRes r = api(web.uri(), web.arg("plain"));
+    ApiRes r;
+    if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) {
+      r = userApi(users[apiUserIdx], web.uri(), web.arg("plain"));
+    } else {
+      apiSrc = 0;
+      r = api(web.uri(), web.arg("plain"));
+    }
     stateDirty = true;
     web.send(r.ok ? 200 : 400, "application/json", apiJson(r));
     return;
@@ -1545,14 +2199,23 @@ void handleUpdateUpload() {
 }
 
 // ---------- live push: Server-Sent Events on :8081 ----------
-struct SseClient { WiFiClient c; bool used = false, ready = false; String req; uint32_t since = 0; };
+struct SseClient { WiFiClient c; bool used = false, ready = false; String req; uint32_t since = 0; int userIdx = -1; };
 SseClient sse[MAX_SSE];
 uint32_t lastSsePush = 0, lastSseBeat = 0;
 
 void sseSend(const char* ev, const String& data) {
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
-    sse[i].c.print(String("event: ") + ev + "\ndata: " + data + "\n\n");
+    if (!sse[i].c.connected()) { sse[i].c.stop(); sse[i] = SseClient(); continue; }
+    String body = (sse[i].userIdx >= 0 && sse[i].userIdx < userCount && String(ev) == "state") ?
+                  userStateJson(users[sse[i].userIdx]) : data;
+    String chunk = String("event: ") + ev + "\ndata: " + body + "\n\n";
+    sse[i].c.setTimeout(80);
+    int written = sse[i].c.write((const uint8_t*)chunk.c_str(), chunk.length());
+    if (written < 0 || (size_t)written < chunk.length()) {
+      sse[i].c.stop();
+      sse[i] = SseClient();
+    }
   }
 }
 
@@ -1565,6 +2228,7 @@ void ssePump() {
     sse[slot] = SseClient();
     sse[slot].c = n; sse[slot].used = true; sse[slot].since = millis();
     n.setNoDelay(true);
+    n.setTimeout(150);
   }
   for (int i = 0; i < MAX_SSE; i++) {
     SseClient& x = sse[i];
@@ -1572,14 +2236,29 @@ void ssePump() {
     if (!x.ready) {
       while (x.c.available() && x.req.length() < 1024) x.req += (char)x.c.read();
       if (x.req.indexOf("\r\n\r\n") >= 0) {
-        bool ok = !strlen(API_TOKEN) || x.req.indexOf(String("t=") + API_TOKEN) >= 0;
+        bool ok = !strlen(API_TOKEN);
+        int matchedUser = -1;
+        if (!ok) {
+          if (x.req.indexOf(String("t=") + API_TOKEN) >= 0) ok = true;
+          else {
+            for (int k = 0; k < userCount; k++) {
+              if (strlen(users[k].pw) && x.req.indexOf(String("t=") + users[k].pw) >= 0) {
+                ok = true;
+                matchedUser = k;
+                break;
+              }
+            }
+          }
+        }
         if (!ok || !x.req.startsWith("GET /events")) {
           x.c.print("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
           x.c.stop(); x = SseClient(); continue;
         }
+        x.userIdx = matchedUser;
         x.c.print("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
                   "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n");
-        x.c.print("event: state\ndata: " + buildStateJson() + "\n\n");
+        String initData = (x.userIdx >= 0 && x.userIdx < userCount) ? userStateJson(users[x.userIdx]) : buildStateJson();
+        x.c.print("event: state\ndata: " + initData + "\n\n");
         x.ready = true;
       } else if (millis() - x.since > 3000) { x.c.stop(); x = SseClient(); continue; }
     }
@@ -1594,7 +2273,15 @@ void ssePump() {
   }
   if (millis() - lastSseBeat > 15000) {
     lastSseBeat = millis();
-    for (int i = 0; i < MAX_SSE; i++) if (sse[i].used && sse[i].ready) sse[i].c.print(": hb\n\n");
+    for (int i = 0; i < MAX_SSE; i++) {
+      if (sse[i].used && sse[i].ready) {
+        sse[i].c.setTimeout(80);
+        if (sse[i].c.write((const uint8_t*)": hb\n\n", 6) != 6) {
+          sse[i].c.stop();
+          sse[i] = SseClient();
+        }
+      }
+    }
   }
 }
 
@@ -1606,13 +2293,30 @@ float lastPubPower = -1;
 static void mqttEvent(void*, esp_event_base_t, int32_t id, void* data) {
   esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
   switch ((esp_mqtt_event_id_t)id) {
-    case MQTT_EVENT_CONNECTED: mqttUp = true; mqttFreshConnect = true; esp_mqtt_client_subscribe(mqtt, tCmd.c_str(), 1); break;
+    case MQTT_EVENT_CONNECTED: {
+      mqttUp = true; mqttFreshConnect = true; mqttErrKind = 0;
+      esp_mqtt_client_subscribe(mqtt, tCmd.c_str(), 1);
+      String uc = "mttl/" + hubId + "/u/+/cmd";
+      esp_mqtt_client_subscribe(mqtt, uc.c_str(), 1);
+      break;
+    }
     case MQTT_EVENT_DISCONNECTED: mqttUp = false; break;
+    case MQTT_EVENT_ERROR:
+      if (e->error_handle) {
+        if (e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) { mqttErrKind = 1; mqttErrCode = e->error_handle->connect_return_code; }
+        else if (e->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+          mqttErrKind = 2; mqttErrCode = e->error_handle->esp_tls_last_esp_err; mqttErrTls = e->error_handle->esp_tls_cert_verify_flags;
+        }
+      }
+      break;
     case MQTT_EVENT_DATA: {
       if (e->current_data_offset != 0 || e->data_len <= 0 || e->data_len >= (int)sizeof(MqttCmd::payload)) break;
+      if (e->topic_len <= 0 || e->topic_len >= (int)sizeof(MqttCmd::topic)) break;
       MqttCmd c;
       memcpy(c.payload, e->data, e->data_len);
       c.payload[e->data_len] = 0;
+      memcpy(c.topic, e->topic, e->topic_len);
+      c.topic[e->topic_len] = 0;
       if (mqttQ) xQueueSend(mqttQ, &c, 0);
       break;
     }
@@ -1629,7 +2333,7 @@ void mqttStart() {
   String base = "mttl/" + hubId + "/";
   tStatus = base + "status"; tInfo = base + "info"; tState = base + "state"; tEvent = base + "event"; tCmd = base + "cmd"; tAck = base + "cmd/ack";
   snprintf(mqttClientId, sizeof mqttClientId, "hub-%s", id);
-  mqttQ = xQueueCreate(6, sizeof(MqttCmd));
+  if (!mqttQ) mqttQ = xQueueCreate(6, sizeof(MqttCmd));
   esp_mqtt_client_config_t cfgm = {};
 #if ESP_IDF_VERSION_MAJOR >= 5
   cfgm.broker.address.uri = MQTT_URI;
@@ -1680,8 +2384,27 @@ float totalPower() {
   return p;
 }
 
+void publishUserState(const HubUser& u) {
+  mqttPub("mttl/" + hubId + "/u/" + u.id + "/state", userStateJson(u), 0, true);
+}
+void mqttRestart() {
+  if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = nullptr; }
+  mqttUp = false; mqttErrKind = 0; mqttErr = "";
+  mqttStart();
+}
+void mqttHealth() {
+  if (mqttRestartReq && exJob.state != 1) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
+  String e;
+  if (!secMqtt.length()) e = "no_pass";
+  else if (mqttUp) e = "";
+  else if (mqttErrKind == 1) e = (mqttErrCode == 4 || mqttErrCode == 5) ? "auth" : "refused";
+  else if (mqttErrKind == 2) e = mqttErrTls ? "tls" : "net";
+  else e = mqttErr == "no_pass" ? "" : mqttErr;
+  if (e != mqttErr) { mqttErr = e; stateDirty = true; if (e.length()) Serial.printf("[mqtt] down: %s (%d)\n", e.c_str(), (int)mqttErrCode); }
+}
 void publishState() {
   mqttPub(tState, buildStateJson(), 0, true);
+  for (int u = 0; u < userCount; u++) publishUserState(users[u]);
   lastStatePub = millis();
   lastRelaySig = relaySignature();
   lastPubPower = totalPower();
@@ -1709,10 +2432,24 @@ void mqttProcess() {
       String action = jsonValue(body, "action");
       path = action.length() ? "/api/" + action : "/api/onoff";
     }
-    ApiRes r = api(path, body);
+    String topic = c.topic, ackTopic = tAck;
+    ApiRes r;
+    String ub = "mttl/" + hubId + "/u/";
+    if (topic.startsWith(ub) && topic.endsWith("/cmd")) {
+      String uid = topic.substring(ub.length(), topic.length() - 4);
+      int ui = findUser(uid);
+      if (ui < 0) continue;                       // revoked or unknown: no answer
+      ackTopic = ub + uid + "/cmd/ack";
+      apiSrc = 2;
+      r = userApi(users[ui], path, body);
+    } else {
+      apiSrc = 1;
+      r = api(path, body);
+    }
+    apiSrc = 0;
     String ack = "{\"id\":\"" + id + "\",\"ok\":" + (r.ok ? "true" : "false") + ",\"error\":\"" + jsonEsc(r.err) + "\"";
     if (r.data.length()) ack += ",\"data\":" + r.data;
-    mqttPub(tAck, ack + "}", 1, false);
+    mqttPub(ackTopic, ack + "}", 1, false);
     publishState();
   }
   if (!mqttUp) return;
@@ -1906,13 +2643,14 @@ void setupPortal() {
   portal.begin();
   uint32_t lastTry = millis();
   while (true) {
+    esp_task_wdt_reset();
     portal.handleClient();
     if (saved) { delay(1500); ESP.restart(); }
     if (millis() - lastTry > 120000) {           // the old network may simply have been down: retry it now and then
       lastTry = millis();
       WiFi.begin(secSsid.c_str(), secWifi.c_str());
       uint32_t t0 = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) { portal.handleClient(); delay(50); }
+      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) { esp_task_wdt_reset(); portal.handleClient(); delay(50); }
       if (WiFi.status() == WL_CONNECTED) { Serial.println("[portal] home Wi-Fi is back"); delay(500); ESP.restart(); }
     }
     delay(5);
@@ -1999,8 +2737,10 @@ void loadSecrets() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== Fisha Hub v2.8 — @ahmadalhelly ===");
+  Serial.println("\n=== Fisha Hub v2.11 — @ahmadalhelly ===");
   loadSecrets();
+  loadEmqx();
+  loadUsers();
   cfg.begin("mttl", false);
   loadGlobals();
   loadKnown();
@@ -2020,8 +2760,8 @@ void setup() {
   sseServer.begin();
   sseServer.setNoDelay(true);
 
-  const char* hk[] = {"X-Token"};
-  web.collectHeaders(hk, 1);
+  const char* hk[] = {"X-Token", "X-User"};
+  web.collectHeaders(hk, 2);
   web.on("/", HTTP_GET, handleRoot);
   web.on("/api/state", HTTP_GET, handleState);
   web.on("/api/health", HTTP_GET, handleHealth);
@@ -2039,14 +2779,29 @@ void setup() {
   Serial.printf("Web UI  : http://%s:%u  · live: http://%s:%u/events\n", WiFi.localIP().toString().c_str(), WEB_PORT,
                 WiFi.localIP().toString().c_str(), SSE_PORT);
   mqttStart();
+  // v2.10: a frozen loop reboots the hub after 90 s instead of hanging forever
+  esp_task_wdt_config_t wc = {};
+  wc.timeout_ms = 90000;
+  wc.idle_core_mask = 0;
+  wc.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&wc) != ESP_OK) esp_task_wdt_init(&wc);
+  esp_task_wdt_add(nullptr);
+  Serial.printf("[hub] last reset: %s\n", resetText().c_str());
 }
 
 uint32_t wifiLostAt = 0;
 
 void loop() {
+  esp_task_wdt_reset();
+  if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) { Serial.println("[hub] reboot requested"); delay(200); ESP.restart(); }
   if (WiFi.status() != WL_CONNECTED) {
     if (!wifiLostAt) wifiLostAt = millis();
-    if (millis() - wifiLostAt > 60000) ESP.restart();
+    static uint32_t lastRecon = 0;
+    if (millis() - lastRecon > 8000) {
+      lastRecon = millis();
+      WiFi.reconnect();
+    }
+    if (millis() - wifiLostAt > 600000) ESP.restart();
     delay(100);
     return;
   }
@@ -2063,6 +2818,8 @@ void loop() {
   }
   ssePump();
   serialRaw();
+  exCollect();
+  mqttHealth();
   mqttProcess();
   sendNotes();
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();

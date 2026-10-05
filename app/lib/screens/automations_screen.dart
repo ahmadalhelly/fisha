@@ -76,6 +76,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
                 if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
                   _tempCard(),
+                  if (s.hubHasStripProt) ...[const SizedBox(height: 14), _stripProtCard()],
                   const SizedBox(height: 14),
                   if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
                   if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
@@ -131,6 +132,87 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
     );
   }
 
+  Widget _stripProtCard() => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: cardBox(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Icon(Icons.bolt, color: C.warn),
+            const SizedBox(width: 10),
+            Expanded(child: Text(t('vprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+            Switch(value: s.vProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(vOn: v)),
+          ]),
+          Text(
+            Tr.isAr
+                ? 'فصل المشترك إذا هبط الفولت عن ${s.vMin} V أو تجاوز ${s.vMax} V'
+                : 'Trip strip if voltage drops below ${s.vMin} V or exceeds ${s.vMax} V',
+            style: TextStyle(color: C.muted, fontSize: 12, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Text(Tr.isAr ? 'أدنى فولت' : 'Min voltage', style: TextStyle(color: C.textSoft, fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: s.vMin.toDouble().clamp(180, 220),
+                min: 180,
+                max: 220,
+                activeColor: C.accent,
+                label: '${s.vMin} V',
+                onChanged: s.vProtect ? (v) => setState(() => s.vMin = v.round()) : null,
+                onChangeEnd: (v) => s.setStripProtection(vMinLimit: v.round()),
+              ),
+            ),
+            Text('${s.vMin} V', textDirection: TextDirection.ltr, style: mono(14)),
+          ]),
+          Row(children: [
+            Text(t('vprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: s.vMax.toDouble().clamp(225, 270),
+                min: 225,
+                max: 270,
+                activeColor: C.accent,
+                label: '${s.vMax} V',
+                onChanged: s.vProtect ? (v) => setState(() => s.vMax = v.round()) : null,
+                onChangeEnd: (v) => s.setStripProtection(vLimit: v.round()),
+              ),
+            ),
+            Text('${s.vMax} V', textDirection: TextDirection.ltr, style: mono(14)),
+          ]),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: s.vRestore,
+            activeTrackColor: C.accent,
+            title: Text(t('vprot_restore'), style: const TextStyle(fontSize: 13)),
+            onChanged: s.vProtect ? (v) => s.setStripProtection(vBack: v) : null,
+          ),
+          Divider(height: 22, color: C.border),
+          Row(children: [
+            Icon(Icons.electric_meter_outlined, color: C.danger),
+            const SizedBox(width: 10),
+            Expanded(child: Text(t('aprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+            Switch(value: s.aProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(aOn: v)),
+          ]),
+          Text(t('aprot_sub', {'x': s.aMax.toStringAsFixed(1)}), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+          Row(children: [
+            Text(t('aprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
+            Expanded(
+              child: Slider(
+                value: s.aMax.clamp(1, 16),
+                min: 1,
+                max: 16,
+                activeColor: C.accent,
+                label: '${s.aMax.toStringAsFixed(1)} A',
+                onChanged: s.aProtect ? (v) => setState(() => s.aMax = (v * 2).round() / 2) : null,
+                onChangeEnd: (v) => s.setStripProtection(aLimit: (v * 2).round() / 2),
+              ),
+            ),
+            Text('${s.aMax.toStringAsFixed(1)} A', textDirection: TextDirection.ltr, style: mono(14)),
+          ]),
+        ]),
+      );
+
   Widget _tempCard() => Container(
         padding: const EdgeInsets.all(16),
         decoration: cardBox(),
@@ -149,7 +231,6 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                 value: s.tempMax.toDouble().clamp(40, 90),
                 min: 40,
                 max: 90,
-                divisions: 50,
                 activeColor: C.accent,
                 label: '${s.tempMax}°C',
                 onChanged: s.tempProtect ? (v) => setState(() => s.tempMax = v.round()) : null,
@@ -172,7 +253,14 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(14)),
-                child: Icon(a.isBoth ? Icons.shield_moon_outlined : (a.isTemp ? Icons.thermostat : (a.above ? Icons.trending_up : Icons.trending_down)),
+                child: Icon(
+                    a.isBoth
+                        ? Icons.shield_moon_outlined
+                        : (a.isTemp
+                            ? Icons.thermostat
+                            : (a.isCurrent
+                                ? Icons.electric_meter_outlined
+                                : (a.above ? Icons.trending_up : Icons.trending_down))),
                     color: a.metric > 0 ? C.warn : C.accent),
               ),
               const SizedBox(width: 12),
@@ -184,7 +272,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                   Text(
                     a.isBoth
                         ? '${t('when_either')} ${a.watts.toStringAsFixed(0)} W ${t('or')} ${a.limit2.toStringAsFixed(0)}°C · ${fmtDuration(a.holdS)}'
-                        : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}',
+                        : (a.isCurrent
+                            ? '${Tr.isAr ? 'عندما يتجاوز التيار' : 'When current exceeds'} ${a.watts.toStringAsFixed(1)} A · ${fmtDuration(a.holdS)}'
+                            : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}'),
                     style: TextStyle(fontSize: 12, color: C.textSoft),
                   ),
                   Text('${s.nameForMac(a.mac, a.outlet)} → ${_actText(a.act)}',
@@ -309,16 +399,28 @@ class _AutomationEditorState extends State<AutomationEditor> {
           section(t('rule_watch'), [
             Segmented<int>(
               value: a.metric,
-              items: {0: t('metric_power_s'), 1: t('metric_temp_s'), 2: t('metric_both')},
+              items: {
+                0: t('metric_power_s'),
+                1: t('metric_temp_s'),
+                2: t('metric_both'),
+                3: Tr.isAr ? 'التيار (A)' : 'Current (A)',
+              },
               onChanged: (v) => setState(() {
                 a.metric = v;
                 a.above = true;
-                _watts.text = v == 1 ? '60' : '1500';
+                _watts.text = v == 3 ? '10' : (v == 1 ? '60' : '1500');
                 _limit2.text = '60';
               }),
             ),
             if (a.outlet == 0)
-              Text(a.isBoth ? t('rule_strip_both') : (a.isTemp ? t('rule_strip_temp') : t('rule_strip_power')),
+              Text(
+                  a.isBoth
+                      ? t('rule_strip_both')
+                      : (a.isTemp
+                          ? t('rule_strip_temp')
+                          : (a.isCurrent
+                              ? (Tr.isAr ? 'حماية تيار المشترك بالكامل' : 'Whole-strip current protection')
+                              : t('rule_strip_power'))),
                   style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
             if (a.isBoth)
               Text(t('rule_both_hint'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5))
@@ -331,7 +433,12 @@ class _AutomationEditorState extends State<AutomationEditor> {
                   controller: _watts,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   textDirection: TextDirection.ltr,
-                  decoration: InputDecoration(labelText: a.isTemp ? t('threshold_temp') : t('threshold'), suffixText: a.isTemp ? '°C' : 'W'),
+                  decoration: InputDecoration(
+                    labelText: a.isCurrent
+                        ? (Tr.isAr ? 'حد التيار (أمبير)' : 'Current limit (A)')
+                        : (a.isTemp ? t('threshold_temp') : t('threshold')),
+                    suffixText: a.isCurrent ? 'A' : (a.isTemp ? '°C' : 'W'),
+                  ),
                 ),
               ),
               if (a.isBoth) ...[

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
@@ -8,11 +9,27 @@ import '../models.dart';
 import '../screens/outlet_sheet.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'wifi_arcs.dart';
 
 /// Switch an outlet, asking first if it needs biometric or is protected and being turned off.
 Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet o, bool on) async {
   if (!s.online) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('strip_offline_cmd'))));
+    return;
+  }
+  if (!on && o.keepOn) {
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        icon: Icon(Icons.push_pin_outlined, color: C.accent),
+        title: Text(Tr.isAr ? 'المخرج محمي (مفتوح دائمًا)' : 'Outlet kept always on', style: const TextStyle(fontSize: 18)),
+        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «إبقاء دائمًا شغال» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        ],
+      ),
+    );
     return;
   }
   if (state.requiresBio(s.mac, o.n)) {
@@ -45,6 +62,9 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
 
 Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
+  if (state.requiresBio(s.mac, 0)) {
+    if (!await authenticateBio(Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On')) return;
+  }
   final needsBio = s.outlets.any((o) => !o.on && state.requiresBio(s.mac, o.n));
   bool bioOk = true;
   if (needsBio) {
@@ -64,18 +84,21 @@ Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
 
 Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
+  if (state.requiresBio(s.mac, 0)) {
+    if (!await authenticateBio(Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off')) return;
+  }
   final bioOutlets = s.outlets.where((o) => o.on && state.requiresBio(s.mac, o.n)).toList();
   bool bioOk = true;
   if (bioOutlets.isNotEmpty) {
     final reason = Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off';
     bioOk = await authenticateBio(reason);
   }
-  final targets = s.outlets.where((o) => o.on && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
+  final targets = s.outlets.where((o) => o.on && !o.keepOn && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
   if (targets.isEmpty) return;
 
   final protectedOn = targets.where((o) => o.protected).toList();
   if (protectedOn.isEmpty) {
-    if (bioOk && targets.length == s.onCount) {
+    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       return state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
@@ -107,7 +130,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
       if (!o.protected) await state.setOutlet(s.mac, o.n, false);
     }
   } else if (choice == 2) {
-    if (bioOk && targets.length == s.onCount) {
+    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       await state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
@@ -117,14 +140,6 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
   }
 }
 
-/// Wi-Fi bars for rssi ≥ -55 / ≥ -67 / ≥ -75 / < -75 / null
-(IconData, Color) wifiBars(int? rssi) {
-  if (rssi == null) return (Icons.signal_wifi_off, C.faint);
-  if (rssi >= -55) return (Icons.signal_wifi_4_bar, levelColor(0));
-  if (rssi >= -67) return (Icons.network_wifi_3_bar, levelColor(1));
-  if (rssi >= -75) return (Icons.network_wifi_2_bar, levelColor(2));
-  return (Icons.network_wifi_1_bar, levelColor(3));
-}
 
 /// Rated load: the MTTL-W01 is a 16 A strip (about 3500 W in total, and any single outlet may take the full load).
 const double kStripMaxW = 3500;
@@ -185,6 +200,7 @@ List<Widget> badgesFor(AppState state, Strip s, Outlet? o, {double size = 13}) {
     for (final x in timers) (timerIcon(x), C.accent, timerText(x)),
     if (o != null && o.autoOffMin > 0) (Icons.timer_outlined, C.accent, t('auto_off')),
     if (o != null && o.protected) (Icons.shield, C.accent, t('protect')),
+    if (o != null && o.keepOn) (Icons.push_pin_outlined, C.accent, Tr.isAr ? 'إبقاء دائمًا شغال' : 'Keep always on'),
     if (o != null && state.requiresBio(s.mac, o.n)) (Icons.fingerprint, C.accent, Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected'),
     if (o != null && o.locked) (Icons.lock, C.muted, t('child_lock')),
   ];
@@ -206,6 +222,7 @@ class StripCard extends StatelessWidget {
     final s = strip;
     final online = s.online;
     final stripBadges = badgesFor(state, s, null);
+    final stripIcon = state.stripIcon(s.mac);
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 300),
       opacity: online ? 1 : 0.6,
@@ -213,17 +230,32 @@ class StripCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: C.surface,
           borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: online && s.onCount > 0 ? C.tileOnBorder.withValues(alpha: 0.6) : C.border),
+          border: Border.all(
+            color: online && s.onCount > 0 ? C.accent.withValues(alpha: C.dark ? 0.65 : 0.5) : C.border,
+            width: online && s.onCount > 0 ? 1.5 : 1.0,
+          ),
           boxShadow: online && s.onCount > 0
-              ? [BoxShadow(color: C.accent.withValues(alpha: C.dark ? 0.08 : 0.12), blurRadius: 24, offset: const Offset(0, 8))]
+              ? [
+                  BoxShadow(
+                    color: C.accent.withValues(alpha: C.dark ? 0.28 : 0.2),
+                    blurRadius: 22,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
               : null,
         ),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             if (dragHandle != null) dragHandle!,
-            PulseDot(color: online ? C.green : C.faint, active: online),
-            const SizedBox(width: 4),
+            if (stripIcon.isNotEmpty) ...[
+              Text(stripIcon, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 4),
+            ] else ...[
+              PulseDot(color: online ? C.green : C.faint, active: online),
+              const SizedBox(width: 4),
+            ],
             Expanded(
               child: InkWell(
                 onTap: () => openStripSheet(context, state, s.mac),
@@ -234,11 +266,10 @@ class StripCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Builder(builder: (_) {
-                      final (icon, color) = wifiBars(s.rssi);
                       final tip = s.rssi != null ? '${s.rssi} dBm' : (online ? '—' : t('offline'));
                       return Tooltip(
                         message: tip,
-                        child: Icon(icon, size: 16, color: color),
+                        child: WifiArcs(rssi: s.rssi),
                       );
                     }),
                   ]),
@@ -256,9 +287,9 @@ class StripCard extends StatelessWidget {
                       Text('${s.maxTemp}°C', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: tempColor(s.maxTemp), fontWeight: FontWeight.w600)),
                     if (online && s.voltage != null) ...[
                       const SizedBox(width: 8),
-                      Text('·', style: TextStyle(fontSize: 11.5, color: C.faint)),
+                      Container(width: 1, height: 10, color: C.border),
                       const SizedBox(width: 8),
-                      Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: C.muted)),
+                      Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: voltColor(s.voltage!), fontWeight: FontWeight.w600)),
                     ],
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
@@ -283,8 +314,31 @@ class StripCard extends StatelessWidget {
             ),
           ]),
           if (state.showMac)
-            Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
-          const SizedBox(height: 12),
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: s.mac));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(Tr.isAr ? 'تم نسخ الماك آدرس: ${s.mac}' : 'MAC copied: ${s.mac}'),
+                    duration: const Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(s.mac, textDirection: TextDirection.ltr, style: mono(10, color: C.faint, weight: FontWeight.w500)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.copy, size: 10, color: C.faint),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
           // the strip body
           Container(
             padding: const EdgeInsets.fromLTRB(6, 10, 6, 8),
@@ -297,37 +351,91 @@ class StripCard extends StatelessWidget {
               ),
               border: Border.all(color: C.border),
             ),
-            child: Row(children: [
-              for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
+            child: Column(children: [
+              Row(children: [
+                for (final o in s.outlets) Expanded(child: _Socket(state: state, strip: s, outlet: o)),
+              ]),
+              const SizedBox(height: 8),
+              _MasterSocket(state: state, strip: s),
             ]),
           ),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _pill(context, Icons.power_settings_new, t('all_on'), online ? () => guardedAllOn(context, state, s) : null, filled: true)),
-            const SizedBox(width: 8),
-            Expanded(child: _pill(context, Icons.power_off_outlined, t('all_off'), online ? () => guardedAllOff(context, state, s) : null)),
-          ]),
         ]),
       ),
     );
   }
+}
 
-  Widget _pill(BuildContext context, IconData icon, String label, VoidCallback? onTap, {bool filled = false}) => Material(
-        color: filled ? C.accentBg : Colors.transparent,
-        shape: StadiumBorder(side: BorderSide(color: filled ? C.tileOnBorder : C.border)),
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: SizedBox(
-            height: 40,
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(icon, size: 17, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft)),
-              const SizedBox(width: 6),
-              Text(label, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: onTap == null ? C.faint : (filled ? C.accent : C.textSoft))),
-            ]),
+class _MasterSocket extends StatelessWidget {
+  final AppState state;
+  final Strip strip;
+  const _MasterSocket({required this.state, required this.strip});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = strip;
+    final online = s.online;
+    final allOn = s.onCount == 4;
+    final allOff = s.onCount == 0;
+    final mixed = !allOn && !allOff;
+    final on = online && (allOn || mixed);
+    final pending = state.isPending(s.mac, 0);
+    
+    final load = on ? (s.livePower / kStripMaxW).clamp(0.0, 1.0) : 0.0;
+    final String lbl = allOn ? t('master_all_on') : (allOff ? t('master_all_off') : t('master_n_of_4', {'a': s.onCount}));
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: pending ? null : () {
+        if (!online) return;
+        if (allOn) {
+          guardedAllOff(context, state, s);
+        } else {
+          guardedAllOn(context, state, s);
+        }
+      },
+      onLongPress: () => openStripSheet(context, state, s.mac),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Column(children: [
+          if (state.requiresBio(s.mac, 0))
+            SizedBox(
+              height: 14,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Tooltip(
+                    message: Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                      child: Icon(Icons.fingerprint, size: 12, color: C.accent),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          const SizedBox(height: 2),
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: load),
+            duration: const Duration(milliseconds: 700),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => SizedBox(
+              width: 64,
+              height: 64,
+              child: Stack(alignment: Alignment.center, children: [
+                CustomPaint(size: const Size(64, 64), painter: _SocketPainter(
+                  on: on, load: v, level: loadLevel(s.livePower, kStripMaxW), hot: s.maxTemp >= 60, dark: C.dark,
+                  isMaster: true, mixed: mixed,
+                )),
+                if (pending) SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
+              ]),
+            ),
           ),
-        ),
-      );
+          const SizedBox(height: 4),
+          Text(lbl, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
+        ]),
+      ),
+    );
+  }
 }
 
 class _Socket extends StatelessWidget {
@@ -343,6 +451,13 @@ class _Socket extends StatelessWidget {
     final pending = state.isPending(strip.mac, o.n);
     final badges = badgesFor(state, strip, o, size: 12);
     final load = on ? (o.powerW / kOutletMaxW).clamp(0.0, 1.0) : 0.0;
+    final currentAmps = o.powerW / (strip.voltage ?? 220.0);
+    final isAmpWarn = o.ampLimit > 0 && currentAmps >= (o.ampLimit * 0.85);
+    final isTempWarn = o.tempC >= 55;
+    final baseLevel = loadLevel(o.powerW, kOutletMaxW);
+    final effLevel = (isAmpWarn || isTempWarn) ? math.max(baseLevel, 2) : baseLevel;
+    final effHot = o.tempC >= 60 || (o.ampLimit > 0 && currentAmps >= o.ampLimit);
+
     return InkWell(
       borderRadius: BorderRadius.circular(18),
       onTap: pending ? null : () => guardedSwitch(context, state, strip, o, !o.on),
@@ -360,15 +475,15 @@ class _Socket extends StatelessWidget {
             duration: const Duration(milliseconds: 700),
             curve: Curves.easeOutCubic,
             builder: (_, v, __) => SizedBox(
-              width: 62,
-              height: 62,
+              width: 64,
+              height: 64,
               child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(62, 62), painter: _SocketPainter(on: on, load: v, level: loadLevel(o.powerW, kOutletMaxW), hot: o.tempC >= 60, dark: C.dark)),
-                if (pending) SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
+                CustomPaint(size: const Size(64, 64), painter: _SocketPainter(on: on, load: v, level: effLevel, hot: effHot, dark: C.dark)),
+                if (pending) SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
               ]),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(state.outletName(strip, o.n),
               maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
           Text(
@@ -389,10 +504,10 @@ class _Socket extends StatelessWidget {
 
 /// Socket face (Schuko style) with a load ring.
 class _SocketPainter extends CustomPainter {
-  final bool on, hot, dark;
+  final bool on, hot, dark, isMaster, mixed;
   final double load;
   final int level;
-  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark});
+  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark, this.isMaster = false, this.mixed = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -430,12 +545,13 @@ class _SocketPainter extends CustomPainter {
     }
     // face
     final face = r - 9;
+    final bool innerOn = on && !mixed;
     canvas.drawCircle(
       c,
       face,
       Paint()
         ..shader = RadialGradient(
-          colors: on
+          colors: innerOn
               ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg]
               : (dark ? [C.surface2, C.tile] : [C.surface, C.miniOff]),
         ).createShader(Rect.fromCircle(center: c, radius: face)),
@@ -443,18 +559,32 @@ class _SocketPainter extends CustomPainter {
     canvas.drawCircle(c, face, Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = on ? ringColor.withValues(alpha: 0.6) : C.border);
-    // two pin holes
-    final hole = Paint()..color = on ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
-    canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
-    canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
-    // earth clips
-    final clip = Paint()
-      ..color = on ? ringColor.withValues(alpha: 0.8) : C.faint
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
-    canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+      ..color = innerOn ? ringColor.withValues(alpha: 0.6) : C.border);
+    
+    final holeColor = innerOn ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
+    
+    if (isMaster) {
+      final iconColor = mixed ? C.accent : holeColor;
+      final iconStr = String.fromCharCode(Icons.power_settings_new.codePoint);
+      final tp = TextPainter(
+        text: TextSpan(text: iconStr, style: TextStyle(fontFamily: Icons.power_settings_new.fontFamily, fontSize: face * 0.9, color: iconColor)),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
+    } else {
+      // two pin holes
+      final hole = Paint()..color = holeColor;
+      canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
+      canvas.drawCircle(c.translate(face * 0.38, 0), face * 0.13, hole);
+      // earth clips
+      final clip = Paint()
+        ..color = innerOn ? ringColor.withValues(alpha: 0.8) : C.faint
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
+      canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+    }
   }
 
   @override
