@@ -151,7 +151,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
           child: RefreshIndicator(
             color: C.accent,
             onRefresh: _load,
-            child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 115), children: [
+            child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 24), children: [
               Text(t('energy_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 16),
               if (!s.hubV2)

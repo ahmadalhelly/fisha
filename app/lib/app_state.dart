@@ -1681,6 +1681,12 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  String outletIcon(String mac, int n) => _prefs?.getString('outlet_icon_${mac.toUpperCase()}_$n') ?? '';
+  Future<void> setOutletIcon(String mac, int n, String icon) async {
+    await _prefs?.setString('outlet_icon_${mac.toUpperCase()}_$n', icon);
+    notifyListeners();
+  }
+
   String stripIcon(String mac) => _prefs?.getString('strip_icon_${mac.toUpperCase()}') ?? '';
   Future<void> setStripIcon(String mac, String icon) async {
     await _prefs?.setString('strip_icon_${mac.toUpperCase()}', icon);

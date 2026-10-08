@@ -270,14 +270,10 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Text(
-                    a.isBoth
-                        ? '${t('when_either')} ${a.watts.toStringAsFixed(0)} W ${t('or')} ${a.limit2.toStringAsFixed(0)}°C · ${fmtDuration(a.holdS)}'
-                        : (a.isCurrent
-                            ? '${Tr.isAr ? 'عندما يتجاوز التيار' : 'When current exceeds'} ${a.watts.toStringAsFixed(1)} A · ${fmtDuration(a.holdS)}'
-                            : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} ${a.watts.toStringAsFixed(0)} ${a.isTemp ? '°C' : 'W'} · ${fmtDuration(a.holdS)}'),
+                    _condText(a),
                     style: TextStyle(fontSize: 12, color: C.textSoft),
                   ),
-                  Text('${s.nameForMac(a.mac, a.outlet)} → ${_actText(a.act)}',
+                  Text('${s.nameForMac(a.mac, a.outlet)} ${Tr.isAr ? '←' : '→'} ${_actText(a.act)}',
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: C.muted)),
                 ]),
               ),
@@ -476,4 +472,41 @@ class _AutomationEditorState extends State<AutomationEditor> {
       ),
     );
   }
+}
+
+/// "لما القدرة تنزل تحت 3 وات لمدة 2 دقيقة": Arabic units and words, so the line reads in one direction
+/// (mixing "3 W · 2 د" in RTL text scrambled the order).
+String _condText(Automation a) {
+  if (!Tr.isAr) {
+    final w = a.watts.toStringAsFixed(a.isCurrent ? 1 : 0);
+    final cond = a.isBoth
+        ? '${t('when_either')} $w W ${t('or')} ${a.limit2.toStringAsFixed(0)}°C'
+        : a.isCurrent
+            ? 'When current exceeds $w A'
+            : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} $w ${a.isTemp ? '°C' : 'W'}';
+    return '$cond for ${fmtDuration(a.holdS)}';
+  }
+  final w = a.watts.toStringAsFixed(a.isCurrent ? 1 : 0);
+  final cond = a.isBoth
+      ? 'لما الاستهلاك يعدّي $w وات أو الحرارة تعدّي ${a.limit2.toStringAsFixed(0)} درجة'
+      : a.isCurrent
+          ? 'لما التيار يعدّي $w أمبير'
+          : a.isTemp
+              ? 'لما الحرارة ${a.above ? 'تطلع فوق' : 'تنزل تحت'} $w درجة'
+              : 'لما القدرة ${a.above ? 'تطلع فوق' : 'تنزل تحت'} $w وات';
+  return '$cond لمدة ${_arDuration(a.holdS)}';
+}
+
+String _arCount(int n, String one, String two, String few, String many) =>
+    n == 1 ? one : (n == 2 ? two : (n <= 10 ? '$n $few' : '$n $many'));
+
+String _arDuration(int sec) {
+  if (sec < 60) return _arCount(sec, 'ثانية', 'ثانيتين', 'ثواني', 'ثانية');
+  final h = sec ~/ 3600, m = (sec % 3600) ~/ 60, s = sec % 60;
+  final parts = <String>[
+    if (h > 0) _arCount(h, 'ساعة', 'ساعتين', 'ساعات', 'ساعة'),
+    if (m > 0) _arCount(m, 'دقيقة', 'دقيقتين', 'دقايق', 'دقيقة'),
+    if (s > 0 && h == 0) _arCount(s, 'ثانية', 'ثانيتين', 'ثواني', 'ثانية'),
+  ];
+  return parts.join(' و');
 }

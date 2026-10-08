@@ -492,7 +492,7 @@ class _Socket extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Text(state.outletName(strip, o.n),
+          Text(state.outletIcon(strip.mac, o.n).isEmpty ? state.outletName(strip, o.n) : '${state.outletIcon(strip.mac, o.n)} ${state.outletName(strip, o.n)}',
               maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
           Text(
             on ? '${o.powerW.toStringAsFixed(o.powerW < 10 ? 1 : 0)} W' : (strip.online ? t('off') : '—'),
@@ -581,6 +581,11 @@ class _SocketPainter extends CustomPainter {
       tp.layout();
       tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
     } else {
+      // pins and earth clips sit at 45°, like the sockets on the real MTTL-W01
+      canvas.save();
+      canvas.translate(c.dx, c.dy);
+      canvas.rotate(-math.pi / 4);
+      canvas.translate(-c.dx, -c.dy);
       // two pin holes
       final hole = Paint()..color = holeColor;
       canvas.drawCircle(c.translate(-face * 0.38, 0), face * 0.13, hole);
@@ -592,6 +597,7 @@ class _SocketPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(c.translate(-face * 0.12, -face * 0.82), c.translate(face * 0.12, -face * 0.82), clip);
       canvas.drawLine(c.translate(-face * 0.12, face * 0.82), c.translate(face * 0.12, face * 0.82), clip);
+      canvas.restore();
     }
   }
 

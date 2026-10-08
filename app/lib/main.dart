@@ -211,12 +211,14 @@ class _ShellState extends State<Shell> {
           EnergyScreen(state: state),
           SettingsScreen(state: state),
         ];
+        // the bar sits below the pages (not over them), so nothing scrolls under it and each page's
+        // add button stays above it
         return Scaffold(
-          extendBody: true,
+          backgroundColor: C.bg,
           body: IndexedStack(index: state.tab, children: pages),
           bottomNavigationBar: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 11),
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 11),
               child: Container(
                 decoration: BoxDecoration(
                   color: C.nav.withValues(alpha: C.dark ? 0.88 : 0.92),

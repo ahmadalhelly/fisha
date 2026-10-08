@@ -29,8 +29,16 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
               shrinkWrap: true,
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
               children: [
-                Text(state.stripName(s), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-                Text(t('strip_settings'), style: TextStyle(color: C.muted)),
+                Row(children: [
+                  _iconButton(ctx, state.stripIcon(s.mac), (ico) => state.setStripIcon(s.mac, ico)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(state.stripName(s), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                      Text(t('strip_settings'), style: TextStyle(color: C.muted)),
+                    ]),
+                  ),
+                ]),
                 const SizedBox(height: 12),
                 if (!s.online) ...[
                   emptyCard(t('offline_sheet'), icon: Icons.cloud_off),
@@ -127,6 +135,8 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
               children: [
                 Row(children: [
+                  _iconButton(ctx, state.outletIcon(s.mac, n), (ico) => state.setOutletIcon(s.mac, n, ico)),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(state.outletName(s, n), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
@@ -144,6 +154,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
                 }),
+                _tile(Icons.category_outlined, Tr.isAr ? 'أيقونة المخرج' : 'Outlet icon', state.outletIcon(s.mac, n).isEmpty ? (Tr.isAr ? 'بدون أيقونة' : 'None') : state.outletIcon(s.mac, n), () => _pickIconDialog(ctx, (ico) => state.setOutletIcon(s.mac, n, ico))),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -467,6 +478,19 @@ Future<void> _pickRoomDialog(BuildContext ctx, AppState state, String mac) async
     ),
   );
 }
+
+/// The icon next to a strip or outlet name in its sheet: tap it to pick another one.
+Widget _iconButton(BuildContext ctx, String icon, ValueChanged<String> onSelected) => InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => _pickIconDialog(ctx, onSelected),
+      child: Container(
+        width: 48,
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14), border: Border.all(color: C.border)),
+        child: icon.isEmpty ? Icon(Icons.add_reaction_outlined, color: C.muted) : Text(icon, style: const TextStyle(fontSize: 24)),
+      ),
+    );
 
 Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected) async {
   final customCtrl = TextEditingController();

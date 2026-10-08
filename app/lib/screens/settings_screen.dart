@@ -59,7 +59,7 @@ class SettingsScreen extends StatelessWidget {
             ConnMode.offline => t('mode_offline'),
           };
           return ListView(
-            padding: const EdgeInsets.fromLTRB(18, 20, 18, 115),
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
             children: [
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 18),
