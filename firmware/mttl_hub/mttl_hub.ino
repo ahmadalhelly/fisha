@@ -76,7 +76,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.5";
+const char* FW_VERSION = "2.14.6";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2672,12 +2672,23 @@ bool setupSession(const String& hubIp, String& r) {
   WiFiClient c;
   IPAddress gw = WiFi.gatewayIP();
   IPAddress cands[3] = {gw, IPAddress(192, 168, 1, 1), IPAddress(192, 168, 4, 1)};
-  // wait for a DHCP lease from the strip (anything but our home static address)
-  for (int i = 0; i < 20 && WiFi.localIP() == LOCAL_IP; i++) { delay(250); esp_task_wdt_reset(); }
+  // wait for a DHCP lease from the strip (anything but our home static address). v2.14.6: the static config
+  // survives WiFi.config(0,…) on this core, so restart the DHCP client on the live link and wait for its lease
+  if (WiFi.localIP() == LOCAL_IP) {
+    if (esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+      esp_netif_dhcpc_stop(nif);
+      esp_netif_ip_info_t zero = {};
+      esp_netif_set_ip_info(nif, &zero);
+      esp_err_t e = esp_netif_dhcpc_start(nif);
+      Serial.printf("[prov] dhcp client restart: %s\n", esp_err_to_name(e));
+    }
+  }
+  for (int i = 0; i < 40 && (WiFi.localIP() == LOCAL_IP || (uint32_t)WiFi.localIP() == 0); i++) { delay(250); esp_task_wdt_reset(); }
   gw = WiFi.gatewayIP();
   cands[0] = gw;
   Serial.printf("[prov] joined, my ip %s gw %s%s\n", WiFi.localIP().toString().c_str(), gw.toString().c_str(),
-                WiFi.localIP() == LOCAL_IP ? " (still the home static IP: no DHCP lease)" : "");
+                WiFi.localIP() == LOCAL_IP ? " (still the home static IP: no DHCP lease)"
+                : (uint32_t)WiFi.localIP() == 0 ? " (no DHCP lease)" : "");
   bool up = false;
   for (int round = 0; round < 3 && !up; round++) {
     for (int k = 0; k < 3 && !up; k++) {
