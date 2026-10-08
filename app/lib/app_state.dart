@@ -937,7 +937,9 @@ class AppState extends ChangeNotifier {
       }
       final hid = (j['hub'] ?? '').toString().toUpperCase();
       final lip = (j['lip'] ?? '').toString();
-      if (lip.isNotEmpty && settings.isShared && settings.localHost.isEmpty) {
+      // a family member follows the hub's current home address (the one in an old invite may be stale,
+      // e.g. after the hub moved from .110 to .100), so they get local control too, not only remote
+      if (lip.isNotEmpty && lip != '0.0.0.0' && settings.isShared && lip != settings.localHost && !_localFresh) {
         settings.localHost = lip;
         _prefs?.setString('settings', jsonEncode(settings.toJson()));
       }

@@ -418,7 +418,7 @@ const Map<String, List<String>> _s = {
   'g_note': ['المزامنة بتحصل لوحدها كل شوية لما حاجة تتغير. الملف في فولدر مخفي في درايف بتاعك، ومحدش يقدر يقراه غير التطبيق ده.', 'Sync runs by itself when something changes. The file sits in a hidden folder of your Drive that only this app can read.'],
   // sharing
   'share_title': ['المشاركة', 'Sharing'],
-  'users_title': ['المستخدمين والمشاركة', 'People & sharing'],
+  'users_title': ['مشاركة العائلة', 'Family sharing'],
   'users_empty': ['مفيش حد متشارك معاه لسه. دوس "شخص جديد" عشان تعمل كود دعوة.', 'Nobody yet. Tap "New person" to make an invite code.'],
   'users_local_note': ['إضافة وحذف الأشخاص بيشتغل بس وإنت على واي فاي البيت.', 'Adding and removing people works only on the home Wi-Fi.'],
   'users_need_emqx': ['عشان تشارك الـ Hub، دخّل بيانات EMQX API مرة واحدة.', 'To share the hub, enter the EMQX API details once.'],
