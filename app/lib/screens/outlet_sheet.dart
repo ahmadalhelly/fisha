@@ -198,7 +198,46 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
                 }),
-
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: cardBox(radius: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.electric_meter_outlined, color: o.ampLimit > 0 ? C.warn : C.muted, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              Tr.isAr ? 'حد التيار (أمبير)' : 'Current limit (A)',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                            ),
+                          ),
+                          Text(
+                            o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
+                            style: mono(14, color: o.ampLimit > 0 ? C.accent : C.muted),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: o.ampLimit.clamp(0.0, 16.0),
+                        min: 0.0,
+                        max: 16.0,
+                        activeColor: C.accent,
+                        label: o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
+                        onChanged: v2 ? (v) => state.setOutletAmpLimit(s.mac, n, (v * 2).round() / 2) : null,
+                      ),
+                      Text(
+                        Tr.isAr
+                            ? (o.ampLimit <= 0 ? 'لا يوجد حد أقصى للتيار لهذا المخرج' : 'يفصل المخرج فور تجاوز ${o.ampLimit.toStringAsFixed(1)} أمبير لحماية الأجهزة')
+                            : (o.ampLimit <= 0 ? 'No current limit set' : 'Trips outlet if current exceeds ${o.ampLimit.toStringAsFixed(1)} A'),
+                        style: TextStyle(color: C.muted, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _switchTile(Icons.shield_outlined, t('protect'), t('protect_sub'), o.protected, v2,
                     (v) => state.setProtected(s, n, v)),
