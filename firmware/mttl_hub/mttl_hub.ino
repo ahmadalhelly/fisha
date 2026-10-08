@@ -49,6 +49,7 @@ struct ApiRes;
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
 #include "esp_task_wdt.h"
+#include "esp_netif.h"
 #include "lwip/sockets.h"
 #include <errno.h>
 #include <vector>
@@ -75,7 +76,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.4";
+const char* FW_VERSION = "2.14.5";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2671,7 +2672,12 @@ bool setupSession(const String& hubIp, String& r) {
   WiFiClient c;
   IPAddress gw = WiFi.gatewayIP();
   IPAddress cands[3] = {gw, IPAddress(192, 168, 1, 1), IPAddress(192, 168, 4, 1)};
-  Serial.printf("[prov] joined, my ip %s gw %s\n", WiFi.localIP().toString().c_str(), gw.toString().c_str());
+  // wait for a DHCP lease from the strip (anything but our home static address)
+  for (int i = 0; i < 20 && WiFi.localIP() == LOCAL_IP; i++) { delay(250); esp_task_wdt_reset(); }
+  gw = WiFi.gatewayIP();
+  cands[0] = gw;
+  Serial.printf("[prov] joined, my ip %s gw %s%s\n", WiFi.localIP().toString().c_str(), gw.toString().c_str(),
+                WiFi.localIP() == LOCAL_IP ? " (still the home static IP: no DHCP lease)" : "");
   bool up = false;
   for (int round = 0; round < 3 && !up; round++) {
     for (int k = 0; k < 3 && !up; k++) {
@@ -2754,6 +2760,8 @@ void runProvision() {
     delay(400);
     WiFi.mode(WIFI_STA);
     WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP on the strip's AP
+    // v2.14.5: the line above left the home static 192.168.1.100 in place on some cores; force the DHCP client on
+    if (esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) esp_netif_dhcpc_start(nif);
     provDiscReason = 0;
     if (apCh > 0) WiFi.begin(ap.c_str(), pass.c_str(), apCh, apBssid);
     else WiFi.begin(ap.c_str(), pass.c_str());
