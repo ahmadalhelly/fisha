@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: build-web-${{ github.ref }}
@@ -32,6 +30,7 @@ jobs:
           channel: stable
           cache: true
 
+      # served from the public repo ahmadalhelly/fisha-web (GitHub Pages); this repo stays private
       - name: Build for the web
         run: |
           flutter create --platforms=web --org com.mttlhub --project-name mttl_hub .
@@ -40,21 +39,24 @@ jobs:
           pip install --quiet --break-system-packages pillow || pip install --quiet pillow
           python3 tool/configure_web.py
           flutter pub get
-          flutter build web --release --base-href /${{ github.event.repository.name }}/ \
+          flutter build web --release --base-href /fisha-web/ \
             --dart-define=APP_VERSION=web-${{ github.run_number }}
+          touch build/web/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: fisha-web
           path: app/build/web
+          include-hidden-files: true
+          if-no-files-found: error
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-24.04
-    # needs GitHub Pages switched on (Settings → Pages → Source: GitHub Actions); stays green until then
-    continue-on-error: true
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      # optional: a token with write access to fisha-web (secret FISHA_WEB_TOKEN) publishes it automatically
+      - name: Publish to fisha-web
+        env:
+          TOKEN: ${{ secrets.FISHA_WEB_TOKEN }}
+        if: env.TOKEN != ''
+        run: |
+          cd build/web
+          git init -q -b main && git add -A
+          git -c user.name=fisha-ci -c user.email=ci@fisha.invalid commit -qm "web ${{ github.run_number }} (${{ github.sha }})"
+          git push -qf "https://x-access-token:${TOKEN}@github.com/ahmadalhelly/fisha-web.git" main

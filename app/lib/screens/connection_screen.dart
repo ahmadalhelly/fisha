@@ -83,7 +83,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           builder: (context, _) => ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
             section(t('conn_status'), [
               // the web build is cloud-only: the hub's http LAN API is blocked on an https page (WEB.md)
-              if (!kIsWeb) _status(t('st_local'), st.mode == ConnMode.local),
+              if (kLocalCapable) _status(t('st_local'), st.mode == ConnMode.local),
               if (!kIsWeb) _status(t('st_live'), st.sseLive),
               _status(t('st_cloud'), st.mqttConnected),
               _status(t('st_hub'), st.hubOnline),
@@ -102,7 +102,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               emptyCard(t('shared_banner', {'x': st.settings.sharedName.isEmpty ? st.settings.sharedUser : st.settings.sharedName}), icon: Icons.group_outlined),
               const SizedBox(height: 14),
             ],
-            if (!kIsWeb) ...[
+            if (kLocalCapable) ...[
               section(t('sec_local'), [
                 _field(_local, t('f_local'), hint: '192.168.1.100'),
               ]),

@@ -48,3 +48,12 @@ libraries out of the other build:
 CI (`.github/workflows/build-web.yml`) runs `flutter create --platforms=web`, copies `web_overrides/` over
 `web/` (PWA manifest and an `index.html` with the iPhone home-screen meta tags), runs `tool/configure_web.py`
 (brand assets and the PWA icons), then `flutter build web --base-href /<repo>/`.
+
+## Two ways to open it (hub fw 2.14.2+)
+
+- `https://ahmadalhelly.github.io/fisha-web/`: anywhere, cloud only (an https page can't call the hub's plain-http API).
+- `http://<hub ip>:8080/app`: on the home Wi-Fi. The hub serves a tiny launcher that loads the app from the site above
+  (`window.FISHA_BASE` in `web_overrides/flutter_bootstrap.js`), so the page's origin is the hub: local REST polling
+  works (`kLocalCapable` in app_state.dart) and the cloud too. SSE stays off on the web; the 2 s poll covers it.
+- Built by `.github/workflows/build-web.yml` into the `fisha-web` artifact; with the `FISHA_WEB_TOKEN` secret it is
+  pushed to the public `fisha-web` repo (Pages from `main`).

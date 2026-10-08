@@ -75,7 +75,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.1";
+const char* FW_VERSION = "2.14.2";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2298,6 +2298,23 @@ load();setInterval(load,3000);
 
 void handleRoot() { if (guard()) web.send_P(200, "text/html; charset=utf-8", PAGE); }
 
+// v2.14.2: launcher for the web app (iPhone). The app's code comes from the public site, but the page runs on the
+// hub's http origin, so the app can reach /api/* here on the LAN (an https page could not) and the cloud as well.
+// Static and secret-free: the app itself asks for the invite code. Needs internet to load the app the first time.
+const char APP_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name=apple-mobile-web-app-capable content=yes><meta name=mobile-web-app-capable content=yes>
+<meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
+<meta name=apple-mobile-web-app-title content=Fisha><meta name=theme-color content="#060B18">
+<title>Fisha</title><style>html,body{margin:0;height:100%;background:#060B18}</style>
+<script>window.FISHA_BASE='https://ahmadalhelly.github.io/fisha-web/';
+document.write('<link rel=apple-touch-icon href="'+FISHA_BASE+'icons/Icon-192.png"><link rel=icon href="'+FISHA_BASE+'favicon.png">');</script>
+</head><body><script>var s=document.createElement('script');s.src=FISHA_BASE+'flutter_bootstrap.js';s.async=true;
+s.onerror=function(){document.body.innerHTML='<p dir=rtl style="color:#e8edf3;font-family:sans-serif;padding:24px">Fisha: محتاج إنترنت عشان يحمّل التطبيق أول مرة.</p>'};
+document.body.appendChild(s);</script></body></html>)HTML";
+
+void handleApp() { web.send_P(200, "text/html; charset=utf-8", APP_PAGE); }
+
 // ---------- firmware update from the browser / curl (no inbound port needed on the PC) ----------
 bool otaAuth() { return web.authenticate("admin", secOta.c_str()); }
 void handleUpdatePage() {
@@ -2928,6 +2945,7 @@ void setup() {
   const char* hk[] = {"X-Token", "X-User"};
   web.collectHeaders(hk, 2);
   web.on("/", HTTP_GET, handleRoot);
+  web.on("/app", HTTP_GET, handleApp);
   web.on("/api/state", HTTP_GET, handleState);
   web.on("/api/health", HTTP_GET, handleHealth);
   web.on("/api/raw", HTTP_GET, handleRaw);

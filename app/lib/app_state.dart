@@ -16,6 +16,10 @@ import 'services/outlet_history.dart';
 
 enum ConnMode { offline, local, cloud }
 
+/// The hub's plain-http LAN API is reachable: always on the phone; on the web only when the page itself is
+/// served over http (the launcher page on the hub, http://<hub>:8080/app), since an https page blocks it.
+final bool kLocalCapable = !kIsWeb || Uri.base.scheme == 'http';
+
 enum ViewMode { list, grid }
 
 enum SortMode { manual, power, name, status }
@@ -671,8 +675,8 @@ class AppState extends ChangeNotifier {
     hubCloudErr = '';
     notifyListeners();
     final gen = _gen;
-    // web (https page): the hub's plain-http LAN API and SSE are blocked as mixed content, so cloud only
-    if (!kIsWeb && settings.hasLocal) {
+    // https web page: the hub's plain-http LAN API is blocked as mixed content, so cloud only
+    if (kLocalCapable && settings.hasLocal) {
       _pollLocal();
       _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         if (!sseLive) _pollLocal();
@@ -707,7 +711,7 @@ class AppState extends ChangeNotifier {
       _lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7);
 
   Future<void> _pollLocal() async {
-    if (kIsWeb || _polling || settings.localHost.isEmpty) return;
+    if (!kLocalCapable || _polling || settings.localHost.isEmpty) return;
     _polling = true;
     try {
       final r = await http.get(_localUri('/api/state'), headers: _localHeaders).timeout(const Duration(milliseconds: 1800));
@@ -724,6 +728,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _runSse(int gen) async {
+    // web: a browser http.Client buffers the whole response, so SSE never delivers; the 2 s poll covers it
     if (kIsWeb || _sseRunning) return;
     _sseRunning = true;
     var backoff = 2;
@@ -1248,7 +1253,7 @@ class AppState extends ChangeNotifier {
       if (!sseLive) await _pollLocal();
       return;
     }
-    if (!kIsWeb && settings.hasLocal) {
+    if (kLocalCapable && settings.hasLocal) {
       await _pollLocal();
       if (_localFresh) return;
     }
