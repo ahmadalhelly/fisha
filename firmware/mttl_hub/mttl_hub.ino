@@ -75,7 +75,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.3";
+const char* FW_VERSION = "2.14.4";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2666,8 +2666,24 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
 // Same as FG Link / mttl_local.py and hub 2.10.1, which provisioned strips successfully:
 // ONE TCP session -> up:ip, up:connect, up:reboot:0
 bool setupSession(const String& hubIp, String& r) {
+  // v2.14.4: the setup service is on the strip AP's gateway (192.168.1.1 on older firmware); try the gateway
+  // DHCP gave us first, then the usual addresses, a few rounds while the strip's service comes up
   WiFiClient c;
-  if (!c.connect(IPAddress(192, 168, 1, 1), 30300, 5000)) { r = "no answer on 30300"; return false; }
+  IPAddress gw = WiFi.gatewayIP();
+  IPAddress cands[3] = {gw, IPAddress(192, 168, 1, 1), IPAddress(192, 168, 4, 1)};
+  Serial.printf("[prov] joined, my ip %s gw %s\n", WiFi.localIP().toString().c_str(), gw.toString().c_str());
+  bool up = false;
+  for (int round = 0; round < 3 && !up; round++) {
+    for (int k = 0; k < 3 && !up; k++) {
+      if (k > 0 && cands[k] == gw) continue;
+      if ((uint32_t)cands[k] == 0) continue;
+      up = c.connect(cands[k], 30300, 3000);
+      if (up) Serial.printf("[prov] setup service at %s:30300\n", cands[k].toString().c_str());
+      esp_task_wdt_reset();
+    }
+    if (!up) delay(1500);
+  }
+  if (!up) { r = "no answer on 30300"; return false; }
   String reply;
   String cmd = "up:ip:" + hubIp;
   c.print(cmd + "\r\n");
