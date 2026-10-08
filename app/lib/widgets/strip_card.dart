@@ -409,13 +409,6 @@ class _MasterSocket extends StatelessWidget {
     final pending = state.isPending(s.mac, 0);
     
     final load = on ? (s.livePower / kStripMaxW).clamp(0.0, 1.0) : 0.0;
-    // one quarter of the ring per outlet, on the same side as that outlet in the row
-    // (left to right on screen: outer-left, inner-left, inner-right, outer-right)
-    final ons = [for (final o in s.outlets) online && o.on];
-    while (ons.length < 4) {
-      ons.add(false);
-    }
-    final quarters = Directionality.of(context) == TextDirection.rtl ? ons.take(4).toList().reversed.toList() : ons.take(4).toList();
     final String lbl = allOn ? t('master_all_on') : (allOff ? t('master_all_off') : t('master_n_of_4', {'a': s.onCount}));
 
     return InkWell(
@@ -457,10 +450,13 @@ class _MasterSocket extends StatelessWidget {
               width: 64,
               height: 64,
               child: Stack(alignment: Alignment.center, children: [
-                CustomPaint(size: const Size(64, 64), painter: _SocketPainter(
-                  on: on, load: v, level: loadLevel(s.livePower, kStripMaxW), hot: s.maxTemp >= 60, dark: C.dark,
-                  isMaster: true, mixed: mixed, quarters: quarters,
-                )),
+                _HaloSpin(
+                  running: on,
+                  builder: (spin) => CustomPaint(size: const Size(64, 64), painter: _SocketPainter(
+                    on: on, load: v, level: loadLevel(s.livePower, kStripMaxW), hot: s.maxTemp >= 60, dark: C.dark,
+                    isMaster: true, mixed: mixed, spin: spin,
+                  )),
+                ),
                 if (pending) SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2, color: C.accent)),
               ]),
             ),
@@ -550,41 +546,36 @@ class _SocketPainter extends CustomPainter {
   final bool on, hot, dark, isMaster, mixed;
   final double load;
   final int level;
-  final List<bool> quarters;
-  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark, this.isMaster = false, this.mixed = false, this.quarters = const []});
-
-  // start angle of each quarter, in screen order outer-left, inner-left, inner-right, outer-right
-  static const _quarterStart = [math.pi, math.pi / 2, 0.0, -math.pi / 2];
+  final double spin; // 0..1, the travelling highlight on the master's load halo
+  _SocketPainter({required this.on, required this.load, required this.level, required this.hot, required this.dark, this.isMaster = false, this.mixed = false, this.spin = 0});
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final r = size.width / 2;
     final ringColor = hot ? C.danger : levelColor(level);
-    if (isMaster && quarters.length == 4) {
-      // four quarters, each lit while its outlet is on
-      const gap = 0.16;
-      final rect = Rect.fromCircle(center: c, radius: r - 3);
-      if (quarters.contains(true)) {
-        canvas.drawCircle(c, r - 6, Paint()
-          ..color = ringColor.withValues(alpha: 0.18)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-      }
-      for (var i = 0; i < 4; i++) {
-        canvas.drawArc(rect, _quarterStart[i] + gap / 2, math.pi / 2 - gap, false, Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 4
-          ..strokeCap = StrokeCap.round
-          ..color = quarters[i] ? ringColor : C.border);
-      }
-    } else {
     // track
     canvas.drawCircle(c, r - 3, Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4
       ..color = C.border);
+    if (isMaster && on) {
+      // load halo: the ring measures the strip's real draw against its 3500 W limit,
+      // orange from 70 %, red from 90 % (or when it runs hot)
+      final haloColor = hot || load >= 0.9 ? C.danger : (load >= 0.7 ? const Color(0xFFFF9F43) : C.accent);
+      canvas.drawCircle(c, r - 6, Paint()
+        ..color = haloColor.withValues(alpha: 0.08 + 0.22 * load)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+      final sweep = 2 * math.pi * math.max(0.04, load);
+      canvas.drawArc(Rect.fromCircle(center: c, radius: r - 3), -math.pi / 2, sweep, false, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..color = haloColor);
+      final a = -math.pi / 2 + 2 * math.pi * spin;
+      canvas.drawCircle(c + Offset(math.cos(a), math.sin(a)) * (r - 3), 1.6, Paint()..color = Colors.white.withValues(alpha: 0.75));
     }
-    if (on && !(isMaster && quarters.length == 4)) {
+    if (on && !isMaster) {
       // glow
       canvas.drawCircle(c, r - 6, Paint()
         ..color = ringColor.withValues(alpha: 0.22)
@@ -670,4 +661,43 @@ class _SocketPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SocketPainter old) => true; // cheap, and picks up theme changes
+}
+
+/// Drives the slow travelling highlight on the master's load halo while anything is on.
+class _HaloSpin extends StatefulWidget {
+  final bool running;
+  final Widget Function(double spin) builder;
+  const _HaloSpin({required this.running, required this.builder});
+
+  @override
+  State<_HaloSpin> createState() => _HaloSpinState();
+}
+
+class _HaloSpinState extends State<_HaloSpin> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 6));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.running) _c.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HaloSpin old) {
+    super.didUpdateWidget(old);
+    if (widget.running && !_c.isAnimating) {
+      _c.repeat();
+    } else if (!widget.running && _c.isAnimating) {
+      _c.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(animation: _c, builder: (_, __) => widget.builder(_c.value));
 }
