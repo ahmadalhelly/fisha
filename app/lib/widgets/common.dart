@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:local_auth/local_auth.dart';
 
 import '../i18n.dart';
 import '../theme.dart';
+
+// authenticateBio(reason): local_auth on the phone, skipped on the web build (services/bio_auth*.dart)
+export '../services/bio_auth.dart';
 
 /// Space the floating bottom bar takes over a tab page (0 on pages pushed above it).
 double navInset(BuildContext c) => MediaQuery.paddingOf(c).bottom;
@@ -41,18 +43,6 @@ String formatHumanDuration(int s) {
     if (h > 0) return '${h}:${two(m)}h';
     if (m > 0) return '${m}m';
     return '${sec}s';
-  }
-}
-
-Future<bool> authenticateBio(String reason) async {
-  try {
-    final auth = LocalAuthentication();
-    return await auth.authenticate(
-      localizedReason: reason,
-      options: const AuthenticationOptions(stickyAuth: true, biometricOnly: false),
-    );
-  } catch (_) {
-    return false;
   }
 }
 

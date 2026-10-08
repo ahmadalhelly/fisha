@@ -1,12 +1,13 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
+import '../services/file_io.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -55,13 +56,13 @@ class _BackupScreenState extends State<BackupScreen> {
         fileName: _backupFileName(),
         bytes: bytes,
       );
-      if (res != null) {
-        try {
-          final file = File(res);
-          if (!file.existsSync() || file.lengthSync() == 0) {
-            await file.writeAsBytes(bytes);
-          }
-        } catch (_) {}
+      // on the web the browser downloads the file itself and saveFile returns null
+      if (res != null || kIsWeb) {
+        if (res != null && !kIsWeb) {
+          try {
+            await writeFileIfEmpty(res, bytes);
+          } catch (_) {}
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('backup_saved'))));
         }
@@ -86,9 +87,9 @@ class _BackupScreenState extends State<BackupScreen> {
     if (f == null) return;
 
     Uint8List? bytes = f.bytes;
-    if (bytes == null && f.path != null) {
+    if (bytes == null && !kIsWeb && f.path != null) {
       try {
-        bytes = await File(f.path!).readAsBytes();
+        bytes = await readFileBytes(f.path!);
       } catch (_) {}
     }
     if (bytes == null || bytes.isEmpty) {

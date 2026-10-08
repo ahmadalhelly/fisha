@@ -1,0 +1,2 @@
+/// Web build: an https page cannot reach the hub's plain-http /update page (mixed content), so there is no upload.
+Future<String?> uploadFirmwareBytes(Uri uri, List<int> bytes, String password, void Function(double) progress) async => 'net';

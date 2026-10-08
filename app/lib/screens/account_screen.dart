@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -144,12 +145,15 @@ class _AccountScreenState extends State<AccountScreen> {
               const SizedBox(height: 24),
             ],
             _choice(Icons.phone_android, t('acc_local'), t('acc_local_sub'), _busy ? null : _local, selected: s.accountType == 'local'),
-            const SizedBox(height: 12),
-            _choice(Icons.account_circle_outlined, t('acc_google'),
-                s.accountType == 'google' && s.googleEmail.isNotEmpty ? s.googleEmail : t('acc_google_sub'), _busy ? null : _google,
-                selected: s.accountType == 'google'),
+            // no Google sign-in on the web build (it needs a web OAuth client id; see WEB.md)
+            if (!kIsWeb) ...[
+              const SizedBox(height: 12),
+              _choice(Icons.account_circle_outlined, t('acc_google'),
+                  s.accountType == 'google' && s.googleEmail.isNotEmpty ? s.googleEmail : t('acc_google_sub'), _busy ? null : _google,
+                  selected: s.accountType == 'google'),
+            ],
             if (_busy) ...[const SizedBox(height: 16), const Center(child: CircularProgressIndicator())],
-            if (s.accountType == 'google' && !widget.firstRun) ...[
+            if (!kIsWeb && s.accountType == 'google' && !widget.firstRun) ...[
               const SizedBox(height: 14),
               section(t('g_sync'), [
                 Text(s.lastSync == null ? t('g_never') : t('g_last', {'x': _fmt(s.lastSync!)}), style: TextStyle(color: C.textSoft, fontSize: 13)),

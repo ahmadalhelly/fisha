@@ -1,7 +1,12 @@
 name: Build web app (iPhone)
 
 on:
-  # push trigger is switched on once the app compiles for the web
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-web.yml'
   workflow_dispatch:
 
 permissions:
@@ -31,6 +36,9 @@ jobs:
         run: |
           flutter create --platforms=web --org com.mttlhub --project-name mttl_hub .
           [ -d web_overrides ] && cp -r web_overrides/. web/
+          # brand assets (pubspec bundles assets/brand/icon_fg.png) + PWA icons in web/icons
+          pip install --quiet --break-system-packages pillow || pip install --quiet pillow
+          python3 tool/configure_web.py
           flutter pub get
           flutter build web --release --base-href /${{ github.event.repository.name }}/ \
             --dart-define=APP_VERSION=web-${{ github.run_number }}

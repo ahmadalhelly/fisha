@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -83,7 +84,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           body: SafeArea(
             child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
               if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
-                section(_tr('إشعارات Fisha', 'Fisha notifications'), [
+                // the web build has no background service, so only the ntfy route is offered there
+                if (!kIsWeb) section(_tr('إشعارات Fisha', 'Fisha notifications'), [
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     activeTrackColor: C.accent,
@@ -109,7 +111,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     Text(_tr('محتاج بيانات السيرفر في الإعدادات ← الاتصال عشان التنبيهات توصل.', 'Server details are needed in Settings → Connection.'),
                         style: TextStyle(color: C.danger, fontSize: 12)),
                 ]),
-                const SizedBox(height: 14),
+                if (!kIsWeb) const SizedBox(height: 14),
                 section(_tr('بديل: تطبيق ntfy', 'Alternative: the ntfy app'), [
                   Text(t('notif_how'), style: TextStyle(color: C.textSoft, height: 1.6)),
                   if (!on) primaryButton(t('notif_enable'), _busy ? null : _enable, icon: Icons.notifications_active_outlined),

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -158,14 +159,17 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
               const SizedBox(height: 6),
               Text(t('wel_sub'), style: TextStyle(color: C.textSoft, fontSize: 14, height: 1.55)),
               const SizedBox(height: 20),
-              _googleButton(),
-              const SizedBox(height: 14),
-              Row(children: [
-                Expanded(child: Divider(color: C.border)),
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text(t('wel_or'), style: TextStyle(color: C.faint, fontSize: 12))),
-                Expanded(child: Divider(color: C.border)),
-              ]),
-              const SizedBox(height: 14),
+              // no Google sign-in on the web build (it needs a web OAuth client id; see WEB.md)
+              if (!kIsWeb) ...[
+                _googleButton(),
+                const SizedBox(height: 14),
+                Row(children: [
+                  Expanded(child: Divider(color: C.border)),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text(t('wel_or'), style: TextStyle(color: C.faint, fontSize: 12))),
+                  Expanded(child: Divider(color: C.border)),
+                ]),
+                const SizedBox(height: 14),
+              ],
               OutlinedButton.icon(
                 onPressed: _busy ? null : _local,
                 icon: const Icon(Icons.phone_android, size: 20),

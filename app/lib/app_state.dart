@@ -1,17 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:home_widget/home_widget.dart';
 import 'package:http/http.dart' as http;
 import 'package:mqtt_client/mqtt_client.dart';
-import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'i18n.dart';
 import 'models.dart';
+import 'services/firmware_upload.dart';
 import 'services/google_sync.dart';
+import 'services/mqtt_factory.dart';
 import 'services/outlet_history.dart';
 
 enum ConnMode { offline, local, cloud }
@@ -180,7 +180,7 @@ class AppState extends ChangeNotifier {
   final Map<String, Completer<Map<String, dynamic>>> _acks = {};
   Timer? _pollTimer;
   Timer? _mqttRetry;
-  MqttServerClient? _mqtt;
+  MqttClient? _mqtt;
   StreamSubscription? _mqttSub;
   http.Client? _sseClient;
   bool _sseRunning = false;
@@ -198,7 +198,8 @@ class AppState extends ChangeNotifier {
     _loadPrefs();
     ready = true;
     await restart();
-    if (accountType == 'google') {
+    // the web build has no Google sign-in (see WEB.md)
+    if (!kIsWeb && accountType == 'google') {
       GoogleSync.I.restore().then((ok) {
         if (ok && lastSync != null) {
           _startAutoSync();
@@ -670,7 +671,8 @@ class AppState extends ChangeNotifier {
     hubCloudErr = '';
     notifyListeners();
     final gen = _gen;
-    if (settings.hasLocal) {
+    // web (https page): the hub's plain-http LAN API and SSE are blocked as mixed content, so cloud only
+    if (!kIsWeb && settings.hasLocal) {
       _pollLocal();
       _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         if (!sseLive) _pollLocal();
@@ -705,7 +707,7 @@ class AppState extends ChangeNotifier {
       _lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7);
 
   Future<void> _pollLocal() async {
-    if (_polling || settings.localHost.isEmpty) return;
+    if (kIsWeb || _polling || settings.localHost.isEmpty) return;
     _polling = true;
     try {
       final r = await http.get(_localUri('/api/state'), headers: _localHeaders).timeout(const Duration(milliseconds: 1800));
@@ -722,7 +724,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _runSse(int gen) async {
-    if (_sseRunning) return;
+    if (kIsWeb || _sseRunning) return;
     _sseRunning = true;
     var backoff = 2;
     while (_sseRunning && gen == _gen && settings.hasLocal) {
@@ -736,7 +738,7 @@ class AppState extends ChangeNotifier {
         req.headers['Accept'] = 'text/event-stream';
         if (settings.isShared) req.headers.addAll(_localHeaders);
         final resp = await client.send(req).timeout(const Duration(seconds: 4));
-        if (resp.statusCode != 200) throw const HttpException('sse');
+        if (resp.statusCode != 200) throw http.ClientException('sse');
         sseLive = true;
         backoff = 2;
         _lastLocalOk = DateTime.now();
@@ -801,9 +803,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> _startMqtt() async {
     final clientId = 'app-${DateTime.now().millisecondsSinceEpoch % 1000000000}';
-    final c = MqttServerClient.withPort(settings.brokerHost, clientId, settings.brokerPort);
-    c.secure = true;
-    c.securityContext = SecurityContext.defaultContext;
+    // phone: TLS to brokerHost:brokerPort; web: wss://brokerHost:8084/mqtt (services/mqtt_factory_*.dart)
+    final c = createMqttClient(settings.brokerHost, clientId, settings.brokerPort);
     c.keepAlivePeriod = 30;
     c.autoReconnect = true;
     c.logging(on: false);
@@ -1247,7 +1248,7 @@ class AppState extends ChangeNotifier {
       if (!sseLive) await _pollLocal();
       return;
     }
-    if (settings.hasLocal) {
+    if (!kIsWeb && settings.hasLocal) {
       await _pollLocal();
       if (_localFresh) return;
     }
@@ -1412,39 +1413,12 @@ class AppState extends ChangeNotifier {
     await _prefs?.setString('otaPass', v);
   }
 
-  bool get canUpdateFirmware => _localFresh || settings.hasLocal;
+  bool get canUpdateFirmware => !kIsWeb && (_localFresh || settings.hasLocal);
 
   /// Uploads a firmware .bin to the hub's /update page; [progress] gets 0..1. Returns null on success or an error text.
   Future<String?> uploadFirmware(List<int> bytes, String password, void Function(double) progress) async {
     if (bytes.length < 100000 || bytes.first != 0xE9) return 'bad_file';
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-    try {
-      final req = await client.postUrl(_localUri('/update'));
-      req.headers.set(HttpHeaders.authorizationHeader, 'Basic ${base64Encode(utf8.encode('admin:$password'))}');
-      final boundary = '----fisha${DateTime.now().millisecondsSinceEpoch}';
-      req.headers.contentType = ContentType('multipart', 'form-data', parameters: {'boundary': boundary});
-      final head = utf8.encode('--$boundary\r\nContent-Disposition: form-data; name="f"; filename="firmware.bin"\r\n'
-          'Content-Type: application/octet-stream\r\n\r\n');
-      final tail = utf8.encode('\r\n--$boundary--\r\n');
-      req.contentLength = head.length + bytes.length + tail.length;
-      req.add(head);
-      const chunk = 8192;
-      for (var i = 0; i < bytes.length; i += chunk) {
-        req.add(bytes.sublist(i, i + chunk > bytes.length ? bytes.length : i + chunk));
-        await req.flush();
-        progress((i + chunk).clamp(0, bytes.length) / bytes.length);
-      }
-      req.add(tail);
-      final resp = await req.close().timeout(const Duration(seconds: 60));
-      final body = await resp.transform(utf8.decoder).join();
-      if (resp.statusCode == 401) return 'auth';
-      if (resp.statusCode != 200) return body.trim().isEmpty ? 'HTTP ${resp.statusCode}' : body.trim();
-      return null;
-    } catch (e) {
-      return 'net';
-    } finally {
-      client.close(force: true);
-    }
+    return uploadFirmwareBytes(_localUri('/update'), bytes, password, progress);
   }
 
   // ---------- schedules / automations ----------
@@ -1701,6 +1675,7 @@ class AppState extends ChangeNotifier {
   }
 
   void updateWidgetThrottled() {
+    if (kIsWeb) return; // the home-screen widget is Android-only
     final now = DateTime.now();
     if (_lastWidgetUpdate != null && now.difference(_lastWidgetUpdate!) < const Duration(seconds: 15)) {
       if (_widgetThrottleTimer == null || !_widgetThrottleTimer!.isActive) {

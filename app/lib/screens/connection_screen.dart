@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -55,7 +56,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     FocusScope.of(context).unfocus();
     await widget.state.saveSettings(s);
     var msg = t('saved');
-    if (s.hubPass.isNotEmpty && !s.isShared) {
+    if (!kIsWeb && s.hubPass.isNotEmpty && !s.isShared) {
       // give the local link a moment after the restart, then hand the hub its server password
       for (var i = 0; i < 6 && widget.state.mode != ConnMode.local; i++) {
         await Future.delayed(const Duration(milliseconds: 700));
@@ -81,8 +82,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           listenable: st,
           builder: (context, _) => ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
             section(t('conn_status'), [
-              _status(t('st_local'), st.mode == ConnMode.local),
-              _status(t('st_live'), st.sseLive),
+              // the web build is cloud-only: the hub's http LAN API is blocked on an https page (WEB.md)
+              if (!kIsWeb) _status(t('st_local'), st.mode == ConnMode.local),
+              if (!kIsWeb) _status(t('st_live'), st.sseLive),
               _status(t('st_cloud'), st.mqttConnected),
               _status(t('st_hub'), st.hubOnline),
               if (st.hubCloudUp == false && st.hubCloudErr.isNotEmpty)
@@ -100,10 +102,12 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               emptyCard(t('shared_banner', {'x': st.settings.sharedName.isEmpty ? st.settings.sharedUser : st.settings.sharedName}), icon: Icons.group_outlined),
               const SizedBox(height: 14),
             ],
-            section(t('sec_local'), [
-              _field(_local, t('f_local'), hint: '192.168.1.100'),
-            ]),
-            const SizedBox(height: 14),
+            if (!kIsWeb) ...[
+              section(t('sec_local'), [
+                _field(_local, t('f_local'), hint: '192.168.1.100'),
+              ]),
+              const SizedBox(height: 14),
+            ],
             section(t('sec_cloud'), [
               _field(_user, t('f_user'), hint: 'stripe_app'),
               TextField(
@@ -145,11 +149,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               if (_advanced) ...[
                 _field(_hub, t('f_hubid'), hint: '80F3DA40F674'),
                 _field(_host, t('f_host'), hint: 'xxxx.emqxsl.com'),
-                Row(children: [
-                  Expanded(child: _field(_port, '${t('f_port')} (MQTT)', hint: '8883', number: true)),
-                  const SizedBox(width: 10),
-                  Expanded(child: _field(_localPort, '${t('f_port')} (${t('mode_local')})', hint: '8080', number: true)),
-                ]),
+                // web always uses wss://<host>:8084/mqtt, so neither port applies there
+                if (!kIsWeb)
+                  Row(children: [
+                    Expanded(child: _field(_port, '${t('f_port')} (MQTT)', hint: '8883', number: true)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _field(_localPort, '${t('f_port')} (${t('mode_local')})', hint: '8080', number: true)),
+                  ]),
               ],
             ]),
             const SizedBox(height: 16),

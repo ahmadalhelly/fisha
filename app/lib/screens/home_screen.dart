@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -58,7 +59,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: C.tabBg,
-      floatingActionButton: Padding(
+      // adding a strip pairs it through the hub on the home network: not on the web build (WEB.md)
+      floatingActionButton: kIsWeb
+          ? null
+          : Padding(
         padding: EdgeInsets.only(bottom: fabLift(context)),
         child: SizedBox(
           height: 44,
