@@ -1272,7 +1272,10 @@ class AppState extends ChangeNotifier {
 
   String nameForMac(String mac, int outlet) {
     final s = live(mac);
-    if (s == null) return outlet == 0 ? t('whole_strip') : t('default_outlet', {'n': outlet});
+    if (s == null) {
+      final unknown = Tr.isAr ? 'مشترك غير معروف' : 'Unknown strip';
+      return outlet == 0 ? unknown : '$unknown · ${t('default_outlet', {'n': outlet})}';
+    }
     return outlet == 0 ? stripName(s) : '${stripName(s)} · ${outletName(s, outlet)}';
   }
 

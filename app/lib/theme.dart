@@ -44,6 +44,9 @@ class C {
 
   /// dark / light / graphite (in between) / saffron (warm light with a saffron tint) /
   /// midnight (dark glass) / pearl (light glass)
+  /// Bar colour of the energy chart (blue on Pearl, the accent elsewhere).
+  static Color chart = const Color(0xFF2EE6B0);
+
   static void useId(String id) {
     themeId = id;
     dark = id == 'dark' || id == 'graphite' || id == 'midnight';
@@ -212,6 +215,7 @@ class C {
         useId('dark');
         return;
     }
+    chart = id == 'pearl' ? const Color(0xFF0A84FF) : accent;
     // see-through cards on glass themes, solid ones everywhere else
     card = switch (id) {
       'midnight' => const Color(0x80142238),

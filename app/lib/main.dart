@@ -86,7 +86,8 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
       case ThemePref.pearl:
         return 'pearl';
       case ThemePref.system:
-        return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark ? 'dark' : 'light';
+        // the glass themes are the defaults: Midnight on a dark phone, Pearl on a light one
+        return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark ? 'midnight' : 'pearl';
     }
   }
 
@@ -103,7 +104,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final themeId = _booted ? _themeId() : 'dark';
+    final themeId = _booted ? _themeId() : 'midnight';
     final lang = _lang();
     C.useId(themeId);
     Tr.lang = lang;

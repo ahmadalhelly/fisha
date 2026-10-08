@@ -14,13 +14,17 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
-        (Icons.auto_awesome, _tr('اقتراح ذكي لحد الأمبير', 'Smart amp-limit suggestion'),
-            _tr('قيم جاهزة وزرار + و − بدل السلايدر، واقتراح من أعلى سحب اتسجل للجهاز.', 'Presets and − / + instead of sliders, plus a suggestion from the highest draw seen.')),
+        (Icons.exposure, _tr('شريط − و + للقيم', 'A − / + bar for values'),
+            _tr('الأمبير والفولت والحرارة بشريط − و +، ودوس على الرقم تكتبه. واقتراح ذكي لحد الأمبير.', 'Amps, volts and temperature use a − / + bar; tap the number to type it. Plus a smart amp-limit suggestion.')),
+        (Icons.bolt, _tr('حماية الفولت العالي إجبارية', 'Over-voltage cut always on'),
+            _tr('لو الفولت عدّى الحد المشترك كله بيقفل حتى المخارج المحمية (Hub 2.14).', 'Above the limit the whole strip shuts off, protected outlets too (hub 2.14).')),
+        (Icons.touch_app_outlined, _tr('ضغط مطول على الأتمتة', 'Long-press automations'), _tr('تعديل ونسخة وحذف، والقاعدة من غير اسم بتظهر باسم المشترك.', 'Edit, duplicate or delete; unnamed rules show the strip name.')),
+        (Icons.gradient, _tr('ألوان متحركة', 'Moving colours'), _tr('الوات والحرارة في الهيدر والبار العائم بيتلونوا حسب الحمل والحرارة.', 'Watts and temperature in the header and floating bar take colour from load and heat.')),
         (Icons.insights, _tr('استهلاك كل مخرج والـ Peak', 'Per-outlet use and peak'),
             _tr('صفحة الطاقة بفلتر للمشترك والمخرج، ونسبة كل مخرج، وأعلى حمل بوقته.', 'Energy page with strip and outlet filters, each outlet\'s share and peak with its time.')),
         (Icons.meeting_room_outlined, _tr('الغرف زي المشترك', 'Rooms act like strips'),
             _tr('تشغيل وإيقاف، جدولة، أتمتة، إعادة تشغيل، تكرار، بصمة وإشعارات للغرفة كلها.', 'On/off, schedules, automations, power-cycle, loop, fingerprint and notifications per room.')),
-        (Icons.blur_on, _tr('ثيمات زجاجية', 'Glass themes'), _tr('Midnight بتنت أزرق وPearl بالنعناعي.', 'Midnight with a blue tint and Pearl in mint.')),
+        (Icons.blur_on, _tr('ثيمات زجاجية', 'Glass themes'), _tr('Midnight وPearl بقوا الأساسيين حسب وضع الموبايل.', 'Midnight and Pearl are now the defaults, following the phone.')),
         (Icons.donut_large, _tr('هالة الاستهلاك', 'Load halo'),
             _tr('المخرج والمشترك بيقلبوا برتقالي من 70% وأحمر من 90% من 3500 وات.', 'Outlets and strips turn orange from 70% and red from 90% of 3500 W.')),
         (Icons.family_restroom, _tr('مشاركة العائلة', 'Family sharing'), _tr('أفراد العائلة بيتحكموا محلي وكلاود.', 'Family members control locally and through the cloud.')),

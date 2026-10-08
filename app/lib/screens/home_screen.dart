@@ -260,14 +260,19 @@ class _HomeScreenState extends State<HomeScreen> {
           const BrandMark(size: 24),
           const SizedBox(width: 6),
           Row(textDirection: TextDirection.ltr, crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
-            AnimatedNumber(value: s.totalPower, style: mono(19, color: loadColor(s.totalPower, cap))),
+            FlowColor(
+              colors: loadFlowColors(s.totalPower, cap),
+              child: AnimatedNumber(value: s.totalPower, style: mono(19, color: s.totalPower <= 0 ? C.muted : C.text)),
+            ),
             const SizedBox(width: 2),
             Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
           ]),
           const Spacer(),
           chip(Icons.power_outlined, '${s.onCount}/${s.outletCount}'),
           const SizedBox(width: 10),
-          chip(Icons.thermostat, s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', color: s.allStrips.isEmpty ? null : tempColor(s.maxTemp)),
+          s.allStrips.isEmpty
+              ? chip(Icons.thermostat, '—')
+              : FlowColor(colors: tempFlowColors(s.maxTemp), child: chip(Icons.thermostat, '${s.maxTemp}°C', color: C.text)),
           const SizedBox(width: 10),
           Tooltip(message: modeLabel, child: PulseDot(color: modeColor, active: s.mode != ConnMode.offline)),
         ]),
@@ -315,7 +320,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
                     children: [
-                      AnimatedNumber(value: s.totalPower, style: mono(34, color: loadColor(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW))),
+                      FlowColor(
+                        colors: loadFlowColors(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW),
+                        child: AnimatedNumber(value: s.totalPower, style: mono(34, color: s.totalPower <= 0 ? C.muted : C.text)),
+                      ),
                       const SizedBox(width: 4),
                       Text('W', style: mono(13, color: C.muted, weight: FontWeight.w500)),
                       if (v != null && v > 0) ...[
@@ -353,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
               Expanded(child: _stat('${s.onCount}/${s.outletCount}', t('stat_on'))),
               const SizedBox(width: 8),
-              Expanded(child: _stat(s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', t('stat_temp'), color: s.allStrips.isEmpty ? null : tempColor(s.maxTemp))),
+              Expanded(child: _stat(s.allStrips.isEmpty ? '—' : '${s.maxTemp}°C', t('stat_temp'), flow: s.allStrips.isEmpty ? null : tempFlowColors(s.maxTemp))),
             ]),
           ]),
         ),
@@ -362,11 +370,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _stat(String value, String label, {Color? color}) => Container(
+  Widget _stat(String value, String label, {Color? color, List<Color>? flow}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(value, textDirection: TextDirection.ltr, style: mono(14, color: color)),
+          FlowColor(colors: flow, child: Text(value, textDirection: TextDirection.ltr, style: mono(14, color: color))),
           const SizedBox(height: 2),
           Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 10, color: C.muted)),
         ]),

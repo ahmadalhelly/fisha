@@ -177,8 +177,13 @@ class _AddStripScreenState extends State<AddStripScreen> {
           AnimatedSwitcher(duration: const Duration(milliseconds: 250), child: KeyedSubtree(key: ValueKey(_step), child: _card())),
           const SizedBox(height: 12),
           Center(
-            child: Text('${t('hub_fw')}: ${s.hubFw ?? '—'}',
-                textDirection: TextDirection.ltr, style: mono(11, color: C.faint, weight: FontWeight.w500)),
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: '${t('hub_fw')}: ', style: TextStyle(fontSize: 11.5, color: C.faint)),
+                // the version reads left to right on its own, the label stays right to left
+                TextSpan(text: '\u2066${s.hubFw == null ? '—' : 'v${s.hubFw}'}\u2069', style: mono(11, color: C.faint, weight: FontWeight.w500)),
+              ]),
+            ),
           ),
         ]),
       ),

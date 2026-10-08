@@ -31,6 +31,8 @@ struct ApiRes;
   v2.13.1: also listens on TCP 21197 (strips after the Oct 2026 OTA), default IP 192.168.1.100.
   v2.13.2: no passwords in the source (placeholders; the hub keeps the stored ones, the app pushes the
            server password), SSE matches shared users by exact u=/t= before treating a client as owner.
+  v2.14.0: over-voltage protection is always on and cuts the whole strip, protected outlets included;
+           the protection switch now only turns the under-voltage cut on/off (limit 170..260 V).
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -71,7 +73,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.13.2";
+const char* FW_VERSION = "2.14.0";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -188,7 +190,7 @@ bool tempProtect = true;
 // v2.10 whole-strip protections
 bool vProt = true, vRestore = true, aProt = true;
 uint16_t vMax = 250;
-uint16_t vMin = 190;                               // v2.11 under-voltage limit (180..260)
+uint16_t vMin = 190;                               // v2.11 under-voltage limit (170..260)
 float aMax = 16.0f;
 volatile uint32_t rebootAt = 0;
 
@@ -843,17 +845,19 @@ void energyUpdate(int i) {
 void voltCheck(Strip& s) {
   if (isnan(s.voltage)) return;
   uint32_t now = millis();
-  bool badV = (vProt && s.voltage > vMax) || (vProt && vMin > 0 && s.voltage < vMin);
+  // over-voltage is always enforced (v2.14); vProt only switches the under-voltage cut
+  bool underOn = vProt && vMin > 0;
+  bool badV = s.voltage > vMax || (underOn && s.voltage < vMin);
   if (badV) {
     s.vOkSince = 0;
     if (s.ovCount < 255) s.ovCount++;
-    bool far = s.voltage > vMax + 15 || (vMin > 0 && s.voltage < vMin - 15);
+    bool far = s.voltage > vMax + 15 || (underOn && s.voltage < vMin - 15);
     if (s.vCutMask || (s.ovCount < 2 && !far)) return;   // two readings in a row, or one far outside
-    uint8_t cut = 0;
-    for (int k = 0; k < 4; k++)
-      if (s.o[k].on && !(s.protMask & (1 << k))) { sendOnOffF(s, k + 1, false, true); cut |= 1 << k; }
-    s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
     bool over = s.voltage > vMax;
+    uint8_t cut = 0;
+    for (int k = 0; k < 4; k++)                       // over-voltage cuts protected outlets too
+      if (s.o[k].on && (over || !(s.protMask & (1 << k)))) { sendOnOffF(s, k + 1, false, true); cut |= 1 << k; }
+    s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
     addEvent(over ? "overvolt" : "undervolt", s.mac, 0, String(s.voltage, 0) + " V");
     stateDirty = true;
     return;
@@ -861,7 +865,7 @@ void voltCheck(Strip& s) {
   s.ovCount = 0;
   if (!s.vCutMask) return;
   // back inside the safe window with a 5 V hysteresis
-  if (s.voltage > vMax - 5 || (vMin > 0 && s.voltage < vMin + 5)) { s.vOkSince = 0; return; }
+  if (s.voltage > vMax - 5 || (underOn && s.voltage < vMin + 5)) { s.vOkSince = 0; return; }
   if (!s.vOkSince) { s.vOkSince = now ? now : 1; return; }
   if (now - s.vOkSince < 60000) return;
   if (vRestore)
@@ -2134,7 +2138,7 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
     if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
     if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 225, 270); cfg.putUShort("vmax", vMax); }
-    if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 180, 260); cfg.putUShort("vmin", vMin); }
+    if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 170, 260); cfg.putUShort("vmin", vMin); }
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
     if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
     stateDirty = true;

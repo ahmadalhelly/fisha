@@ -95,7 +95,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
 
   Widget _stripGroup(String mac, List<Automation> rules) {
     final strip = s.live(mac);
-    final stripName = strip != null ? s.stripName(strip) : mac;
+    final stripName = strip != null ? s.stripName(strip) : (Tr.isAr ? 'مشترك غير معروف' : 'Unknown strip') + (mac.length >= 4 ? ' · ${mac.substring(mac.length - 4)}' : '');
     return Container(
       decoration: cardBox(radius: 20),
       clipBehavior: Clip.antiAlias,
@@ -140,41 +140,59 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             Icon(Icons.bolt, color: C.warn),
             const SizedBox(width: 10),
             Expanded(child: Text(t('vprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
-            Switch(value: s.vProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(vOn: v)),
+            // over-voltage is always on (hub 2.14+): no switch, just a badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              decoration: BoxDecoration(
+                color: C.warn.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(99),
+                border: Border.all(color: C.warn.withValues(alpha: 0.4)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.lock, size: 12, color: C.warn),
+                const SizedBox(width: 4),
+                Text(Tr.isAr ? 'إجباري' : 'Always on', style: TextStyle(color: C.warn, fontSize: 11.5, fontWeight: FontWeight.w700)),
+              ]),
+            ),
           ]),
+          const SizedBox(height: 4),
           Text(
             Tr.isAr
-                ? 'فصل المشترك إذا هبط الفولت عن ${s.vMin} V أو تجاوز ${s.vMax} V'
-                : 'Trip strip if voltage drops below ${s.vMin} V or exceeds ${s.vMax} V',
+                ? 'لو الفولت عدّى ${s.vMax} V، المشترك كله بيقفل فوراً حتى المخارج المحمية'
+                : 'Above ${s.vMax} V the whole strip shuts off at once, protected outlets included',
             style: TextStyle(color: C.muted, fontSize: 12, height: 1.5),
           ),
-          const SizedBox(height: 8),
-          const SizedBox(height: 10),
-          Text(Tr.isAr ? 'أدنى فولت' : 'Min voltage', style: TextStyle(color: C.textSoft, fontSize: 13)),
-          const SizedBox(height: 8),
-          PresetStepper(
-            value: s.vMin.toDouble(),
-            min: 180,
-            max: 220,
-            step: 1,
-            unit: 'V',
-            presets: const [180, 190, 200, 210, 220],
-            enabled: s.vProtect,
-            onChanged: (v) => s.setStripProtection(vMinLimit: v.round()),
-          ),
-          const SizedBox(height: 6),
           const SizedBox(height: 10),
           Text(t('vprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
           const SizedBox(height: 8),
-          PresetStepper(
+          ValueStepper(
             value: s.vMax.toDouble(),
             min: 225,
             max: 270,
             step: 1,
             unit: 'V',
-            presets: const [230, 240, 250, 260, 270],
-            enabled: s.vProtect,
             onChanged: (v) => s.setStripProtection(vLimit: v.round()),
+          ),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(Tr.isAr ? 'أدنى فولت (اختياري)' : 'Min voltage (optional)', style: TextStyle(color: C.textSoft, fontSize: 13)),
+                Text(Tr.isAr ? 'فصل المشترك لو الفولت نزل عن ${s.vMin} V' : 'Cut the strip below ${s.vMin} V',
+                    style: TextStyle(color: C.muted, fontSize: 12)),
+              ]),
+            ),
+            Switch(value: s.vProtect, activeTrackColor: C.accent, onChanged: (v) => s.setStripProtection(vOn: v)),
+          ]),
+          const SizedBox(height: 8),
+          ValueStepper(
+            value: s.vMin.toDouble(),
+            min: 170,
+            max: 220,
+            step: 1,
+            unit: 'V',
+            enabled: s.vProtect,
+            onChanged: (v) => s.setStripProtection(vMinLimit: v.round()),
           ),
           const SizedBox(height: 6),
           SwitchListTile(
@@ -183,7 +201,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             value: s.vRestore,
             activeTrackColor: C.accent,
             title: Text(t('vprot_restore'), style: const TextStyle(fontSize: 13)),
-            onChanged: s.vProtect ? (v) => s.setStripProtection(vBack: v) : null,
+            onChanged: (v) => s.setStripProtection(vBack: v),
           ),
           Divider(height: 22, color: C.border),
           Row(children: [
@@ -196,14 +214,13 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 10),
           Text(t('aprot_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
           const SizedBox(height: 8),
-          PresetStepper(
+          ValueStepper(
             value: s.aMax,
             min: 1,
             max: 16,
             step: 0.5,
             decimals: 1,
             unit: 'A',
-            presets: const [5, 8, 10, 13, 16],
             enabled: s.aProtect,
             onChanged: (v) => s.setStripProtection(aLimit: v),
           ),
@@ -225,13 +242,12 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 10),
           Text(t('temp_max'), style: TextStyle(color: C.textSoft, fontSize: 13)),
           const SizedBox(height: 8),
-          PresetStepper(
+          ValueStepper(
             value: s.tempMax.toDouble(),
             min: 40,
             max: 90,
             step: 1,
             unit: '°C',
-            presets: const [50, 60, 70, 80, 90],
             enabled: s.tempProtect,
             onChanged: (v) => s.setTempProtection(max: v.round()),
           ),
@@ -239,10 +255,49 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
         ]),
       );
 
+  /// Long-press on a rule: edit, duplicate or delete.
+  Future<void> _ruleMenu(Automation a) async {
+    final name = a.label.isNotEmpty ? a.label : s.nameForMac(a.mac, a.outlet);
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: C.surface,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
+          ListTile(leading: Icon(Icons.edit_outlined, color: C.accent), title: Text(Tr.isAr ? 'تعديل' : 'Edit'), onTap: () => Navigator.pop(ctx, 'edit')),
+          ListTile(leading: Icon(Icons.copy_all_outlined, color: C.accent), title: Text(Tr.isAr ? 'نسخة' : 'Duplicate'), onTap: () => Navigator.pop(ctx, 'dup')),
+          ListTile(
+              leading: Icon(Icons.delete_outline, color: C.danger),
+              title: Text(t('delete'), style: TextStyle(color: C.danger)),
+              onTap: () => Navigator.pop(ctx, 'del')),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (!mounted || act == null) return;
+    switch (act) {
+      case 'edit':
+        _edit(a);
+      case 'dup':
+        final copy = Automation.fromJson(a.toJson())
+          ..aid = 0
+          ..label = a.label.isEmpty ? '' : '${a.label} (${Tr.isAr ? 'نسخة' : 'copy'})';
+        await s.saveAutomation(copy);
+      case 'del':
+        if (!await confirmDialog(context, t('delete'), name, ok: t('delete'), danger: true)) return;
+        await s.deleteAutomation(a.aid);
+    }
+  }
+
   Widget _ruleRow(Automation a) => Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _edit(a),
+          onLongPress: () => _ruleMenu(a),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(children: [

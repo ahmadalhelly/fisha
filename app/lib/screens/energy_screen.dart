@@ -626,9 +626,9 @@ class _BarsState extends State<_Bars> {
                                     final isLatest = e == widget.daily.last;
                                     Color barColor;
                                     if (widget.range == 7) {
-                                      barColor = isLatest ? C.accent : C.accent.withValues(alpha: 0.55);
+                                      barColor = isLatest ? C.chart : C.chart.withValues(alpha: 0.55);
                                     } else {
-                                      barColor = isSelected ? C.accent : C.accent.withValues(alpha: 0.4);
+                                      barColor = isSelected ? C.chart : C.chart.withValues(alpha: 0.4);
                                     }
                                     return Container(
                                       height: barH,

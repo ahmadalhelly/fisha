@@ -223,14 +223,13 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                         ],
                       ),
                       const SizedBox(height: 10),
-                      PresetStepper(
+                      ValueStepper(
                         value: o.ampLimit,
                         min: 0,
                         max: 16,
                         step: 0.5,
                         decimals: 1,
                         unit: 'A',
-                        presets: const [0, 2, 5, 8, 10, 13, 16],
                         special: (v) => v <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : null,
                         enabled: v2,
                         suggestion: _ampSuggestion(state, s, n),

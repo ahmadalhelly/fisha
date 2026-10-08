@@ -425,29 +425,27 @@ Future<TimeOfDay?> pickTime12(BuildContext context, TimeOfDay initial) => showTi
       builder: (ctx, child) => MediaQuery(data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false), child: child!),
     );
 
-// ---------- preset + stepper picker (replaces drag sliders) ----------
-/// Pick a value by tapping a preset or nudging it with − / +. Holding − / + keeps counting.
-/// Nothing is sent while the user is still tapping: [onChanged] fires once, [commitDelay] after the last change.
-class PresetStepper extends StatefulWidget {
+// ---------- value stepper (replaces drag sliders) ----------
+/// A − / + bar; tap the number to type it. Holding − / + keeps counting.
+/// Nothing is sent while the user is still changing it: [onChanged] fires once, [commitDelay] after the last change.
+class ValueStepper extends StatefulWidget {
   final double value, min, max, step;
-  final List<double> presets;
   final String unit;
   final int decimals;
   final bool enabled;
   /// Label for a special value (e.g. 0 → "Off"); return null to show the number.
   final String? Function(double v)? special;
-  /// Optional smart suggestion shown above the presets.
+  /// Optional smart suggestion shown above the bar.
   final double? suggestion;
   final String? suggestionNote;
   final ValueChanged<double> onChanged;
   final Duration commitDelay;
-  const PresetStepper({
+  const ValueStepper({
     super.key,
     required this.value,
     required this.min,
     required this.max,
     required this.step,
-    required this.presets,
     required this.unit,
     required this.onChanged,
     this.decimals = 0,
@@ -459,12 +457,23 @@ class PresetStepper extends StatefulWidget {
   });
 
   @override
-  State<PresetStepper> createState() => _PresetStepperState();
+  State<ValueStepper> createState() => _ValueStepperState();
 }
 
-class _PresetStepperState extends State<PresetStepper> {
+class _ValueStepperState extends State<ValueStepper> {
   late double _v = _clamp(widget.value);
   Timer? _commit, _hold, _repeat;
+  bool _typing = false;
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(() {
+      if (!_focus.hasFocus && _typing) _endTyping();
+    });
+  }
 
   double _clamp(double v) {
     final s = widget.step;
@@ -472,10 +481,10 @@ class _PresetStepperState extends State<PresetStepper> {
   }
 
   @override
-  void didUpdateWidget(PresetStepper old) {
+  void didUpdateWidget(ValueStepper old) {
     super.didUpdateWidget(old);
     // adopt the hub's value unless the user is mid-change
-    if (_commit == null && widget.value != old.value) _v = _clamp(widget.value);
+    if (_commit == null && !_typing && widget.value != old.value) _v = _clamp(widget.value);
   }
 
   @override
@@ -486,15 +495,17 @@ class _PresetStepperState extends State<PresetStepper> {
       _commit!.cancel();
       widget.onChanged(_v);
     }
+    _ctrl.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
-  void _set(double v) {
+  void _set(double v, {bool now = false}) {
     final n = _clamp(v);
     if (n == _v) return;
     setState(() => _v = n);
     _commit?.cancel();
-    _commit = Timer(widget.commitDelay, () {
+    _commit = Timer(now ? Duration.zero : widget.commitDelay, () {
       _commit = null;
       widget.onChanged(_v);
     });
@@ -503,7 +514,7 @@ class _PresetStepperState extends State<PresetStepper> {
   void _startHold(double dir) {
     _set(_v + dir * widget.step);
     _hold = Timer(const Duration(milliseconds: 400), () {
-      _repeat = Timer.periodic(const Duration(milliseconds: 90), (_) => _set(_v + dir * widget.step));
+      _repeat = Timer.periodic(const Duration(milliseconds: 80), (_) => _set(_v + dir * widget.step));
     });
   }
 
@@ -511,6 +522,20 @@ class _PresetStepperState extends State<PresetStepper> {
     _hold?.cancel();
     _repeat?.cancel();
     _hold = _repeat = null;
+  }
+
+  void _startTyping() {
+    if (!widget.enabled) return;
+    _ctrl.text = _isSpecial(_v) ? '' : _v.toStringAsFixed(widget.decimals);
+    _ctrl.selection = TextSelection(baseOffset: 0, extentOffset: _ctrl.text.length);
+    setState(() => _typing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
+  }
+
+  void _endTyping() {
+    final n = double.tryParse(_ctrl.text.trim().replaceAll(',', '.'));
+    setState(() => _typing = false);
+    if (n != null) _set(n, now: true);
   }
 
   String _fmt(double v) => widget.special?.call(v) ?? v.toStringAsFixed(widget.decimals);
@@ -524,14 +549,57 @@ class _PresetStepperState extends State<PresetStepper> {
       onTapCancel: _stopHold,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        width: 48,
-        height: 44,
+        width: 52,
+        height: 46,
         decoration: BoxDecoration(
           color: can ? C.card : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: C.cardEdge),
         ),
         child: Icon(icon, size: 22, color: can ? C.text : C.faint),
+      ),
+    );
+  }
+
+  Widget _value() {
+    if (_typing) {
+      return Center(
+        child: SizedBox(
+          width: 110,
+          child: TextField(
+            controller: _ctrl,
+            focusNode: _focus,
+            textAlign: TextAlign.center,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: mono(26, color: C.accent, weight: FontWeight.w700),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: false,
+              contentPadding: const EdgeInsets.symmetric(vertical: 4),
+              suffixText: widget.unit,
+              suffixStyle: mono(13, color: C.muted),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: C.accent, width: 2)),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: C.accent, width: 2)),
+            ),
+            onSubmitted: (_) => _focus.unfocus(),
+          ),
+        ),
+      );
+    }
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: widget.enabled ? _startTyping : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: _isSpecial(_v)
+            ? Text(_fmt(_v), textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: C.muted))
+            : Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: _fmt(_v), style: mono(28, color: C.accent, weight: FontWeight.w700)),
+                  TextSpan(text: ' ${widget.unit}', style: mono(13, color: C.muted)),
+                ]),
+                textAlign: TextAlign.center,
+              ),
       ),
     );
   }
@@ -549,7 +617,7 @@ class _PresetStepperState extends State<PresetStepper> {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
-              onTap: () => _set(sug),
+              onTap: () => _set(sug, now: true),
               child: Container(
                 padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
                 decoration: BoxDecoration(
@@ -584,48 +652,16 @@ class _PresetStepperState extends State<PresetStepper> {
           ),
           const SizedBox(height: 10),
         ],
-        Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final p in widget.presets)
-            InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: on ? () => _set(p) : null,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                constraints: const BoxConstraints(minWidth: 50),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: _v == p ? C.accentBg : C.well,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _v == p ? C.accent : C.cardEdge),
-                ),
-                child: Text(_fmt(p),
-                    textDirection: TextDirection.ltr,
-                    style: _isSpecial(p)
-                        ? TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: _v == p ? C.accent : C.textSoft)
-                        : mono(12.5, color: _v == p ? C.accent : C.textSoft)),
-              ),
-            ),
-        ]),
-        const SizedBox(height: 10),
         Container(
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(color: C.well, borderRadius: BorderRadius.circular(15), border: Border.all(color: C.cardEdge)),
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: C.well, borderRadius: BorderRadius.circular(16), border: Border.all(color: C.cardEdge)),
           child: Directionality(
             textDirection: TextDirection.ltr,
             child: Row(children: [
               _btn(Icons.remove, -1),
-              Expanded(
-                child: _isSpecial(_v)
-                    ? Text(_fmt(_v), textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: C.muted))
-                    : Text.rich(
-                        TextSpan(children: [
-                          TextSpan(text: _fmt(_v), style: mono(26, color: C.accent, weight: FontWeight.w700)),
-                          TextSpan(text: ' ${widget.unit}', style: mono(13, color: C.muted)),
-                        ]),
-                        textAlign: TextAlign.center,
-                      ),
-              ),
+              const SizedBox(width: 8),
+              Expanded(child: _value()),
+              const SizedBox(width: 8),
               _btn(Icons.add, 1),
             ]),
           ),
