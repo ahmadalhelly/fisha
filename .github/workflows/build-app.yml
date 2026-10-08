@@ -21,6 +21,8 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Read app version
         id: ver
@@ -65,6 +67,34 @@ jobs:
           path: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           if-no-files-found: error
 
+      - name: Write release notes (changes since the last good build of this branch)
+        if: success()
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh run list --workflow build-app.yml --branch "${{ github.ref_name }}" --status success --limit 1 --json headSha -q '.[0].headSha' 2>/dev/null || true)
+          f=CHANGES-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}.md
+          {
+            echo "# Fisha ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})"
+            echo
+            echo "Branch: \`${{ github.ref_name }}\` · Commit: \`${GITHUB_SHA::7}\`"
+            echo
+            echo "## What changed"
+            echo
+            if [ -n "$prev" ] && git cat-file -e "$prev" 2>/dev/null && [ "$prev" != "$GITHUB_SHA" ]; then
+              range="$prev..$GITHUB_SHA"
+            else
+              range="-1 $GITHUB_SHA"
+            fi
+            git log --no-merges --reverse --format='### %s%n%n%b' $range \
+              | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' \
+              | cat -s
+          } > "$f"
+          cp "$f" RELEASE_NOTES.md
+          cat "$f"
+
       - name: Publish APK as a release
         if: success()
         continue-on-error: true
@@ -74,8 +104,11 @@ jobs:
           name: Fisha ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
           prerelease: ${{ github.ref_name != 'main' && github.ref_name != 'master' }}
           make_latest: ${{ github.ref_name == 'main' || github.ref_name == 'master' }}
-          files: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
-          body: "Release v${{ steps.ver.outputs.v }} - Commit ${{ github.sha }}"
+          target_commitish: ${{ github.sha }}
+          files: |
+            Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
+            CHANGES-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}.md
+          body_path: RELEASE_NOTES.md
 
       - name: Save build log to the ci-logs branch
         if: always()
