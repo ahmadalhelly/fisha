@@ -46,7 +46,12 @@ class _AccountScreenState extends State<AccountScreen> {
           _snack(err);
           return;
         }
-        if (await s.googleHasData() && mounted) {
+        final has = await s.googleHasData();
+        if (has == null) {
+          _snack(t('g_check_failed'));
+          return;
+        }
+        if (has && mounted) {
           final yes = await confirmDialog(context, t('g_found_t'), t('g_found_b'), ok: t('g_restore'));
           if (yes) {
             final r = await s.restoreFromGoogle();
@@ -277,7 +282,7 @@ Future<void> joinWithInviteDialog(BuildContext context, AppState s) async {
     return;
   }
   final ok = await confirmDialog(context, t('join_title'), t('join_confirm', {'x': (inv['n'] ?? inv['u']).toString()}));
-  if (!ok) return;
+  if (!ok || !context.mounted) return;
   final messenger = ScaffoldMessenger.of(context);
   await s.joinWithCode(code);
   if (s.accountType.isEmpty) await s.setAccount('local');

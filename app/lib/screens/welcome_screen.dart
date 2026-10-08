@@ -59,7 +59,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
         _snack(err);
         return;
       }
-      if (await s.googleHasData() && mounted) {
+      final has = await s.googleHasData();
+      if (has == null) {
+        _snack(t('g_check_failed'));
+        return;
+      }
+      if (has && mounted) {
         if (await confirmDialog(context, t('g_found_t'), t('g_found_b'), ok: t('g_restore'))) {
           _snack(await s.restoreFromGoogle() ?? t('g_restored'));
           return;

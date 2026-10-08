@@ -111,6 +111,7 @@ class _BackupScreenState extends State<BackupScreen> {
       return;
     }
 
+    if (!mounted) return;
     bool replace = false;
     if (parts.contains('hub') && j.containsKey('hub')) {
       final choice = await showDialog<bool>(
@@ -129,7 +130,7 @@ class _BackupScreenState extends State<BackupScreen> {
           ],
         ),
       );
-      if (choice == null) return;
+      if (choice == null || !mounted) return;
       replace = choice;
     } else {
       if (!await confirmDialog(context, t('backup_restore_title'), t('backup_restore_confirm'))) return;

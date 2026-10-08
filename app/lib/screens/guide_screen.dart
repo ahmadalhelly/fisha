@@ -52,7 +52,7 @@ class GuideScreen extends StatelessWidget {
           _Step(_tr('8. حطه في مكانه', '8. Place it'), _tr('أي شاحن USB عادي يكفي. خليه في مكان الواي فاي فيه كويس وقريب من المشتركات.', 'Any USB charger will do. Keep it where Wi-Fi is good and close to the strips.')),
         ]),
         _Part(Icons.phone_android, _tr('ربط التطبيق', 'Connect the app'), _tr('من الموبايل:', 'On the phone:'), [
-          _Step(_tr('1. الاتصال المحلي', '1. Local connection'), _tr('الإعدادات ← الاتصال ← عنوان الـ Hub: نفس الـ IP اللي ظهر في الـ Serial (مثلاً 192.168.1.110).', 'Settings → Connection → hub address: the IP shown in Serial Monitor (e.g. 192.168.1.110).')),
+          _Step(_tr('1. الاتصال المحلي', '1. Local connection'), _tr('الإعدادات ← الاتصال ← عنوان الـ Hub: نفس الـ IP اللي ظهر في الـ Serial (مثلاً 192.168.1.100).', 'Settings → Connection → hub address: the IP shown in Serial Monitor (e.g. 192.168.1.100).')),
           _Step(_tr('2. من برا البيت', '2. Away from home'), _tr('في نفس الصفحة: اسم مستخدم التطبيق وباسورده على السيرفر. الـ Hub ID وعنوان السيرفر تحت "إعدادات متقدمة".', 'Same page: the app user and password on the server. Hub ID and server host are under "Advanced".')),
           _Step(_tr('3. احفظ', '3. Save'), _tr('دوس "حفظ وإعادة الاتصال". فوق في الرئيسية لازم يظهر "محلي" أو "عن بُعد".', 'Tap "Save & reconnect". The home screen should show "Local" or "Remote".')),
         ]),

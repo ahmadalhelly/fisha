@@ -101,7 +101,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               const SizedBox(height: 14),
             ],
             section(t('sec_local'), [
-              _field(_local, t('f_local'), hint: '192.168.1.110'),
+              _field(_local, t('f_local'), hint: '192.168.1.100'),
             ]),
             const SizedBox(height: 14),
             section(t('sec_cloud'), [

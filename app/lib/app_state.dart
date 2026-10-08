@@ -44,7 +44,7 @@ class HubSettings {
     this.brokerPort = 8883,
     this.username = 'stripe_app',
     this.password = '',
-    this.localHost = '192.168.1.110',
+    this.localHost = '192.168.1.100',
     this.localPort = 8080,
     this.hubPass = '',
     this.sharedUser = '',
@@ -199,7 +199,10 @@ class AppState extends ChangeNotifier {
     await restart();
     if (accountType == 'google') {
       GoogleSync.I.restore().then((ok) {
-        if (ok) _startAutoSync();
+        if (ok && lastSync != null) {
+          _startAutoSync();
+          Future.delayed(const Duration(seconds: 20), _autoSync);
+        }
       });
     }
   }
@@ -208,14 +211,36 @@ class AppState extends ChangeNotifier {
   Timer? _syncTimer;
   String _lastSyncSig = '';
 
+  // per-phone keys that must not travel between devices through the Google copy
+  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail'};
+
   Future<Map<String, dynamic>> _syncPayload() async {
-    final b = await exportBackup(parts: {'app'});
+    final b = await exportBackup(parts: {'app'}, withSecrets: true);
     final app = b['app'];
-    if (app is Map) app.remove('lastSync');
+    if (app is Map) app.removeWhere((k, _) => _noSyncKeys.contains(k));
     return b;
   }
 
+  String _googleErr(Object e, [String fallback = 'g_sync_failed']) {
+    if (e is GoogleSyncError) {
+      switch (e.code) {
+        case 'not_configured':
+          return t('g_err_not_configured');
+        case 'network':
+          return t('g_err_network');
+        case 'drive_disabled':
+          return t('g_err_drive_disabled');
+        case 'auth':
+          return t('g_err_auth');
+      }
+      return '${t(fallback)} (${e.detail})';
+    }
+    return t(fallback);
+  }
+
   /// null = signed in; otherwise a message for the user.
+  /// Auto-sync starts only after the first restore or upload, so it can never overwrite the Google copy
+  /// while the user is still deciding whether to restore it.
   Future<String?> googleSignIn() async {
     try {
       final e = await GoogleSync.I.signIn();
@@ -225,18 +250,18 @@ class AppState extends ChangeNotifier {
         final dn = GoogleSync.I.displayName;
         await setUserName(dn != null && dn.trim().isNotEmpty ? dn : e.split('@').first);
       }
-      _startAutoSync();
       return null;
-    } catch (_) {
-      return t('g_failed');
+    } catch (e) {
+      return _googleErr(e, 'g_failed');
     }
   }
 
-  Future<bool> googleHasData() async {
+  /// true / false, or null when Google could not be checked (then nothing must be uploaded).
+  Future<bool?> googleHasData() async {
     try {
       return await GoogleSync.I.download() != null;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
@@ -246,9 +271,10 @@ class AppState extends ChangeNotifier {
       await GoogleSync.I.upload(b);
       _lastSyncSig = jsonEncode(b['app']);
       await markSynced();
+      if (_syncTimer == null) _startAutoSync();
       return null;
-    } catch (_) {
-      return t('g_sync_failed');
+    } catch (e) {
+      return _googleErr(e);
     }
   }
 
@@ -256,14 +282,15 @@ class AppState extends ChangeNotifier {
     try {
       final b = await GoogleSync.I.download();
       if (b == null) return t('g_no_data');
-      final keepType = accountType, keepEmail = googleEmail;
+      final app = b['app'];
+      if (app is Map) app.removeWhere((k, _) => _noSyncKeys.contains(k));
       final r = await importBackup(b, parts: {'app'});
-      await setAccount(keepType, email: keepEmail);
       _lastSyncSig = jsonEncode(b['app']);
       await markSynced();
+      if (_syncTimer == null) _startAutoSync();
       return r;
-    } catch (_) {
-      return t('g_sync_failed');
+    } catch (e) {
+      return _googleErr(e);
     }
   }
 
@@ -294,7 +321,6 @@ class AppState extends ChangeNotifier {
   void _startAutoSync() {
     _syncTimer?.cancel();
     _syncTimer = Timer.periodic(const Duration(minutes: 10), (_) => _autoSync());
-    Future.delayed(const Duration(seconds: 20), _autoSync);
   }
 
   Future<void> _autoSync() async {
@@ -316,6 +342,8 @@ class AppState extends ChangeNotifier {
     if (s != null) {
       try {
         settings = HubSettings.fromJson(jsonDecode(s) as Map<String, dynamic>);
+        // hub moved from .110 to .100 with firmware 2.13.1
+        if (!settings.isShared && settings.localHost == '192.168.1.110') settings.localHost = '192.168.1.100';
       } catch (_) {}
     }
     int idx(String k, int len) => (p.getInt(k) ?? 0).clamp(0, len - 1);
@@ -346,7 +374,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>> exportBackup({Set<String> parts = const {'app', 'hub'}}) async {
+  // secrets a backup file must not carry in plain text (the Google copy lives in the app's private Drive folder)
+  static const _secretPrefs = {'otaPass'};
+  static const _secretSettings = {'password', 'hubPass'};
+
+  Future<Map<String, dynamic>> exportBackup({Set<String> parts = const {'app', 'hub'}, bool withSecrets = false}) async {
     final out = <String, dynamic>{
       'fisha_backup': 1,
       'created': DateTime.now().toIso8601String(),
@@ -369,6 +401,19 @@ class AppState extends ChangeNotifier {
           appMap[k] = {'t': 'l', 'v': v.map((e) => e.toString()).toList()};
         } else if (v is String) {
           appMap[k] = {'t': 's', 'v': v};
+        }
+      }
+      if (!withSecrets) {
+        appMap.removeWhere((k, _) => _secretPrefs.contains(k));
+        final st = appMap['settings'];
+        if (st is Map && st['v'] is String) {
+          try {
+            final m = Map<String, dynamic>.from(jsonDecode(st['v'] as String) as Map)
+              ..removeWhere((k, _) => _secretSettings.contains(k));
+            appMap['settings'] = {'t': 's', 'v': jsonEncode(m)};
+          } catch (_) {
+            appMap.remove('settings');
+          }
         }
       }
       out['app'] = appMap;
@@ -493,7 +538,7 @@ class AppState extends ChangeNotifier {
                 await api('keepon', {'mac': mac, 'outlet': n, 'on': keep});
               }
               if (o.containsKey('autooff') || o.containsKey('auto_off_min') || o.containsKey('autoOffMin')) {
-                final min = (o['autooff'] ?? o['auto_off_min'] ?? o['autoOffMin'] as num?)?.toInt() ?? 0;
+                final min = num.tryParse('${o['autooff'] ?? o['auto_off_min'] ?? o['autoOffMin'] ?? 0}')?.toInt() ?? 0;
                 await api('autooff', {'mac': mac, 'outlet': n, 'minutes': min});
               }
             }
@@ -512,7 +557,8 @@ class AppState extends ChangeNotifier {
         });
       }
       final ntfy = (cfg['ntfy'] ?? cfg['ntfy_topic'])?.toString();
-      final ntypes = (cfg['notifyTypes'] ?? cfg['notify_types'] ?? cfg['ntypes'] as num?)?.toInt();
+      final nt = cfg['notifyTypes'] ?? cfg['notify_types'] ?? cfg['ntypes'];
+      final ntypes = nt == null ? null : num.tryParse('$nt')?.toInt();
       if (ntfy != null || ntypes != null) {
         await api('notify', {
           if (ntfy != null) 'ntfy': ntfy,
@@ -531,7 +577,18 @@ class AppState extends ChangeNotifier {
       _prefs = p;
       for (final entry in appMap.entries) {
         final k = entry.key;
-        final item = entry.value;
+        var item = entry.value;
+        if (k == 'settings' && item is Map && item['v'] is String) {
+          // a backup file has no passwords: keep the ones already on this phone
+          try {
+            final m = Map<String, dynamic>.from(jsonDecode(item['v'] as String) as Map);
+            final cur = settings.toJson();
+            for (final sk in _secretSettings) {
+              if ((m[sk] ?? '').toString().isEmpty) m[sk] = cur[sk];
+            }
+            item = {'t': 's', 'v': jsonEncode(m)};
+          } catch (_) {}
+        }
         if (item is Map) {
           final t = item['t'];
           final v = item['v'];
@@ -1151,7 +1208,11 @@ class AppState extends ChangeNotifier {
     }
     final targets = outlet == 0 ? [1, 2, 3, 4] : [outlet];
     final p = _pending.putIfAbsent(mac, () => {});
-    if (targets.any(p.containsKey)) return;
+    if (targets.any(p.containsKey)) {
+      lastError = t('err_busy');                   // a previous command for this outlet is still on its way
+      notifyListeners();
+      return;
+    }
     for (final x in targets) {
       p[x] = on;
     }

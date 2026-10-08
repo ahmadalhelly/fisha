@@ -99,7 +99,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     OutlinedButton.icon(
                       onPressed: () async {
                         final ok = await s.testNotify();
-                        if (ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('notif_test_sent'))));
+                        if (ok && context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('notif_test_sent'))));
                       },
                       icon: const Icon(Icons.send_outlined),
                       label: Text(t('notif_test')),
@@ -137,7 +137,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         child: OutlinedButton.icon(
                           onPressed: () async {
                             final ok = await s.testNotify();
-                            if (ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('notif_test_sent'))));
+                            if (ok && context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('notif_test_sent'))));
                           },
                           icon: const Icon(Icons.send_outlined),
                           label: Text(t('notif_test')),

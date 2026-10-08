@@ -37,7 +37,7 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
         ? 'تأكيد البصمة للتحكم في «${state.outletName(s, o.n)}»'
         : 'Authenticate to switch "${state.outletName(s, o.n)}"';
     final ok = await authenticateBio(reason);
-    if (!ok) return;
+    if (!ok || !context.mounted) return;
   }
   if (!on && o.protected) {
     final ok = await showDialog<bool>(
@@ -108,6 +108,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
     }
   }
 
+  if (!context.mounted) return;
   final names = protectedOn.map((o) => state.outletName(s, o.n)).join('، ');
   final choice = await showDialog<int>(
     context: context,
