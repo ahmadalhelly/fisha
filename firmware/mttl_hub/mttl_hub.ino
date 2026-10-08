@@ -1,14 +1,23 @@
+// These declarations must precede Arduino's auto-generated function prototypes.
+struct Strip;
+struct Note;
+struct Known;
+struct Sched;
+struct Autom;
+struct HubUser;
+struct ApiRes;
+
 /*
-  Fisha Hub v2.0 — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
+  Fisha Hub v2.13.2 — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
   Board: ESP32 Dev Module (ESP32-WROOM-32) | Core: esp32 by Espressif 3.x | Partition: Minimal SPIFFS (1.9MB APP with OTA)
   No external libraries.  By: @ahmadalhelly
 
-  Strips  : TCP 10086 (the strip dials the hub, plain-text "up:..." lines)
+  Strips  : TCP 10086 and 21197 (the strip dials the hub, plain-text "up:..." lines; strip fw 1.0.116+ uses 21197)
   HTTP    : 8080   GET /api/state · GET /api/health · GET /api/raw?cmd=up:... · POST /api/<action> (JSON body)
   Live    : 8081   GET /events  (Server-Sent Events: "state" on every change, "event" for alerts)
   MQTT    : mttl/<HUB_ID>/{status,info,state,event,cmd,cmd/ack}   cmd = {"id","path":"/api/...", ...same fields as HTTP}
   Storage : names, child lock, protected outlets, auto-off, schedules, automations, energy history -> NVS (survive reboots)
-            countdown / power-cycle timers -> RAM (lost if the hub restarts)
+            countdown / power-cycle timers -> NVS (restored after hub restart)
 
   POST actions: onoff, refresh, label, lock, protect, autooff, timer, timer_cancel, provision,
                 schedules, schedule_save, schedule_delete, automations, automation_save, automation_delete,
@@ -19,6 +28,9 @@
          10 s per write. Phone notifications (ntfy) run in their own task. Wi-Fi loss no longer reboots
          the hub after 60 s. Under-voltage limit, per-outlet current limit, near-limit warnings,
          current (A) automations, and shared users can talk to the hub directly on the home Wi-Fi.
+  v2.13.1: also listens on TCP 21197 (strips after the Oct 2026 OTA), default IP 192.168.1.100.
+  v2.13.2: no passwords in the source (placeholders; the hub keeps the stored ones, the app pushes the
+           server password), SSE matches shared users by exact u=/t= before treating a client as owner.
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -38,19 +50,19 @@
 #include <vector>
 
 // ================== CONFIG ==================
-const char* WIFI_SSID = "YAYA";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
-const char* WIFI_PASS = "Sasa6711071+*";   // no ':' allowed (strip protocol limit)
+const char* WIFI_SSID = "YOUR_WIFI_NAME";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";   // no ':' allowed (strip protocol limit)
 #define USE_STATIC_IP 1
-IPAddress LOCAL_IP(192, 168, 1, 110);
+IPAddress LOCAL_IP(192, 168, 1, 100);
 IPAddress GATEWAY(192, 168, 1, 1);
 IPAddress SUBNET(255, 255, 255, 0);
 IPAddress DNS1(192, 168, 1, 1);
 const char* API_TOKEN = "";                     // empty = no auth (LAN only)
 const char* HOSTNAME  = "mttl-hub";
-const char* OTA_PASS  = "f&hANe4NM33Swt";
+const char* OTA_PASS  = "change-me";
 const char* MQTT_URI  = "mqtts://t0eb1112.ala.eu-central-1.emqxsl.com:8883";
 const char* MQTT_USER = "ESP32_hub";
-const char* MQTT_PASS = "f&hANe4NM33Swt";
+const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
 // From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
@@ -59,7 +71,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.11";
+const char* FW_VERSION = "2.13.2";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -86,7 +98,7 @@ MrY=
 -----END CERTIFICATE-----
 )PEM";
 
-const uint16_t STRIP_PORT = 10086, WEB_PORT = 8080, SSE_PORT = 8081;
+const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
 const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 10, MAX_EVENTS = 40, MAX_SSE = 4;
 const int      ELOG_DAYS = 90;
@@ -181,9 +193,13 @@ float aMax = 16.0f;
 volatile uint32_t rebootAt = 0;
 
 WiFiServer stripServer(STRIP_PORT);
+WiFiServer stripServerAlt(STRIP_PORT_ALT);   // strips that switched to 21197 (2026-10-08)
 WiFiServer sseServer(SSE_PORT);
 WebServer web(WEB_PORT);
 Preferences cfg;
+bool webRoutesReady = false;
+bool stripListenerReady = false;
+bool wifiWasConnected = false;
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
 
@@ -237,26 +253,110 @@ String jsonEsc(const String& v) {
   return o;
 }
 
-// Flat JSON reader (our payloads have no nesting). Returns the raw value text, strings without quotes.
-String jsonValue(const String& body, const char* key) {
-  String k = String("\"") + key + "\"";
-  int p = body.indexOf(k);
-  if (p < 0) return "";
-  p = body.indexOf(':', p + k.length());
-  if (p < 0) return "";
-  p++;
+// Small JSON reader for API objects. It handles escaped strings and skips nested values safely.
+void jsonSkipWs(const String& body, int& p) {
   while (p < (int)body.length() && isspace((unsigned char)body[p])) p++;
-  if (p < (int)body.length() && body[p] == '"') {
-    int e = body.indexOf('"', p + 1);
-    return e < 0 ? "" : body.substring(p + 1, e);
-  }
-  int e = p;
-  while (e < (int)body.length() && body[e] != ',' && body[e] != '}') e++;
-  String v = body.substring(p, e);
-  v.trim();
-  return v;
 }
-bool jsonHas(const String& body, const char* key) { return body.indexOf(String("\"") + key + "\"") >= 0; }
+
+int jsonHex(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+void jsonAppendUtf8(String& out, uint32_t cp) {
+  if (cp <= 0x7F) out += (char)cp;
+  else if (cp <= 0x7FF) { out += (char)(0xC0 | (cp >> 6)); out += (char)(0x80 | (cp & 0x3F)); }
+  else if (cp <= 0xFFFF) { out += (char)(0xE0 | (cp >> 12)); out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F)); }
+  else { out += (char)(0xF0 | (cp >> 18)); out += (char)(0x80 | ((cp >> 12) & 0x3F)); out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F)); }
+}
+
+bool jsonReadString(const String& body, int& p, String& out) {
+  if (p >= (int)body.length() || body[p++] != '"') return false;
+  out = "";
+  while (p < (int)body.length()) {
+    unsigned char c = (unsigned char)body[p++];
+    if (c == '"') return true;
+    if (c < 0x20) return false;
+    if (c != '\\') { out += (char)c; continue; }
+    if (p >= (int)body.length()) return false;
+    char esc = body[p++];
+    if (esc == '"' || esc == '\\' || esc == '/') out += esc;
+    else if (esc == 'b') out += '\b';
+    else if (esc == 'f') out += '\f';
+    else if (esc == 'n') out += '\n';
+    else if (esc == 'r') out += '\r';
+    else if (esc == 't') out += '\t';
+    else if (esc == 'u') {
+      if (p + 4 > (int)body.length()) return false;
+      uint32_t cp = 0;
+      for (int i = 0; i < 4; i++) { int h = jsonHex(body[p++]); if (h < 0) return false; cp = (cp << 4) | h; }
+      if (cp >= 0xD800 && cp <= 0xDBFF && p + 6 <= (int)body.length() && body[p] == '\\' && body[p + 1] == 'u') {
+        int q = p + 2;
+        uint16_t low = 0;
+        bool valid = true;
+        for (int i = 0; i < 4; i++) { int h = jsonHex(body[q++]); if (h < 0) { valid = false; break; } low = (low << 4) | h; }
+        if (valid && low >= 0xDC00 && low <= 0xDFFF) { cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00); p = q; }
+        else jsonAppendUtf8(out, 0xFFFD);
+      } else if (cp >= 0xDC00 && cp <= 0xDFFF) jsonAppendUtf8(out, 0xFFFD);
+      else jsonAppendUtf8(out, cp);
+    } else return false;
+  }
+  return false;
+}
+
+void jsonSkipValue(const String& body, int& p) {
+  if (p >= (int)body.length()) return;
+  if (body[p] == '"') { String ignored; jsonReadString(body, p, ignored); return; }
+  if (body[p] == '{' || body[p] == '[') {
+    int depth = 0;
+    bool inString = false, escaped = false;
+    while (p < (int)body.length()) {
+      char c = body[p++];
+      if (inString) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') inString = false; continue; }
+      if (c == '"') inString = true;
+      else if (c == '{' || c == '[') depth++;
+      else if (c == '}' || c == ']') { if (--depth == 0) return; }
+    }
+    return;
+  }
+  while (p < (int)body.length() && body[p] != ',' && body[p] != '}') p++;
+}
+
+bool jsonFindMember(const String& body, const char* key, int& valueAt) {
+  int p = body.indexOf('{');
+  if (p < 0) return false;
+  p++;
+  while (p < (int)body.length()) {
+    jsonSkipWs(body, p);
+    if (p >= (int)body.length() || body[p] == '}') return false;
+    String name;
+    if (!jsonReadString(body, p, name)) return false;
+    jsonSkipWs(body, p);
+    if (p >= (int)body.length() || body[p++] != ':') return false;
+    jsonSkipWs(body, p);
+    if (name == key) { valueAt = p; return true; }
+    jsonSkipValue(body, p);
+    jsonSkipWs(body, p);
+    if (p >= (int)body.length() || body[p] != ',') return false;
+    p++;
+  }
+  return false;
+}
+
+// Returns decoded strings and trimmed JSON text for booleans, numbers, arrays, and objects.
+String jsonValue(const String& body, const char* key) {
+  int p = 0;
+  if (!jsonFindMember(body, key, p)) return "";
+  if (p < (int)body.length() && body[p] == '"') { String value; return jsonReadString(body, p, value) ? value : ""; }
+  int start = p;
+  jsonSkipValue(body, p);
+  String value = body.substring(start, p);
+  value.trim();
+  return value;
+}
+bool jsonHas(const String& body, const char* key) { int p = 0; return jsonFindMember(body, key, p); }
 bool jsonBool(const String& body, const char* key) { String v = jsonValue(body, key); return v == "true" || v == "1"; }
 
 bool timeOk() { return time(nullptr) > 1700000000; }
@@ -981,7 +1081,8 @@ void handleLine(int i, const String& line) {
     Serial.printf("[*] strip %s online  model=%s fw=%s\n", mac.c_str(), s.model.c_str(), s.fw.c_str());
     // only the strip we just configured counts — every other strip re-dials after the hub rejoins Wi-Fi
     bool isTarget = provTarget.length() && mac.endsWith(provTarget);
-    if (isTarget && (provState == "waiting" || (provState == "error" && (provMsg == "no_dial" || provMsg == "still_setup")))) {
+    if (isTarget && (provState == "waiting" || (provState == "error" &&
+        (provMsg == "no_dial" || provMsg == "still_setup" || provMsg == "hub_tcp_no_client")))) {
       provState = "connected";
       provMsg = mac;
       addEvent("added", mac, 0, "");
@@ -1041,6 +1142,7 @@ void handleLine(int i, const String& line) {
 
 void acceptStrips() {
   WiFiClient n = stripServer.accept();
+  if (!n) n = stripServerAlt.accept();
   if (!n) return;
   for (int i = 0; i < MAX_STRIPS; i++) {
     if (!strips[i].used) {
@@ -1051,7 +1153,7 @@ void acceptStrips() {
       strips[i].lastRx = millis();
       n.setNoDelay(true);
       tcpKeepAlive(strips[i].c);
-      Serial.printf("[+] connection from %s\n", strips[i].ip.c_str());
+      Serial.printf("[+] connection from %s -> port %u\n", strips[i].ip.c_str(), strips[i].c.localPort());
       return;
     }
   }
@@ -1857,6 +1959,13 @@ ApiRes api(String path, const String& b) {
     stateDirty = true;
     return okRes();
   }
+  if (path == "unblock") {
+    String m = mac; m.toUpperCase();
+    if (m.length() == 12) setBlocked(m, false);
+    else cfg.putString("block", "");
+    stateDirty = true;
+    return okRes();
+  }
   if (path == "forget") {
     String m = mac; m.toUpperCase();
     if (m.length() != 12) return errRes("bad mac");
@@ -1976,7 +2085,7 @@ ApiRes api(String path, const String& b) {
     m.toUpperCase();
     strlcpy(r.mac, m.c_str(), sizeof r.mac);
     r.outlet = constrain(outlet, 0, 4);
-    r.metric = constrain(jsonValue(b, "metric").toInt(), 0, 2);
+    r.metric = constrain(jsonValue(b, "metric").toInt(), 0, 3);
     r.limit2 = jsonHas(b, "limit2") ? jsonValue(b, "limit2").toFloat() : 70;
     if (r.metric == 2) r.above = 1;
     if (r.metric != 2) r.above = jsonBool(b, "above");
@@ -2014,7 +2123,7 @@ ApiRes api(String path, const String& b) {
     float maxA = jsonValue(b, "max_a").toFloat();
     if (maxA < 0 || maxA > 16.0f) return errRes("max_a 0..16");
     strips[idx].ampX2[outlet - 1] = (uint8_t)round(maxA * 2.0f);
-    cfg.putBytes(("i" + strips[idx].mac).c_str(), strips[idx].ampX2, sizeof(strips[idx].ampX2));
+    cfg.putBytes(("x" + strips[idx].mac).c_str(), strips[idx].ampX2, sizeof(strips[idx].ampX2));
     refreshKnown(strips[idx].mac);
     stateDirty = true;
     return okRes();
@@ -2221,6 +2330,23 @@ void sseSend(const char* ev, const String& data) {
   }
 }
 
+// value of ?k= / &k= in a request line like "GET /events?u=..&t=.. HTTP/1.1" (no URL decoding needed: ids and tokens are plain)
+String queryArg(const String& line, const char* k) {
+  String key = String(k) + "=";
+  int q = line.indexOf('?');
+  if (q < 0) return "";
+  int sp = line.indexOf(' ', q);
+  String qs = line.substring(q + 1, sp < 0 ? line.length() : sp);
+  int i = 0;
+  while (i < (int)qs.length()) {
+    int amp = qs.indexOf('&', i);
+    if (amp < 0) amp = qs.length();
+    if (qs.substring(i, i + key.length()) == key) return qs.substring(i + key.length(), amp);
+    i = amp + 1;
+  }
+  return "";
+}
+
 void ssePump() {
   WiFiClient n = sseServer.accept();
   if (n) {
@@ -2238,14 +2364,19 @@ void ssePump() {
     if (!x.ready) {
       while (x.c.available() && x.req.length() < 1024) x.req += (char)x.c.read();
       if (x.req.indexOf("\r\n\r\n") >= 0) {
+        // v2.13.2: a shared user is matched first (exact u=/t= values) so it gets only its own strips,
+        // even when API_TOKEN is empty; before, an empty token made every SSE client the owner.
+        String line0 = x.req.substring(0, x.req.indexOf('\r'));
+        String qu = queryArg(line0, "u"), qt = queryArg(line0, "t");
         int matchedUser = -1;
-        for (int k = 0; k < userCount; k++) {
-          if (strlen(users[k].pw) && (x.req.indexOf(String("t=") + users[k].pw) >= 0 || (strlen(users[k].id) && x.req.indexOf(String("u=") + users[k].id) >= 0))) {
+        for (int k = 0; qt.length() && k < userCount; k++) {
+          if (strlen(users[k].pw) && qt == users[k].pw && (!qu.length() || qu == users[k].id)) {
             matchedUser = k;
             break;
           }
         }
-        bool ok = (matchedUser >= 0) || !strlen(API_TOKEN) || (x.req.indexOf(String("t=") + API_TOKEN) >= 0);
+        bool owner = matchedUser < 0 && (!strlen(API_TOKEN) || qt == API_TOKEN);
+        bool ok = owner || matchedUser >= 0;
         if (!ok || !x.req.startsWith("GET /events")) {
           x.c.print("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
           x.c.stop(); x = SseClient(); continue;
@@ -2495,6 +2626,8 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
   return reply.length() > 0;
 }
 
+// Same as FG Link / mttl_local.py and hub 2.10.1, which provisioned strips successfully:
+// ONE TCP session -> up:ip, up:connect, up:reboot:0
 bool setupSession(const String& hubIp, String& r) {
   WiFiClient c;
   if (!c.connect(IPAddress(192, 168, 1, 1), 30300, 5000)) { r = "no answer on 30300"; return false; }
@@ -2514,6 +2647,7 @@ bool setupSession(const String& hubIp, String& r) {
   Serial.printf("[prov] >> up:reboot:0  << %s\n", reply.c_str());
   delay(300);
   c.stop();
+  delay(3000);                       // let the strip reboot into station mode
   return true;
 }
 
@@ -2565,14 +2699,12 @@ void runProvision() {
     r = "join_failed";
   } else {
     delay(800);
-    // Same as the official app (FG Link) and mttl_local.py, which provisioned strips successfully:
-    // ONE TCP session -> up:ip, up:connect, up:reboot:0 (separate connections are not enough)
+    // one TCP session: up:ip, up:connect, up:reboot:0
     ok = setupSession(hubIp, r);
     if (!ok && r != "no answer on 30300") r = "strip_said:" + r;
-    if (ok) delay(3000);              // let the strip reboot into station mode
   }
   WiFi.disconnect();
-  delay(300);
+  delay(200);
   connectWiFi();
   if (ok) {
     provState = "waiting";            // success is reported only when the strip dials in (bootinfo)
@@ -2601,6 +2733,24 @@ bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < ms) { delay(500); Serial.print("."); }
   Serial.println();
   return WiFi.status() == WL_CONNECTED;
+}
+
+bool startStripListener() {
+  // Rebind after Wi-Fi changes; the old listening socket can remain stale across STA disconnects.
+  stripServer.end();
+  stripServerAlt.end();
+  sseServer.end();
+  stripServer.begin();
+  stripServer.setNoDelay(true);
+  stripServerAlt.begin();
+  stripServerAlt.setNoDelay(true);
+  sseServer.begin();
+  sseServer.setNoDelay(true);
+  if (webRoutesReady) web.begin();
+  stripListenerReady = (bool)stripServer && (bool)stripServerAlt;
+  if (stripListenerReady) Serial.printf("[tcp] strip listener listening on ports %u + %u\n", STRIP_PORT, STRIP_PORT_ALT);
+  else Serial.printf("[tcp] ERROR: failed to listen on port %u/%u\n", STRIP_PORT, STRIP_PORT_ALT);
+  return stripListenerReady;
 }
 
 // The home Wi-Fi is not reachable (router changed?): open "Fisha-Hub-XXXX" so the phone can give it the new network.
@@ -2657,6 +2807,8 @@ void connectWiFi() {
   for (int attempt = 0; attempt < 3; attempt++) {
     if (tryWiFi(secSsid, secWifi, 20000)) {
       Serial.printf("WiFi OK  IP=%s  RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      wifiWasConnected = true;
+      startStripListener();
       return;
     }
   }
@@ -2676,6 +2828,8 @@ void runWifiTest() {
   delay(300);
   if (tryWiFi(wifiTestSsid, wifiTestPass, 20000)) {
     saveWifi(wifiTestSsid, wifiTestPass);
+    wifiWasConnected = true;
+    startStripListener();
     wifiTestState = "ok";
     Serial.printf("[wifi] switched to %s\n", secSsid.c_str());
   } else {
@@ -2733,7 +2887,7 @@ void loadSecrets() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== Fisha Hub v2.11 — @ahmadalhelly ===");
+  Serial.println("\n=== Fisha Hub v" + String(FW_VERSION) + " — @ahmadalhelly ===");
   loadSecrets();
   loadEmqx();
   loadUsers();
@@ -2751,11 +2905,6 @@ void setup() {
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 
-  stripServer.begin();
-  stripServer.setNoDelay(true);
-  sseServer.begin();
-  sseServer.setNoDelay(true);
-
   const char* hk[] = {"X-Token", "X-User"};
   web.collectHeaders(hk, 2);
   web.on("/", HTTP_GET, handleRoot);
@@ -2766,6 +2915,7 @@ void setup() {
   web.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   web.onNotFound(handleOther);
   web.begin();
+  webRoutesReady = true;
 
   ArduinoOTA.setHostname(HOSTNAME);
   ArduinoOTA.setPassword(secOta.c_str());
@@ -2791,6 +2941,7 @@ void loop() {
   esp_task_wdt_reset();
   if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) { Serial.println("[hub] reboot requested"); delay(200); ESP.restart(); }
   if (WiFi.status() != WL_CONNECTED) {
+    wifiWasConnected = false;
     if (!wifiLostAt) wifiLostAt = millis();
     static uint32_t lastRecon = 0;
     if (millis() - lastRecon > 8000) {
@@ -2800,6 +2951,11 @@ void loop() {
     if (millis() - wifiLostAt > 600000) ESP.restart();
     delay(100);
     return;
+  }
+  if (!wifiWasConnected) {
+    wifiWasConnected = true;
+    Serial.println("[wifi] link restored; restarting listeners");
+    startStripListener();
   }
   wifiLostAt = 0;
   ArduinoOTA.handle();
@@ -2822,13 +2978,8 @@ void loop() {
   static uint32_t wifiReqAt = 0;
   if (wifiTestReq) { if (!wifiReqAt) wifiReqAt = millis(); else if (millis() - wifiReqAt > 1500) { wifiReqAt = 0; runWifiTest(); } }
   if (provState == "waiting" && millis() - provAt > 120000) {
-    Serial.println("[prov] the new strip never dialed the hub");
-    // did the strip keep its setup AP? then it never accepted the settings
-    bool stillSetup = false;
-    int n = WiFi.scanNetworks(false, false, false, 300);
-    for (int i = 0; i < n; i++) { String ss = WiFi.SSID(i); ss.toUpperCase(); if (ss.endsWith("_" + provTarget)) stillSetup = true; }
-    WiFi.scanDelete();
-    provFail(stillSetup ? "still_setup" : "no_dial");
+    Serial.printf("[prov] no strip TCP connection accepted on port %u/%u within 120s\n", STRIP_PORT, STRIP_PORT_ALT);
+    provFail(stripListenerReady ? "hub_tcp_no_client" : "hub_listener_unavailable");
   }
   delay(2);
 }
