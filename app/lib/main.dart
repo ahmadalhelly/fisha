@@ -213,7 +213,13 @@ class _ShellState extends State<Shell> {
         ];
         // the bar floats over the pages with rounded ends; each tab page pads its list and lifts its
         // add button by navInset/fabLift so nothing stays hidden under it
-        return Scaffold(
+        // back on another tab goes to Home first; back on Home leaves the app
+        return PopScope(
+          canPop: state.tab == 0,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) state.setTab(0);
+          },
+          child: Scaffold(
           extendBody: true,
           backgroundColor: C.bg,
           body: IndexedStack(index: state.tab, children: pages),
@@ -280,6 +286,7 @@ class _ShellState extends State<Shell> {
               ),
             ),
           ),
+        ),
         );
       },
     );

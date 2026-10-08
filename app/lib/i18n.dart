@@ -65,6 +65,7 @@ const Map<String, List<String>> _s = {
   'default_strip': ['مشترك {id}', 'Strip {id}'],
   'default_outlet': ['مخرج {n}', 'Outlet {n}'],
   'whole_strip': ['المشترك كله', 'Whole strip'],
+  'whole_room': ['الغرفة كلها', 'Whole room'],
   'sec': ['ث', 's'],
   'min': ['د', 'min'],
   'hour': ['س', 'h'],

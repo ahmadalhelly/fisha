@@ -49,6 +49,8 @@ class _AddStripScreenState extends State<AddStripScreen> {
   Timer? _tick;
   List<FoundStrip> _found = [];
   FoundStrip? _chosen;
+  int _scanRun = 0;
+  int _scanLeft = 60;
 
   @override
   void initState() {
@@ -58,34 +60,59 @@ class _AddStripScreenState extends State<AddStripScreen> {
 
   @override
   void dispose() {
+    _scanRun++;
     _tick?.cancel();
     s.removeListener(_onState);
     super.dispose();
   }
 
+  /// Keeps asking the hub to scan for up to 60 s: a strip that was just plugged in needs a while
+  /// before its setup Wi-Fi shows up, so one short scan usually comes back empty.
   Future<void> _scan() async {
-    setState(() => _step = _Step.scanning);
-    final r = await s.api('scan');
-    if (!mounted) return;
-    if (!r.ok) {
-      setState(() {
-        _step = _Step.error;
-        _error = r.error == 'unknown action' ? t('err_old_fw') : (r.error ?? t('err_failed'));
-      });
-      return;
-    }
-    final raw = r.data?['found'];
-    final list = <FoundStrip>[];
-    if (raw is List) {
-      for (final m in raw.whereType<Map<String, dynamic>>()) {
-        list.add(FoundStrip('${m['ssid']}', '${m['id']}', (m['rssi'] as num?)?.toInt() ?? -100, m['known'] == true));
+    final run = ++_scanRun;
+    final until = DateTime.now().add(const Duration(seconds: 60));
+    setState(() {
+      _step = _Step.scanning;
+      _scanLeft = 60;
+    });
+    var list = <FoundStrip>[];
+    while (mounted && run == _scanRun) {
+      final r = await s.api('scan');
+      if (!mounted || run != _scanRun) return;
+      if (!r.ok) {
+        if (r.error == 'unknown action') {
+          setState(() {
+            _step = _Step.error;
+            _error = t('err_old_fw');
+          });
+          return;
+        }
+      } else {
+        final raw = r.data?['found'];
+        list = <FoundStrip>[];
+        if (raw is List) {
+          for (final m in raw.whereType<Map<String, dynamic>>()) {
+            list.add(FoundStrip('${m['ssid']}', '${m['id']}', (m['rssi'] as num?)?.toInt() ?? -100, m['known'] == true));
+          }
+        }
+        if (list.isNotEmpty) break;
       }
+      final left = until.difference(DateTime.now()).inSeconds;
+      if (left <= 0) break;
+      setState(() => _scanLeft = left);
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
+    if (!mounted || run != _scanRun) return;
     list.sort((a, b) => b.rssi.compareTo(a.rssi));
     setState(() {
       _found = list;
       _step = _Step.pick;
     });
+  }
+
+  void _stopScan() {
+    _scanRun++;
+    setState(() => _step = _Step.intro);
   }
 
   Future<void> _start(FoundStrip f) async {
@@ -197,7 +224,11 @@ class _AddStripScreenState extends State<AddStripScreen> {
           ],
         ]);
       case _Step.scanning:
-        return _progress(_tr('الـ Hub بيدوّر على مشتركات في وضع الإعداد…', 'The hub is looking for strips in setup mode…'));
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _progress(_tr('الـ Hub بيدوّر على مشتركات في وضع الإعداد… ($_scanLeft ث)', 'The hub is looking for strips in setup mode… (${_scanLeft}s)')),
+          const SizedBox(height: 10),
+          TextButton(onPressed: _stopScan, child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        ]);
       case _Step.pick:
         return _pick();
       case _Step.sending:

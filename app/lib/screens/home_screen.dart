@@ -9,10 +9,12 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/strip_card.dart';
 import '../widgets/strip_mini.dart';
+import '../widgets/notion_icon_picker.dart';
 import 'add_strip_screen.dart';
 import 'automations_screen.dart';
 import 'events_screen.dart';
 import 'rooms_screen.dart';
+import 'schedules_screen.dart' show ScheduleEditor;
 import 'scenes_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -491,7 +493,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final roomW = rStrips.fold<double>(0.0, (sum, st) => sum + (st.online ? st.livePower : 0));
       final isCollapsed = _collapsedRooms.contains(room.id);
 
-      widgets.add(_roomHeader(room.name, roomW, rStrips.length, isCollapsed, () {
+      widgets.add(_roomHeader(room.name, roomW, rStrips.length, isCollapsed, room: room, strips: rStrips, onToggle: () {
         setState(() {
           if (isCollapsed) {
             _collapsedRooms.remove(room.id);
@@ -528,7 +530,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final isCollapsed = _collapsedRooms.contains('__unassigned__');
       final unassignedW = unassigned.fold<double>(0.0, (sum, st) => sum + (st.online ? st.livePower : 0));
 
-      widgets.add(_roomHeader(Tr.isAr ? 'بدون غرفة' : 'Unassigned', unassignedW, unassigned.length, isCollapsed, () {
+      widgets.add(_roomHeader(Tr.isAr ? 'بدون غرفة' : 'Unassigned', unassignedW, unassigned.length, isCollapsed, onToggle: () {
         setState(() {
           if (isCollapsed) {
             _collapsedRooms.remove('__unassigned__');
@@ -562,10 +564,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return widgets;
   }
 
-  Widget _roomHeader(String name, double totalW, int count, bool isCollapsed, VoidCallback onToggle) {
+  Widget _roomHeader(String name, double totalW, int count, bool isCollapsed, {required VoidCallback onToggle, Room? room, List<Strip> strips = const []}) {
+    final online = strips.where((st) => st.online).toList();
+    final anyOn = online.any((st) => st.onCount > 0);
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onToggle,
+      onLongPress: room == null ? null : () => _roomSheet(room),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -578,6 +583,10 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: Row(children: [
+              if (room != null && room.icon.isNotEmpty) ...[
+                FishaIcon(icon: room.icon, size: 18),
+                const SizedBox(width: 7),
+              ],
               Flexible(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
               const SizedBox(width: 8),
               Container(
@@ -597,7 +606,131 @@ class _HomeScreenState extends State<HomeScreen> {
               Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
             ],
           ),
+          if (room != null) ...[
+            const SizedBox(width: 6),
+            // whole-room power: off if anything in the room is on, otherwise on
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: anyOn ? (Tr.isAr ? 'اقفل الغرفة' : 'Room off') : (Tr.isAr ? 'شغّل الغرفة' : 'Room on'),
+              onPressed: online.isEmpty ? null : () => _roomPower(online, !anyOn),
+              icon: Icon(Icons.power_settings_new, size: 20, color: anyOn ? C.accent : C.muted),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _roomSheet(room),
+              icon: Icon(Icons.more_vert, size: 20, color: C.muted),
+            ),
+          ],
         ]),
+      ),
+    );
+  }
+
+  Future<void> _roomPower(List<Strip> strips, bool on) async {
+    for (final st in strips) {
+      if (!mounted) return;
+      if (on) {
+        await guardedAllOn(context, s, st);
+      } else {
+        await guardedAllOff(context, s, st);
+      }
+    }
+  }
+
+  /// Everything a strip offers, applied to every strip in the room.
+  void _roomSheet(Room room) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: C.surface,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => ListenableBuilder(
+        listenable: s,
+        builder: (ctx, _) {
+          final r = s.rooms.firstWhere((x) => x.id == room.id, orElse: () => room);
+          final strips = s.strips.where((st) => r.stripMacs.contains(st.mac) && st.online).toList();
+          final v2 = s.hubV2 && strips.isNotEmpty;
+          Widget tile(IconData icon, String title, String? sub, VoidCallback? onTap) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                enabled: onTap != null,
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(icon, color: C.accent, size: 20),
+                ),
+                title: Text(title),
+                subtitle: sub == null ? null : Text(sub, style: TextStyle(color: C.muted, fontSize: 12)),
+                trailing: Icon(Icons.chevron_right, color: C.faint),
+                onTap: onTap,
+              );
+          return SafeArea(
+            child: ListView(shrinkWrap: true, padding: const EdgeInsets.fromLTRB(18, 0, 18, 18), children: [
+              Row(children: [
+                if (r.icon.isNotEmpty) ...[FishaIcon(icon: r.icon, size: 24), const SizedBox(width: 10)],
+                Expanded(child: Text(r.name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700))),
+              ]),
+              Text(Tr.isAr ? '${strips.length} مشترك متصل في الغرفة' : '${strips.length} strips online in this room', style: TextStyle(color: C.muted)),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: C.accent, foregroundColor: C.onAccent),
+                    onPressed: strips.isEmpty ? null : () => _roomPower(strips, true),
+                    icon: const Icon(Icons.power_settings_new, size: 18),
+                    label: Text(Tr.isAr ? 'شغّل الكل' : 'All on'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: strips.isEmpty ? null : () => _roomPower(strips, false),
+                    icon: const Icon(Icons.power_off_outlined, size: 18),
+                    label: Text(Tr.isAr ? 'اقفل الكل' : 'All off'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              tile(Icons.timer_outlined, Tr.isAr ? 'اقفل الغرفة بعد مدة' : 'Turn the room off after…', null, !v2 ? null : () async {
+                final min = await showDialog<int>(
+                  context: ctx,
+                  builder: (d) => SimpleDialog(
+                    backgroundColor: C.surface,
+                    title: Text(Tr.isAr ? 'اقفل الغرفة بعد' : 'Turn the room off after'),
+                    children: [
+                      for (final m in const [15, 30, 60, 120, 240])
+                        SimpleDialogOption(
+                          onPressed: () => Navigator.pop(d, m),
+                          child: Text(Tr.isAr ? (m < 60 ? '$m دقيقة' : '${m ~/ 60} ساعة') : (m < 60 ? '$m min' : '${m ~/ 60} h')),
+                        ),
+                    ],
+                  ),
+                );
+                if (min == null) return;
+                for (final st in strips) {
+                  await s.addTimer(st.mac, 0, 'off', delayS: min * 60);
+                }
+              }),
+              tile(Icons.schedule, Tr.isAr ? 'جدولة للغرفة' : 'Schedule for the room', Tr.isAr ? 'تشغيل أو إيقاف كل مشتركات الغرفة في ميعاد' : 'Switch every strip in the room at a set time', !v2 ? null : () {
+                Navigator.pop(ctx);
+                _push(ScheduleEditor(state: s, presetRoom: r.id));
+              }),
+              tile(Icons.bolt, Tr.isAr ? 'أتمتة للغرفة' : 'Automation for the room', Tr.isAr ? 'نفس القاعدة على كل مشترك في الغرفة' : 'The same rule on every strip in the room', !v2 ? null : () {
+                Navigator.pop(ctx);
+                _push(AutomationEditor(state: s, presetRoom: r.id));
+              }),
+              tile(Icons.category_outlined, Tr.isAr ? 'أيقونة الغرفة' : 'Room icon', null, () => showNotionIconPicker(
+                    context: ctx,
+                    currentIcon: r.icon,
+                    onSelected: (ico) => s.setRoomIcon(r.id, ico),
+                  )),
+              tile(Icons.edit_outlined, t('rename'), null, () async {
+                final v = await askName(ctx, Tr.isAr ? 'اسم الغرفة' : 'Room name', r.name);
+                if (v != null && v.trim().isNotEmpty) await s.renameRoom(r.id, v.trim());
+              }),
+            ]),
+          );
+        },
       ),
     );
   }

@@ -142,7 +142,8 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
 class ScheduleEditor extends StatefulWidget {
   final AppState state;
   final Schedule? initial;
-  const ScheduleEditor({super.key, required this.state, this.initial});
+  final String? presetRoom;
+  const ScheduleEditor({super.key, required this.state, this.initial, this.presetRoom});
 
   @override
   State<ScheduleEditor> createState() => _ScheduleEditorState();
@@ -156,6 +157,12 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
   // new schedules can be an on + off pair ("تشغيل وإيقاف")
   int _mode = 0; // 0 = off, 1 = on, 2 = on then off
   TimeOfDay _offAt = const TimeOfDay(hour: 23, minute: 0);
+  String? _roomId;
+
+  List<String> get _roomMacs {
+    final r = s.rooms.where((x) => x.id == _roomId).firstOrNull;
+    return r == null ? const [] : r.stripMacs.where((m) => s.allStrips.any((st) => st.mac == m)).toList();
+  }
 
   @override
   void initState() {
@@ -170,6 +177,13 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
       sc.hh = 18;
       sc.on = true;
       _mode = 2;
+      _roomId = widget.presetRoom;
+      if (_roomMacs.isNotEmpty) {
+        sc.mac = _roomMacs.first;
+        sc.outlet = 0;
+      } else {
+        _roomId = null;
+      }
     }
   }
 
@@ -187,14 +201,19 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
     sc.label = _label.text.replaceAll('"', '').trim();
     setState(() => _saving = true);
     sc.on = _mode != 0;
-    var ok = await s.saveSchedule(sc);
-    if (ok && _mode == 2 && widget.initial == null) {
-      final off = Schedule.fromJson(sc.toJson())
-        ..sid = 0
-        ..on = false
-        ..hh = _offAt.hour
-        ..mm = _offAt.minute;
-      ok = await s.saveSchedule(off);
+    var ok = true;
+    for (final mac in _roomId != null ? _roomMacs : [sc.mac]) {
+      final one = Schedule.fromJson(sc.toJson())..mac = mac;
+      if (_roomId != null && one.label.isEmpty) one.label = s.rooms.firstWhere((r) => r.id == _roomId).name;
+      ok = await s.saveSchedule(one) && ok;
+      if (ok && _mode == 2 && widget.initial == null) {
+        final off = Schedule.fromJson(one.toJson())
+          ..sid = 0
+          ..on = false
+          ..hh = _offAt.hour
+          ..mm = _offAt.minute;
+        ok = await s.saveSchedule(off) && ok;
+      }
     }
     if (!mounted) return;
     setState(() => _saving = false);
@@ -216,7 +235,15 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
         targets.add(MapEntry('${st.mac}|${o.n}', '${s.stripName(st)} · ${s.outletName(st, o.n)}'));
       }
     }
-    final key = '${sc.mac}|${sc.outlet}';
+    // a whole room is saved as one rule per strip in it
+    if (widget.initial == null) {
+      for (final r in s.rooms) {
+        if (r.stripMacs.any((m) => s.allStrips.any((st) => st.mac == m))) {
+          targets.insert(0, MapEntry('room:${r.id}|0', '${r.name} · ${t('whole_room')}'));
+        }
+      }
+    }
+    final key = _roomId != null ? 'room:$_roomId|0' : '${sc.mac}|${sc.outlet}';
     final weekly = sc.days != 0;
     return Scaffold(
       backgroundColor: C.bg,
@@ -293,6 +320,17 @@ class _ScheduleEditorState extends State<ScheduleEditor> {
               items: [for (final e in targets) DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))],
               onChanged: (v) {
                 if (v == null) return;
+                if (v.startsWith('room:')) {
+                  final id = v.substring(5).split('|').first;
+                  final r = s.rooms.firstWhere((x) => x.id == id);
+                  setState(() {
+                    _roomId = id;
+                    sc.mac = r.stripMacs.firstWhere((m) => s.allStrips.any((st) => st.mac == m));
+                    sc.outlet = 0;
+                  });
+                  return;
+                }
+                _roomId = null;
                 final parts = v.split('|');
                 setState(() {
                   sc.mac = parts[0];

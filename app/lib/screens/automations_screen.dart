@@ -296,7 +296,8 @@ class AutomationEditor extends StatefulWidget {
   final Automation? initial;
   final String? presetMac;
   final int? presetOutlet;
-  const AutomationEditor({super.key, required this.state, this.initial, this.presetMac, this.presetOutlet});
+  final String? presetRoom;
+  const AutomationEditor({super.key, required this.state, this.initial, this.presetMac, this.presetOutlet, this.presetRoom});
 
   @override
   State<AutomationEditor> createState() => _AutomationEditorState();
@@ -307,6 +308,12 @@ class _AutomationEditorState extends State<AutomationEditor> {
   late Automation a;
   late final TextEditingController _label, _watts, _limit2;
   bool _saving = false;
+  String? _roomId;
+
+  List<String> get _roomMacs {
+    final r = s.rooms.where((x) => x.id == _roomId).firstOrNull;
+    return r == null ? const [] : r.stripMacs.where((m) => s.allStrips.any((st) => st.mac == m)).toList();
+  }
 
   @override
   void initState() {
@@ -324,6 +331,15 @@ class _AutomationEditorState extends State<AutomationEditor> {
             metric: 0,
             limit2: 60,
           );
+    if (i == null && widget.presetRoom != null) {
+      _roomId = widget.presetRoom;
+      if (_roomMacs.isNotEmpty) {
+        a.mac = _roomMacs.first;
+        a.outlet = 0;
+      } else {
+        _roomId = null;
+      }
+    }
     _label = TextEditingController(text: a.label);
     _watts = TextEditingController(text: a.watts.toStringAsFixed(0));
     _limit2 = TextEditingController(text: a.limit2.toStringAsFixed(0));
@@ -343,7 +359,12 @@ class _AutomationEditorState extends State<AutomationEditor> {
     a.limit2 = double.tryParse(_limit2.text.trim()) ?? a.limit2;
     if (a.isBoth) a.above = true;
     setState(() => _saving = true);
-    final ok = await s.saveAutomation(a);
+    var ok = true;
+    for (final mac in _roomId != null ? _roomMacs : [a.mac]) {
+      final one = Automation.fromJson(a.toJson())..mac = mac;
+      if (_roomId != null && one.label.isEmpty) one.label = s.rooms.firstWhere((r) => r.id == _roomId).name;
+      ok = await s.saveAutomation(one) && ok;
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     if (ok) Navigator.of(context).pop();
@@ -364,7 +385,15 @@ class _AutomationEditorState extends State<AutomationEditor> {
         targets.add(MapEntry('${st.mac}|${o.n}', '${s.stripName(st)} · ${s.outletName(st, o.n)}'));
       }
     }
-    final key = '${a.mac}|${a.outlet}';
+    // a whole room is saved as one rule per strip in it
+    if (widget.initial == null) {
+      for (final r in s.rooms) {
+        if (r.stripMacs.any((m) => s.allStrips.any((st) => st.mac == m))) {
+          targets.insert(0, MapEntry('room:${r.id}|0', '${r.name} · ${t('whole_room')}'));
+        }
+      }
+    }
+    final key = _roomId != null ? 'room:$_roomId|0' : '${a.mac}|${a.outlet}';
     return Scaffold(
       backgroundColor: C.bg,
       appBar: AppBar(
@@ -383,6 +412,17 @@ class _AutomationEditorState extends State<AutomationEditor> {
               items: [for (final e in targets) DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))],
               onChanged: (v) {
                 if (v == null) return;
+                if (v.startsWith('room:')) {
+                  final id = v.substring(5).split('|').first;
+                  final r = s.rooms.firstWhere((x) => x.id == id);
+                  setState(() {
+                    _roomId = id;
+                    a.mac = r.stripMacs.firstWhere((m) => s.allStrips.any((st) => st.mac == m));
+                    a.outlet = 0;
+                  });
+                  return;
+                }
+                _roomId = null;
                 final p = v.split('|');
                 setState(() {
                   a.mac = p[0];
