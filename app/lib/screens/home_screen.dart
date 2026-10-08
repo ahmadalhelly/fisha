@@ -56,7 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: C.bg,
+      backgroundColor: C.tabBg,
       floatingActionButton: Padding(
         padding: EdgeInsets.only(bottom: fabLift(context)),
         child: SizedBox(
@@ -372,7 +372,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
   Widget _quick(IconData icon, String label, VoidCallback onTap, {int badge = 0}) => Material(
-        color: C.surface,
+        color: C.card,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
@@ -574,9 +574,9 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: C.surface,
+          color: C.card,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: C.border),
+          border: Border.all(color: C.cardEdge),
         ),
         child: Row(children: [
           Icon(isCollapsed ? Icons.chevron_right : Icons.expand_more, size: 20, color: C.muted),

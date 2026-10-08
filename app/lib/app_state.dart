@@ -19,7 +19,7 @@ enum ViewMode { list, grid }
 
 enum SortMode { manual, power, name, status }
 
-enum ThemePref { system, dark, light, graphite, saffron }
+enum ThemePref { system, dark, light, graphite, saffron, midnight, pearl }
 
 enum LangPref { system, ar, en }
 

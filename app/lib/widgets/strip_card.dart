@@ -230,10 +230,10 @@ class StripCard extends StatelessWidget {
       opacity: online ? 1 : 0.6,
       child: Container(
         decoration: BoxDecoration(
-          color: C.surface,
+          color: C.card,
           borderRadius: BorderRadius.circular(26),
           border: Border.all(
-            color: online && s.onCount > 0 ? C.accent.withValues(alpha: C.dark ? 0.65 : 0.5) : C.border,
+            color: online && s.onCount > 0 ? C.accent.withValues(alpha: C.dark ? 0.65 : 0.5) : C.cardEdge,
             width: online && s.onCount > 0 ? 1.5 : 1.0,
           ),
           boxShadow: online && s.onCount > 0
@@ -375,9 +375,9 @@ class StripCard extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: C.dark ? [C.surface2, C.surface] : [C.surface, C.surface2],
+                colors: C.glass ? [C.well, C.well] : (C.dark ? [C.surface2, C.surface] : [C.surface, C.surface2]),
               ),
-              border: Border.all(color: C.border),
+              border: Border.all(color: C.cardEdge),
             ),
             child: Column(children: [
               Row(children: [
@@ -626,7 +626,17 @@ class _SocketPainter extends CustomPainter {
       ..strokeWidth = 1
       ..color = innerOn ? ringColor.withValues(alpha: 0.6) : C.border);
     
-    final holeColor = innerOn ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? C.bg : C.faint);
+    // sunken look: the face darkens toward its rim, like a socket set into the strip
+    canvas.drawCircle(
+      c,
+      face,
+      Paint()
+        ..shader = RadialGradient(
+          stops: const [0.68, 1.0],
+          colors: [const Color(0x00000000), Color.fromRGBO(0, 0, 0, dark ? 0.38 : 0.16)],
+        ).createShader(Rect.fromCircle(center: c, radius: face)),
+    );
+    final holeColor = innerOn ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? const Color(0xFF05080E) : C.faint);
     
     if (isMaster) {
       final iconColor = mixed ? C.accent : holeColor;

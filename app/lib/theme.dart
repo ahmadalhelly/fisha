@@ -29,13 +29,26 @@ class C {
   static Color accent2 = const Color(0xFF38BDF8);
   static Color warn = const Color(0xFFFFB547);
 
+  // glass themes: cards are see-through over a soft colour wash behind the main tabs
+  static bool glass = false;
+  static Color card = const Color(0xFF0E1628);
+  static Color cardEdge = const Color(0xFF1F2D48);
+  static Color well = const Color(0xFF16213A);
+  static List<Color> wash = const [];
+
+  /// Background for the four main tabs: clear on glass themes so the wash shows through.
+  static Color get tabBg => glass ? Colors.transparent : bg;
+
   static String themeId = 'dark';
   static void use(bool isDark) => useId(isDark ? 'dark' : 'light');
 
-  /// dark / light / graphite (in between) / saffron (warm light with a saffron tint)
+  /// dark / light / graphite (in between) / saffron (warm light with a saffron tint) /
+  /// midnight (dark glass) / pearl (light glass)
   static void useId(String id) {
     themeId = id;
-    dark = id == 'dark' || id == 'graphite';
+    dark = id == 'dark' || id == 'graphite' || id == 'midnight';
+    glass = id == 'midnight' || id == 'pearl';
+    wash = const [];
     switch (id) {
       case 'dark':
         bg = const Color(0xFF070D19);
@@ -141,9 +154,105 @@ class C {
         accent2 = const Color(0xFFB4532A);
         warn = const Color(0xFFB45309);
         break;
+      case 'midnight':
+        bg = const Color(0xFF070B12);
+        surface = const Color(0xFF111A27);
+        surface2 = const Color(0xFF182334);
+        tile = const Color(0xFF121B29);
+        border = const Color(0x24A0C8E6);
+        nav = const Color(0xFF0B1220);
+        text = const Color(0xFFE7F0F7);
+        textSoft = const Color(0xFFC3D0DD);
+        muted = const Color(0xFF8796A6);
+        faint = const Color(0xFF4B5868);
+        accent = const Color(0xFF3EE0C0);
+        accentBg = const Color(0x243EE0C0);
+        tileOn = const Color(0x1F3EE0C0);
+        tileOnBorder = const Color(0xFF1F8C77);
+        onAccent = const Color(0xFF03221C);
+        switchOff = const Color(0xFF2A3648);
+        miniOff = const Color(0x14FFFFFF);
+        green = const Color(0xFF3DDC97);
+        greenBg = const Color(0xFF0E2A20);
+        greenText = const Color(0xFF7BE6B7);
+        blue = const Color(0xFF38BDF8);
+        danger = const Color(0xFFFF7A59);
+        accent2 = const Color(0xFF8B7CFF);
+        warn = const Color(0xFFFFB547);
+        wash = const [Color(0xFF0F6B78), Color(0xFF3A2A8C), Color(0xFF0C4F43)];
+        break;
+      case 'pearl':
+        bg = const Color(0xFFEEF1F7);
+        surface = const Color(0xFFFFFFFF);
+        surface2 = const Color(0xFFE9EEF6);
+        tile = const Color(0xFFF6F8FC);
+        border = const Color(0xFFD5DCE8);
+        nav = const Color(0xFFFFFFFF);
+        text = const Color(0xFF101521);
+        textSoft = const Color(0xFF2C3446);
+        muted = const Color(0xFF5F6779);
+        faint = const Color(0xFF9CA4B5);
+        accent = const Color(0xFF0A84FF);
+        accentBg = const Color(0xFFDCEBFF);
+        tileOn = const Color(0xFFE6F1FF);
+        tileOnBorder = const Color(0xFF8DBEFF);
+        onAccent = const Color(0xFFFFFFFF);
+        switchOff = const Color(0xFFC9D1DE);
+        miniOff = const Color(0x8CFFFFFF);
+        green = const Color(0xFF1E9E5A);
+        greenBg = const Color(0xFFE0F5EB);
+        greenText = const Color(0xFF13804A);
+        blue = const Color(0xFF0A84FF);
+        danger = const Color(0xFFE5484D);
+        accent2 = const Color(0xFF7C5CFF);
+        warn = const Color(0xFFD97706);
+        wash = const [Color(0xFF9CC8FF), Color(0xFFD6B8FF), Color(0xFFA8F0D0)];
+        break;
       default:
         useId('dark');
+        return;
     }
+    // see-through cards on glass themes, solid ones everywhere else
+    card = switch (id) {
+      'midnight' => const Color(0x7A16202E),
+      'pearl' => const Color(0x8CFFFFFF),
+      _ => surface,
+    };
+    cardEdge = switch (id) {
+      'midnight' => const Color(0x24A0C8E6),
+      'pearl' => const Color(0x99FFFFFF),
+      _ => border,
+    };
+    well = switch (id) {
+      'midnight' => const Color(0x38000000),
+      'pearl' => const Color(0x47FFFFFF),
+      _ => surface2,
+    };
+  }
+}
+
+/// The soft colour wash glass themes paint behind the main tabs (three blurred blobs).
+class GlassWash extends StatelessWidget {
+  final Widget child;
+  const GlassWash({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!C.glass || C.wash.length < 3) return child;
+    Widget blob(Alignment a, Color c, double r) => Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(center: a, radius: r, colors: [c.withValues(alpha: C.dark ? 0.55 : 0.75), c.withValues(alpha: 0)]),
+            ),
+          ),
+        );
+    return Stack(children: [
+      Positioned.fill(child: ColoredBox(color: C.bg)),
+      blob(const Alignment(-0.9, -0.95), C.wash[0], 0.9),
+      blob(const Alignment(1.0, 0.1), C.wash[1], 0.8),
+      blob(const Alignment(-0.7, 1.0), C.wash[2], 0.75),
+      Positioned.fill(child: child),
+    ]);
   }
 }
 
@@ -202,9 +311,9 @@ ThemeData buildTheme() {
 }
 
 BoxDecoration cardBox({double radius = 22, Color? color, Color? border}) => BoxDecoration(
-      color: color ?? C.surface,
+      color: color ?? C.card,
       borderRadius: BorderRadius.circular(radius),
-      border: Border.all(color: border ?? C.border),
+      border: Border.all(color: border ?? C.cardEdge),
     );
 
 Color voltColor(double volts) {

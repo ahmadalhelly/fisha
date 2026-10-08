@@ -123,15 +123,17 @@ class SettingsScreen extends StatelessWidget {
               _group(t('sec_look'), [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 14, 10, 8),
-                  child: Row(children: [
+                  child: Wrap(alignment: WrapAlignment.center, runSpacing: 10, children: [
                     for (final (p, label, a, b) in [
                       (ThemePref.system, t('th_system'), const Color(0xFF070D19), const Color(0xFFF1F6FA)),
                       (ThemePref.dark, t('th_dark'), const Color(0xFF070D19), const Color(0xFF2EE6B0)),
                       (ThemePref.graphite, _tr('جرافيت', 'Graphite'), const Color(0xFF25292F), const Color(0xFF4FD8B8)),
                       (ThemePref.light, t('th_light'), const Color(0xFFF1F6FA), const Color(0xFF079E7D)),
                       (ThemePref.saffron, _tr('زعفران', 'Saffron'), const Color(0xFFF8F1E4), const Color(0xFFC27803)),
+                      (ThemePref.midnight, _tr('زجاج داكن', 'Midnight'), const Color(0xFF0F6B78), const Color(0xFF3EE0C0)),
+                      (ThemePref.pearl, _tr('زجاج فاتح', 'Pearl'), const Color(0xFFD6B8FF), const Color(0xFF0A84FF)),
                     ])
-                      Expanded(child: _swatch(label, a, b, st.themePref == p, () => st.setThemePref(p))),
+                      SizedBox(width: 74, child: _swatch(label, a, b, st.themePref == p, () => st.setThemePref(p))),
                   ]),
                 ),
                 Padding(

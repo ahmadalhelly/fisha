@@ -52,7 +52,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
         if (s.tab == 1 && _lastTab != 1) WidgetsBinding.instance.addPostFrameCallback((_) => _load());
         _lastTab = s.tab;
         return Scaffold(
-          backgroundColor: C.bg,
+          backgroundColor: C.tabBg,
           floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
               ? Padding(
                   padding: EdgeInsets.only(bottom: fabLift(context)),
@@ -95,8 +95,8 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
 
   Widget _card(Schedule sc) {
     return Material(
-      color: C.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.border)),
+      color: C.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.cardEdge)),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () => _edit(sc),

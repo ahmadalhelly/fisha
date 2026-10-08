@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -78,6 +80,10 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
         return 'graphite';
       case ThemePref.saffron:
         return 'saffron';
+      case ThemePref.midnight:
+        return 'midnight';
+      case ThemePref.pearl:
+        return 'pearl';
       case ThemePref.system:
         return WidgetsBinding.instance.platformDispatcher.platformBrightness == Brightness.dark ? 'dark' : 'light';
     }
@@ -222,16 +228,16 @@ class _ShellState extends State<Shell> {
           child: Scaffold(
           extendBody: true,
           backgroundColor: C.bg,
-          body: IndexedStack(index: state.tab, children: pages),
+          body: GlassWash(child: IndexedStack(index: state.tab, children: pages)),
           bottomNavigationBar: SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(22, 0, 22, 14),
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 2),
                 decoration: BoxDecoration(
-                  color: C.nav.withValues(alpha: C.dark ? 0.88 : 0.92),
+                  color: C.glass ? C.card : C.nav.withValues(alpha: C.dark ? 0.88 : 0.92),
                   borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: C.border.withValues(alpha: 0.8)),
+                  border: Border.all(color: C.glass ? C.cardEdge : C.border.withValues(alpha: 0.8)),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: C.dark ? 0.35 : 0.08),
@@ -242,6 +248,7 @@ class _ShellState extends State<Shell> {
                   ],
                 ),
                 clipBehavior: Clip.antiAlias,
+                child: _NavGlass(
                 child: NavigationBarTheme(
                   data: NavigationBarThemeData(
                     height: 60,
@@ -283,6 +290,7 @@ class _ShellState extends State<Shell> {
                     ],
                   ),
                 ),
+                ),
               ),
             ),
           ),
@@ -291,4 +299,14 @@ class _ShellState extends State<Shell> {
       },
     );
   }
+}
+
+/// Frosts whatever scrolls under the bottom bar on glass themes.
+class _NavGlass extends StatelessWidget {
+  final Widget child;
+  const _NavGlass({required this.child});
+
+  @override
+  Widget build(BuildContext context) =>
+      C.glass ? BackdropFilter(filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24), child: child) : child;
 }

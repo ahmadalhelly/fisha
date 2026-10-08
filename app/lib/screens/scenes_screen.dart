@@ -139,8 +139,8 @@ class _ScenesScreenState extends State<ScenesScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Material(
-                color: C.surface,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.border)),
+                color: C.card,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.cardEdge)),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(20),
                   onTap: _running == null ? () => _run(sc) : null,
