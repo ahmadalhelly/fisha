@@ -5,6 +5,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart' show timerText, timerIcon, guardedSwitch;
 import 'automations_screen.dart' show AutomationEditor;
 
@@ -48,7 +49,49 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                   final v = await askName(ctx, t('strip_name'), state.stripName(s));
                   if (v != null) state.rename(s, 0, v);
                 }),
-                _tile(Icons.category_outlined, Tr.isAr ? 'أيقونة المشترك' : 'Strip icon', state.stripIcon(s.mac).isEmpty ? (Tr.isAr ? 'بدون أيقونة' : 'None') : state.stripIcon(s.mac), () => _pickIconDialog(ctx, (ico) => state.setStripIcon(s.mac, ico))),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+                    child: Icon(Icons.category_outlined, color: C.accent, size: 20),
+                  ),
+                  title: Text(Tr.isAr ? 'أيقونة المشترك' : 'Strip icon'),
+                  subtitle: Text(
+                    state.stripIcon(s.mac).isEmpty
+                        ? (Tr.isAr ? 'بدون أيقونة' : 'None')
+                        : (state.stripIcon(s.mac).startsWith('icon:')
+                            ? state.stripIcon(s.mac).substring(5)
+                            : state.stripIcon(s.mac)),
+                    style: TextStyle(color: C.muted, fontSize: 12),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (state.stripIcon(s.mac).isNotEmpty) ...[
+                        Container(
+                          width: 34,
+                          height: 34,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: C.surface2,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: C.border),
+                          ),
+                          child: FishaIcon(icon: state.stripIcon(s.mac), size: 18),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Icon(Icons.chevron_right, color: C.faint),
+                    ],
+                  ),
+                  onTap: () => showNotionIconPicker(
+                    context: ctx,
+                    currentIcon: state.stripIcon(s.mac),
+                    onSelected: (ico) => state.setStripIcon(s.mac, ico),
+                  ),
+                ),
                 _tile(Icons.meeting_room_outlined, Tr.isAr ? 'الغرفة' : 'Room', state.roomForStrip(s.mac)?.name ?? (Tr.isAr ? 'بدون غرفة' : 'Unassigned'), () => _pickRoomDialog(ctx, state, s.mac)),
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
@@ -82,6 +125,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _info(Tr.isAr ? 'متصل من' : 'Connected since', s.online && s.upS != null ? formatHumanDuration(s.upS!) : '—'),
                 _info(t('fw'), s.fw.isEmpty ? '—' : s.fw),
                 _info(t('voltage'), s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
+                _info(Tr.isAr ? 'التيار الكلي' : 'Total current', s.online && s.voltage != null && s.voltage! > 0 ? '${(s.livePower / s.voltage!).toStringAsFixed(2)} A' : '—'),
                 _info(t('rssi'), s.rssi == null ? '—' : '${s.rssi} dBm'),
                 if (state.showMac) _info('MAC', s.mac),
                 Divider(color: C.border, height: 24),
@@ -154,47 +198,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
                 }),
-                _tile(Icons.category_outlined, Tr.isAr ? 'أيقونة المخرج' : 'Outlet icon', state.outletIcon(s.mac, n).isEmpty ? (Tr.isAr ? 'بدون أيقونة' : 'None') : state.outletIcon(s.mac, n), () => _pickIconDialog(ctx, (ico) => state.setOutletIcon(s.mac, n, ico))),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: cardBox(radius: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.electric_meter_outlined, color: o.ampLimit > 0 ? C.warn : C.muted, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              Tr.isAr ? 'حد التيار (أمبير)' : 'Current limit (A)',
-                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                            ),
-                          ),
-                          Text(
-                            o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
-                            style: mono(14, color: o.ampLimit > 0 ? C.accent : C.muted),
-                          ),
-                        ],
-                      ),
-                      Slider(
-                        value: o.ampLimit.clamp(0.0, 16.0),
-                        min: 0.0,
-                        max: 16.0,
-                        activeColor: C.accent,
-                        label: o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
-                        onChanged: v2 ? (v) => state.setOutletAmpLimit(s.mac, n, (v * 2).round() / 2) : null,
-                      ),
-                      Text(
-                        Tr.isAr
-                            ? (o.ampLimit <= 0 ? 'لا يوجد حد أقصى للتيار لهذا المخرج' : 'يفصل المخرج فور تجاوز ${o.ampLimit.toStringAsFixed(1)} أمبير لحماية الأجهزة')
-                            : (o.ampLimit <= 0 ? 'No current limit set' : 'Trips outlet if current exceeds ${o.ampLimit.toStringAsFixed(1)} A'),
-                        style: TextStyle(color: C.muted, fontSize: 11),
-                      ),
-                    ],
-                  ),
-                ),
+
                 const SizedBox(height: 8),
                 _switchTile(Icons.shield_outlined, t('protect'), t('protect_sub'), o.protected, v2,
                     (v) => state.setProtected(s, n, v)),
@@ -482,106 +486,16 @@ Future<void> _pickRoomDialog(BuildContext ctx, AppState state, String mac) async
 /// The icon next to a strip or outlet name in its sheet: tap it to pick another one.
 Widget _iconButton(BuildContext ctx, String icon, ValueChanged<String> onSelected) => InkWell(
       borderRadius: BorderRadius.circular(14),
-      onTap: () => _pickIconDialog(ctx, onSelected),
+      onTap: () => _pickIconDialog(ctx, onSelected, icon),
       child: Container(
         width: 48,
         height: 48,
         alignment: Alignment.center,
         decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(14), border: Border.all(color: C.border)),
-        child: icon.isEmpty ? Icon(Icons.add_reaction_outlined, color: C.muted) : Text(icon, style: const TextStyle(fontSize: 24)),
+        child: icon.isEmpty ? Icon(Icons.add_reaction_outlined, color: C.muted) : FishaIcon(icon: icon, size: 24),
       ),
     );
 
-Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected) async {
-  final customCtrl = TextEditingController();
-  const icons = [
-    '⚡', '🔌', '🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺',
-    '🖥️', '🎵', '🖨️', '🔊', '🔋', '🏠', '🏢', '🚿', '🧹', '🍽️', '⏰', '🔒', '📶', '📷', '📽️', '🕹️', '📱', '🎧'
-  ];
-  await showDialog<void>(
-    context: ctx,
-    builder: (dCtx) => AlertDialog(
-      backgroundColor: C.surface,
-      title: Text(Tr.isAr ? 'اختر أيقونة المشترك' : 'Choose Strip Icon', style: const TextStyle(fontSize: 18)),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: customCtrl,
-                      decoration: InputDecoration(
-                        hintText: Tr.isAr ? 'اكتب أو الصق إيموجي مخصص...' : 'Type/paste custom emoji...',
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: C.accent,
-                      foregroundColor: C.onAccent,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    ),
-                    onPressed: () {
-                      final val = customCtrl.text.trim();
-                      if (val.isNotEmpty) {
-                        onSelected(val);
-                        Navigator.pop(dCtx);
-                      }
-                    },
-                    child: Text(Tr.isAr ? 'تطبيق' : 'Apply'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                alignment: WrapAlignment.center,
-                children: [
-                  ActionChip(
-                    label: Text(Tr.isAr ? 'بدون أيقونة' : 'Clear'),
-                    onPressed: () {
-                      onSelected('');
-                      Navigator.pop(dCtx);
-                    },
-                  ),
-                  for (final ico in icons)
-                    InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () {
-                        onSelected(ico);
-                        Navigator.pop(dCtx);
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: C.surface2,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: C.border),
-                        ),
-                        child: Text(ico, style: const TextStyle(fontSize: 22)),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-      ],
-    ),
-  );
-}
+Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected, [String current = '']) =>
+    showNotionIconPicker(context: ctx, currentIcon: current, onSelected: onSelected);
 

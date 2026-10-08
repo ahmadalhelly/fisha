@@ -317,11 +317,11 @@ class _AutomationEditorState extends State<AutomationEditor> {
         : Automation(
             mac: widget.presetMac ?? s.allStrips.first.mac,
             outlet: widget.presetOutlet ?? 1,
-            above: true,
-            watts: 1500,
-            holdS: 30,
-            act: 3,
-            metric: 2,
+            above: false,
+            watts: 5,
+            holdS: 60,
+            act: 1,
+            metric: 0,
             limit2: 60,
           );
     _label = TextEditingController(text: a.label);
@@ -403,7 +403,9 @@ class _AutomationEditorState extends State<AutomationEditor> {
               },
               onChanged: (v) => setState(() {
                 a.metric = v;
-                a.above = true;
+                if (v == 2) {
+                  a.above = true;
+                }
                 _watts.text = v == 3 ? '10' : (v == 1 ? '60' : '1500');
                 _limit2.text = '60';
               }),

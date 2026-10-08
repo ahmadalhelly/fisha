@@ -50,6 +50,7 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final st = state;
     return SafeArea(
+      bottom: false,
       child: ListenableBuilder(
         listenable: st,
         builder: (context, _) {
@@ -59,7 +60,7 @@ class SettingsScreen extends StatelessWidget {
             ConnMode.offline => t('mode_offline'),
           };
           return ListView(
-            padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
+            padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 20),
             children: [
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 18),
@@ -231,12 +232,18 @@ class SettingsScreen extends StatelessWidget {
               child: Icon(icon, size: 19, color: color),
             ),
             const SizedBox(width: 12),
-            Expanded(child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
-            if (dot != null) ...[Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)), const SizedBox(width: 6)],
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 130),
-              child: Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: C.muted, fontSize: 13)),
+            // a long value (email, last reboot reason) goes under the title in full instead of being cut
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                if (value.length > 16) ...[
+                  const SizedBox(height: 2),
+                  Text(value, style: TextStyle(color: C.muted, fontSize: 12.5)),
+                ],
+              ]),
             ),
+            if (dot != null) ...[Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)), const SizedBox(width: 6)],
+            if (value.length <= 16) Text(value, style: TextStyle(color: C.muted, fontSize: 13)),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, color: C.faint, size: 20),
           ]),

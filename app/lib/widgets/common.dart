@@ -6,6 +6,12 @@ import 'package:local_auth/local_auth.dart';
 import '../i18n.dart';
 import '../theme.dart';
 
+/// Space the floating bottom bar takes over a tab page (0 on pages pushed above it).
+double navInset(BuildContext c) => MediaQuery.paddingOf(c).bottom;
+
+/// How far a tab page's add button must rise to clear the floating bottom bar.
+double fabLift(BuildContext c) => math.max(0.0, MediaQuery.paddingOf(c).bottom - MediaQuery.viewPaddingOf(c).bottom);
+
 // ---------- formatting ----------
 String fmtDuration(int seconds) {
   if (seconds < 60) return '$seconds ${t('sec')}';

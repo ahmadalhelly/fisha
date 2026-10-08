@@ -148,10 +148,11 @@ class _EnergyScreenState extends State<EnergyScreen> {
         final totalWh = daily.fold<int>(0, (a, e) => a + e.wh);
         final kwh = totalWh / 1000;
         return SafeArea(
+          bottom: false,
           child: RefreshIndicator(
             color: C.accent,
             onRefresh: _load,
-            child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 24), children: [
+            child: ListView(padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 20), children: [
               Text(t('energy_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 16),
               if (!s.hubV2)

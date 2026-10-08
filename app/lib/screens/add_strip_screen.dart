@@ -21,7 +21,8 @@ class FoundStrip {
 String provErrorText(String code) {
   if (code == 'no_ap') return t('prov_no_ap');
   if (code == 'join_failed') return t('prov_join');
-  if (code == 'no_dial') return t('prov_no_dial');
+  if (code == 'hub_listener_unavailable') return t('prov_listener_unavailable');
+  if (code == 'no_dial' || code == 'hub_tcp_no_client') return t('prov_tcp_no_client');
   if (code == 'still_setup') {
     return _tr('المشترك استلم الإعدادات بس لسه في وضع الإعداد. افصله من الكهربا 10 ثواني ورجّعه، وهو هيتصل بالـ Hub لوحده.',
         'The strip took the settings but is still in setup mode. Unplug it for 10 seconds and plug it back in; it will dial the hub by itself.');

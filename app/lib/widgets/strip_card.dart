@@ -9,6 +9,7 @@ import '../models.dart';
 import '../screens/outlet_sheet.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'notion_icon_picker.dart';
 import 'wifi_arcs.dart';
 
 /// Switch an outlet, asking first if it needs biometric or is protected and being turned off.
@@ -24,7 +25,7 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
         backgroundColor: C.surface,
         icon: Icon(Icons.push_pin_outlined, color: C.accent),
         title: Text(Tr.isAr ? 'المخرج محمي (مفتوح دائمًا)' : 'Outlet kept always on', style: const TextStyle(fontSize: 18)),
-        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «إبقاء دائمًا شغال» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
+        content: Text(Tr.isAr ? 'هذا المخرج تم ضبطه ليعمل دائمًا ولا يمكن إيقافه إلا إذا قمت بإلغاء إعداد «التشغيل دائماً» أولاً.' : 'This outlet is set to keep always on. To turn it off, disable the Keep Always On setting first.', style: TextStyle(color: C.textSoft)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
         ],
@@ -201,7 +202,7 @@ List<Widget> badgesFor(AppState state, Strip s, Outlet? o, {double size = 13}) {
     for (final x in timers) (timerIcon(x), C.accent, timerText(x)),
     if (o != null && o.autoOffMin > 0) (Icons.timer_outlined, C.accent, t('auto_off')),
     if (o != null && o.protected) (Icons.shield, C.accent, t('protect')),
-    if (o != null && o.keepOn) (Icons.push_pin_outlined, C.accent, Tr.isAr ? 'إبقاء دائمًا شغال' : 'Keep always on'),
+    if (o != null && o.keepOn) (Icons.push_pin_outlined, C.accent, t('keep_on')),
     if (o != null && state.requiresBio(s.mac, o.n)) (Icons.fingerprint, C.accent, Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected'),
     if (o != null && o.locked) (Icons.lock, C.muted, t('child_lock')),
   ];
@@ -258,8 +259,8 @@ class StripCard extends StatelessWidget {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                     if (stripIcon.isNotEmpty) ...[
-                      Text(stripIcon, style: const TextStyle(fontSize: 16)),
-                      const SizedBox(width: 5),
+                      FishaIcon(icon: stripIcon, size: 17),
+                      const SizedBox(width: 6),
                     ],
                     Flexible(
                       child: Text(
@@ -280,20 +281,20 @@ class StripCard extends StatelessWidget {
                   ]),
                   const SizedBox(height: 5),
                   Row(children: [
-                    Flexible(
-                      child: Text(
-                        online ? '${t('n_of_4', {'a': s.onCount, 'b': s.outlets.length})} · ' : t('offline_kept'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11.5, color: online ? C.muted : C.danger),
-                      ),
+                    Text(
+                      online ? t('n_of_4', {'a': s.onCount, 'b': s.outlets.length}) : t('offline_kept'),
+                      style: TextStyle(fontSize: 11.5, color: online ? C.textSoft : C.danger, fontWeight: FontWeight.w500),
                     ),
-                    if (online)
+                    if (online) ...[
+                      const SizedBox(width: 6),
+                      Text('·', style: TextStyle(fontSize: 11, color: C.border)),
+                      const SizedBox(width: 6),
                       Text('${s.maxTemp}°C', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: tempColor(s.maxTemp), fontWeight: FontWeight.w600)),
+                    ],
                     if (online && s.voltage != null) ...[
-                      const SizedBox(width: 8),
-                      Container(width: 1, height: 10, color: C.border),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      Text('·', style: TextStyle(fontSize: 11, color: C.border)),
+                      const SizedBox(width: 6),
                       Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: voltColor(s.voltage!), fontWeight: FontWeight.w600)),
                     ],
                     if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
@@ -301,14 +302,33 @@ class StripCard extends StatelessWidget {
                 ]),
               ),
             ),
-            Row(
-              textDirection: TextDirection.ltr,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+            const SizedBox(width: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                AnimatedNumber(value: online ? s.livePower : 0, style: mono(20, color: online ? loadColor(s.livePower, kStripMaxW) : C.faint)),
-                const SizedBox(width: 3),
-                Text('W', style: mono(12, color: C.muted, weight: FontWeight.w500)),
+                Row(
+                  textDirection: TextDirection.ltr,
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    AnimatedNumber(
+                      value: online ? s.livePower : 0,
+                      style: mono(18, color: online ? loadColor(s.livePower, kStripMaxW) : C.faint),
+                    ),
+                    const SizedBox(width: 2.5),
+                    Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
+                  ],
+                ),
+                if (online && s.voltage != null && s.voltage! > 0) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '${(s.livePower / s.voltage!).toStringAsFixed(1)}A',
+                    textDirection: TextDirection.ltr,
+                    style: mono(11, color: C.textSoft, weight: FontWeight.w600),
+                  ),
+                ],
               ],
             ),
             IconButton(
@@ -492,8 +512,16 @@ class _Socket extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Text(state.outletIcon(strip.mac, o.n).isEmpty ? state.outletName(strip, o.n) : '${state.outletIcon(strip.mac, o.n)} ${state.outletName(strip, o.n)}',
-              maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            if (state.outletIcon(strip.mac, o.n).isNotEmpty) ...[
+              FishaIcon(icon: state.outletIcon(strip.mac, o.n), size: 12, color: on ? C.text : C.textSoft),
+              const SizedBox(width: 3),
+            ],
+            Flexible(
+              child: Text(state.outletName(strip, o.n),
+                  maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? C.text : C.textSoft)),
+            ),
+          ]),
           Text(
             on ? '${o.powerW.toStringAsFixed(o.powerW < 10 ? 1 : 0)} W' : (strip.online ? t('off') : '—'),
             textDirection: TextDirection.ltr,

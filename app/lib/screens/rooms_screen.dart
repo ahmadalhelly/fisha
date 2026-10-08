@@ -5,6 +5,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart';
 import 'backup_screen.dart';
 
@@ -241,95 +242,11 @@ class _RoomsScreenState extends State<RoomsScreen> {
   }
 
   Future<void> _pickRoomIcon(Room room) async {
-    final customCtrl = TextEditingController();
-    const icons = [
-      '🛋️', '🛏️', '🍳', '💻', '📺', '🎮', '💡', '❄️', '☕', '🪴', '🚪', '🧺',
-      '🖥️', '🎵', '⚡', '🔌', '🏠', '🏢', '🚿', '🧹', '🍽️', '⏰', '🔒', '📶'
-    ];
-    await showDialog<void>(
+    await showNotionIconPicker(
       context: context,
-      builder: (dCtx) => AlertDialog(
-        backgroundColor: C.surface,
-        title: Text(_tr('اختر أيقونة الغرفة', 'Choose Room Icon'), style: const TextStyle(fontSize: 18)),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: customCtrl,
-                        decoration: InputDecoration(
-                          hintText: _tr('اكتب أو الصق إيموجي مخصص...', 'Type/paste custom emoji...'),
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: C.accent,
-                        foregroundColor: C.onAccent,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      ),
-                      onPressed: () {
-                        final val = customCtrl.text.trim();
-                        if (val.isNotEmpty) {
-                          s.setRoomIcon(room.id, val);
-                          Navigator.pop(dCtx);
-                        }
-                      },
-                      child: Text(_tr('تطبيق', 'Apply')),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    ActionChip(
-                      label: Text(_tr('بدون أيقونة', 'Clear')),
-                      onPressed: () {
-                        s.setRoomIcon(room.id, '');
-                        Navigator.pop(dCtx);
-                      },
-                    ),
-                    for (final ico in icons)
-                      InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () {
-                          s.setRoomIcon(room.id, ico);
-                          Navigator.pop(dCtx);
-                        },
-                        child: Container(
-                          width: 44,
-                          height: 44,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: C.surface2,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: C.border),
-                          ),
-                          child: Text(ico, style: const TextStyle(fontSize: 22)),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-        ],
-      ),
+      currentIcon: room.icon,
+      onSelected: (ico) => s.setRoomIcon(room.id, ico),
+      title: _tr('اختر أيقونة الغرفة', 'Choose Room Icon'),
     );
   }
 
@@ -355,9 +272,12 @@ class _RoomsScreenState extends State<RoomsScreen> {
                   color: C.accentBg,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: room.icon.isNotEmpty
-                    ? Text(room.icon, style: const TextStyle(fontSize: 22))
-                    : Icon(Icons.meeting_room, color: C.accent, size: 22),
+                child: FishaIcon(
+                  icon: room.icon,
+                  defaultIcon: Icons.meeting_room,
+                  size: 22,
+                  color: C.accent,
+                ),
               ),
             ),
             const SizedBox(width: 10),

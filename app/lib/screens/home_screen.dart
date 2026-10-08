@@ -56,7 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: C.bg,
       floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 4),
+        padding: EdgeInsets.only(bottom: fabLift(context)),
         child: SizedBox(
           height: 44,
           child: FloatingActionButton.extended(
@@ -70,12 +70,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
       body: SafeArea(
+        bottom: false,
         child: ListenableBuilder(
           listenable: s,
           builder: (context, _) {
             final strips = s.strips;
             final header = _header();
-            const pad = EdgeInsets.fromLTRB(18, 12, 18, 96);
+            final pad = EdgeInsets.fromLTRB(18, 12, 18, navInset(context) + 76);
             Widget body;
             if (strips.isEmpty) {
               body = ListView(controller: _scroll, padding: pad, children: [header, const SizedBox(height: 10), _empty()]);
@@ -314,6 +315,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       AnimatedNumber(value: s.totalPower, style: mono(34, color: loadColor(s.totalPower, (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW))),
                       const SizedBox(width: 4),
                       Text('W', style: mono(13, color: C.muted, weight: FontWeight.w500)),
+                      if (v != null && v > 0) ...[
+                        const SizedBox(width: 6),
+                        Text('·', style: TextStyle(fontSize: 11, color: C.faint)),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${(s.totalPower / v).toStringAsFixed(1)}A',
+                          textDirection: TextDirection.ltr,
+                          style: mono(11.5, color: C.textSoft, weight: FontWeight.w600),
+                        ),
+                      ],
                     ],
                   ),
                 ],

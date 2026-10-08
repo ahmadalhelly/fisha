@@ -54,19 +54,27 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
         return Scaffold(
           backgroundColor: C.bg,
           floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
-              ? FloatingActionButton.extended(
-                  onPressed: () => _edit(),
-                  backgroundColor: C.accent,
-                  foregroundColor: C.onAccent,
-                  icon: const Icon(Icons.add_alarm),
-                  label: Text(t('sched_new'), style: const TextStyle(fontWeight: FontWeight.w700)),
+              ? Padding(
+                  padding: EdgeInsets.only(bottom: fabLift(context)),
+                  child: SizedBox(
+                    height: 44,
+                    child: FloatingActionButton.extended(
+                      onPressed: () => _edit(),
+                      elevation: 4,
+                      backgroundColor: C.accent,
+                      foregroundColor: C.onAccent,
+                      icon: const Icon(Icons.add_alarm, size: 20),
+                      label: Text(t('sched_new'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    ),
+                  ),
                 )
               : null,
           body: SafeArea(
+            bottom: false,
             child: RefreshIndicator(
               color: C.accent,
               onRefresh: _load,
-              child: ListView(padding: const EdgeInsets.fromLTRB(18, 20, 18, 96), children: [
+              child: ListView(padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 76), children: [
                 Text(t('sched_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 16),
                 if (!s.hubV2)
