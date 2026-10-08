@@ -1,0 +1,65 @@
+name: Build Hub firmware
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-fw-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read firmware version
+        id: ver
+        run: |
+          v=$(grep -m1 'FW_VERSION = "' firmware/mttl_hub/mttl_hub.ino | sed -E 's/.*"([^"]+)".*/\1/')
+          [ -n "$v" ] || { echo "FW_VERSION not found"; exit 1; }
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Compile (ESP32 Dev Module, Minimal SPIFFS with OTA)
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --output-dir out firmware/mttl_hub
+          cp out/mttl_hub.ino.bin fisha-hub-${{ steps.ver.outputs.v }}.bin
+          ls -l fisha-hub-*.bin
+          sha256sum fisha-hub-*.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fisha-hub-${{ steps.ver.outputs.v }}
+          path: fisha-hub-${{ steps.ver.outputs.v }}.bin
+          if-no-files-found: error
+
+      - name: Publish as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: hub-fw-${{ steps.ver.outputs.v }}-run-${{ github.run_number }}
+          name: Fisha Hub firmware ${{ steps.ver.outputs.v }} (run ${{ github.run_number }})
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: fisha-hub-${{ steps.ver.outputs.v }}.bin
+          body: |
+            Hub firmware ${{ steps.ver.outputs.v }} for ESP32 Dev Module (Minimal SPIFFS, OTA).
+            Upload the .bin from the app (Settings → Hub firmware) or the hub's /update page.
