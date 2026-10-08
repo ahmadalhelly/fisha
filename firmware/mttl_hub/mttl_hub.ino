@@ -33,6 +33,8 @@ struct ApiRes;
            server password), SSE matches shared users by exact u=/t= before treating a client as owner.
   v2.14.0: over-voltage protection is always on and cuts the whole strip, protected outlets included;
            the protection switch now only turns the under-voltage cut on/off (limit 170..260 V).
+  v2.14.1: the "strip offline" event keeps why it dropped (disconnected / stale); schedules and automations
+           are only saved for a strip the hub knows, with thresholds kept in a sane range.
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -73,7 +75,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.0";
+const char* FW_VERSION = "2.14.1";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -666,6 +668,15 @@ const int MAX_KNOWN = 12;
 Known known[MAX_KNOWN];
 int knownCount = 0;
 
+// v2.14.1: a rule or schedule must point at a strip the hub has seen (online now or remembered)
+bool macKnown(String m) {
+  m.toUpperCase();
+  if (m.length() != 12) return false;
+  if (findStrip(m) >= 0) return true;
+  for (int i = 0; i < knownCount; i++) if (known[i].mac == m) return true;
+  return false;
+}
+
 void refreshKnown(const String& mac) {
   int k = -1;
   for (int i = 0; i < knownCount; i++) if (known[i].mac == mac) k = i;
@@ -749,7 +760,7 @@ void dropStrip(Strip& s, const char* why) {
     s.c.stop();
     s = Strip();
     stateDirty = true;
-    addEvent("offline", mac, 0, "");
+    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed) or "stale" (silent 45 s)
     return;
   }
   s.c.stop();
@@ -2028,6 +2039,7 @@ ApiRes api(String path, const String& b) {
     return okRes(j + "]}");
   }
   if (path == "schedule_save") {
+    if (mac.length() && !macKnown(mac)) return errRes("unknown strip");
     uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
     int slot = -1;
     for (int i = 0; i < schedCount; i++) if (scheds[i].id == id && id) slot = i;
@@ -2072,6 +2084,7 @@ ApiRes api(String path, const String& b) {
     return okRes(j + "]}");
   }
   if (path == "automation_save") {
+    if (mac.length() && !macKnown(mac)) return errRes("unknown strip");
     uint32_t id = (uint32_t)jsonValue(b, "aid").toInt();
     int slot = -1;
     for (int i = 0; i < autoCount; i++) if (autos[i].id == id && id) slot = i;
@@ -2094,6 +2107,9 @@ ApiRes api(String path, const String& b) {
     if (r.metric == 2) r.above = 1;
     if (r.metric != 2) r.above = jsonBool(b, "above");
     r.watts = jsonValue(b, "watts").toFloat();
+    // keep thresholds in range: W 0..3500 · °C 0..120 · A 0..16
+    r.watts = r.metric == 1 ? constrain(r.watts, 0.0f, 120.0f) : r.metric == 3 ? constrain(r.watts, 0.0f, 16.0f) : constrain(r.watts, 0.0f, 3500.0f);
+    r.limit2 = constrain(r.limit2, 30.0f, 120.0f);
     r.holdS = constrain(jsonValue(b, "hold_s").toInt(), 5, 65535);
     r.act = constrain(jsonValue(b, "act").toInt(), 1, 3);
     r.enabled = jsonHas(b, "enabled") ? jsonBool(b, "enabled") : 1;
