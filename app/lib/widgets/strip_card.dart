@@ -152,7 +152,8 @@ const double kOutletMaxW = 3500;
 const _orange = Color(0xFFFF8A3D);
 int loadLevel(double watts, double maxW) {
   final r = watts / maxW;
-  return r >= 0.6 ? 3 : (r >= 0.35 ? 2 : (r >= 0.15 ? 1 : 0));
+  // same steps everywhere (outlet ring, strip card, all-outlets halo): orange from 70 %, red from 90 %
+  return r >= 0.9 ? 3 : (r >= 0.7 ? 2 : 0);
 }
 
 Color levelColor(int level) => switch (level) {
@@ -225,6 +226,8 @@ class StripCard extends StatelessWidget {
     final online = s.online;
     final stripBadges = badgesFor(state, s, null);
     final stripIcon = state.stripIcon(s.mac);
+    final stripLevel = s.maxTemp >= 60 ? 3 : loadLevel(s.livePower, kStripMaxW);
+    final stripTone = stripLevel == 0 ? C.accent : levelColor(stripLevel);
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 300),
       opacity: online ? 1 : 0.6,
@@ -233,13 +236,13 @@ class StripCard extends StatelessWidget {
           color: C.card,
           borderRadius: BorderRadius.circular(26),
           border: Border.all(
-            color: online && s.onCount > 0 ? C.accent.withValues(alpha: C.dark ? 0.65 : 0.5) : C.cardEdge,
+            color: online && s.onCount > 0 ? stripTone.withValues(alpha: C.dark ? 0.65 : 0.5) : C.cardEdge,
             width: online && s.onCount > 0 ? 1.5 : 1.0,
           ),
           boxShadow: online && s.onCount > 0
               ? [
                   BoxShadow(
-                    color: C.accent.withValues(alpha: C.dark ? 0.28 : 0.2),
+                    color: stripTone.withValues(alpha: C.dark ? 0.28 : 0.2),
                     blurRadius: 22,
                     spreadRadius: 1,
                     offset: const Offset(0, 4),
@@ -562,7 +565,7 @@ class _SocketPainter extends CustomPainter {
     if (isMaster && on) {
       // load halo: the ring measures the strip's real draw against its 3500 W limit,
       // orange from 70 %, red from 90 % (or when it runs hot)
-      final haloColor = hot || load >= 0.9 ? C.danger : (load >= 0.7 ? const Color(0xFFFF9F43) : C.accent);
+      final haloColor = level == 0 && !hot ? C.accent : ringColor;
       canvas.drawCircle(c, r - 6, Paint()
         ..color = haloColor.withValues(alpha: 0.08 + 0.22 * load)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
