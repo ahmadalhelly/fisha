@@ -12,6 +12,7 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   http: ^1.2.2
+  intl: any
   mqtt_client: ^10.5.1
   shared_preferences: ^2.3.2
   google_fonts: ^6.2.1

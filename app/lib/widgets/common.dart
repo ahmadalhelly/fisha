@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -423,3 +424,247 @@ Future<TimeOfDay?> pickTime12(BuildContext context, TimeOfDay initial) => showTi
       initialTime: initial,
       builder: (ctx, child) => MediaQuery(data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false), child: child!),
     );
+
+// ---------- preset + stepper picker (replaces drag sliders) ----------
+/// Pick a value by tapping a preset or nudging it with − / +. Holding − / + keeps counting.
+/// Nothing is sent while the user is still tapping: [onChanged] fires once, [commitDelay] after the last change.
+class PresetStepper extends StatefulWidget {
+  final double value, min, max, step;
+  final List<double> presets;
+  final String unit;
+  final int decimals;
+  final bool enabled;
+  /// Label for a special value (e.g. 0 → "Off"); return null to show the number.
+  final String? Function(double v)? special;
+  /// Optional smart suggestion shown above the presets.
+  final double? suggestion;
+  final String? suggestionNote;
+  final ValueChanged<double> onChanged;
+  final Duration commitDelay;
+  const PresetStepper({
+    super.key,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.step,
+    required this.presets,
+    required this.unit,
+    required this.onChanged,
+    this.decimals = 0,
+    this.enabled = true,
+    this.special,
+    this.suggestion,
+    this.suggestionNote,
+    this.commitDelay = const Duration(milliseconds: 700),
+  });
+
+  @override
+  State<PresetStepper> createState() => _PresetStepperState();
+}
+
+class _PresetStepperState extends State<PresetStepper> {
+  late double _v = _clamp(widget.value);
+  Timer? _commit, _hold, _repeat;
+
+  double _clamp(double v) {
+    final s = widget.step;
+    return (((v.clamp(widget.min, widget.max)) / s).round() * s).clamp(widget.min, widget.max).toDouble();
+  }
+
+  @override
+  void didUpdateWidget(PresetStepper old) {
+    super.didUpdateWidget(old);
+    // adopt the hub's value unless the user is mid-change
+    if (_commit == null && widget.value != old.value) _v = _clamp(widget.value);
+  }
+
+  @override
+  void dispose() {
+    _hold?.cancel();
+    _repeat?.cancel();
+    if (_commit != null) {
+      _commit!.cancel();
+      widget.onChanged(_v);
+    }
+    super.dispose();
+  }
+
+  void _set(double v) {
+    final n = _clamp(v);
+    if (n == _v) return;
+    setState(() => _v = n);
+    _commit?.cancel();
+    _commit = Timer(widget.commitDelay, () {
+      _commit = null;
+      widget.onChanged(_v);
+    });
+  }
+
+  void _startHold(double dir) {
+    _set(_v + dir * widget.step);
+    _hold = Timer(const Duration(milliseconds: 400), () {
+      _repeat = Timer.periodic(const Duration(milliseconds: 90), (_) => _set(_v + dir * widget.step));
+    });
+  }
+
+  void _stopHold() {
+    _hold?.cancel();
+    _repeat?.cancel();
+    _hold = _repeat = null;
+  }
+
+  String _fmt(double v) => widget.special?.call(v) ?? v.toStringAsFixed(widget.decimals);
+  bool _isSpecial(double v) => widget.special?.call(v) != null;
+
+  Widget _btn(IconData icon, double dir) {
+    final can = widget.enabled && (dir < 0 ? _v > widget.min : _v < widget.max);
+    return GestureDetector(
+      onTapDown: can ? (_) => _startHold(dir) : null,
+      onTapUp: (_) => _stopHold(),
+      onTapCancel: _stopHold,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 48,
+        height: 44,
+        decoration: BoxDecoration(
+          color: can ? C.card : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: C.cardEdge),
+        ),
+        child: Icon(icon, size: 22, color: can ? C.text : C.faint),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = widget.enabled;
+    final sug = widget.suggestion;
+    final showSug = on && sug != null && _clamp(sug) != _v;
+    return Opacity(
+      opacity: on ? 1 : 0.5,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (showSug) ...[
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _set(sug),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  gradient: LinearGradient(colors: [C.accent.withValues(alpha: 0.16), C.accent.withValues(alpha: 0.04)]),
+                  border: Border.all(color: C.accent.withValues(alpha: 0.35)),
+                ),
+                child: Row(children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(color: C.accent.withValues(alpha: 0.18), shape: BoxShape.circle),
+                    child: Icon(Icons.auto_awesome, size: 17, color: C.accent),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${Tr.isAr ? 'اقتراح' : 'Suggested'}: ${_clamp(sug).toStringAsFixed(widget.decimals)} ${widget.unit}',
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: C.text)),
+                      if (widget.suggestionNote != null)
+                        Text(widget.suggestionNote!, style: TextStyle(fontSize: 11, color: C.muted, height: 1.3)),
+                    ]),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(color: C.accent, borderRadius: BorderRadius.circular(99)),
+                    child: Text(Tr.isAr ? 'استخدم' : 'Use', style: TextStyle(color: C.onAccent, fontWeight: FontWeight.w700, fontSize: 12)),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final p in widget.presets)
+            InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: on ? () => _set(p) : null,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                constraints: const BoxConstraints(minWidth: 50),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: _v == p ? C.accentBg : C.well,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _v == p ? C.accent : C.cardEdge),
+                ),
+                child: Text(_fmt(p),
+                    textDirection: TextDirection.ltr,
+                    style: _isSpecial(p)
+                        ? TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: _v == p ? C.accent : C.textSoft)
+                        : mono(12.5, color: _v == p ? C.accent : C.textSoft)),
+              ),
+            ),
+        ]),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(color: C.well, borderRadius: BorderRadius.circular(15), border: Border.all(color: C.cardEdge)),
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Row(children: [
+              _btn(Icons.remove, -1),
+              Expanded(
+                child: _isSpecial(_v)
+                    ? Text(_fmt(_v), textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: C.muted))
+                    : Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: _fmt(_v), style: mono(26, color: C.accent, weight: FontWeight.w700)),
+                          TextSpan(text: ' ${widget.unit}', style: mono(13, color: C.muted)),
+                        ]),
+                        textAlign: TextAlign.center,
+                      ),
+              ),
+              _btn(Icons.add, 1),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// The scenarios glyph: eight short rays around an empty centre.
+class ScenesIcon extends StatelessWidget {
+  final double size;
+  final Color? color;
+  const ScenesIcon({super.key, this.size = 22, this.color});
+
+  @override
+  Widget build(BuildContext context) =>
+      CustomPaint(size: Size.square(size), painter: _RaysPainter(color ?? IconTheme.of(context).color ?? C.accent));
+}
+
+class _RaysPainter extends CustomPainter {
+  final Color color;
+  _RaysPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.width / 2;
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = size.width * 0.09
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 8; i++) {
+      final a = i * math.pi / 4 - math.pi / 2;
+      final d = Offset(math.cos(a), math.sin(a));
+      canvas.drawLine(c + d * (r * 0.38), c + d * (r * 0.82), p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RaysPainter old) => old.color != color;
+}

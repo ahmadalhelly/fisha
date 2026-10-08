@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../i18n.dart';
 import '../models.dart';
+import '../services/outlet_history.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/notion_icon_picker.dart';
@@ -221,14 +222,22 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                           ),
                         ],
                       ),
-                      Slider(
-                        value: o.ampLimit.clamp(0.0, 16.0),
-                        min: 0.0,
-                        max: 16.0,
-                        activeColor: C.accent,
-                        label: o.ampLimit <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : '${o.ampLimit.toStringAsFixed(1)} A',
-                        onChanged: v2 ? (v) => state.setOutletAmpLimit(s.mac, n, (v * 2).round() / 2) : null,
+                      const SizedBox(height: 10),
+                      PresetStepper(
+                        value: o.ampLimit,
+                        min: 0,
+                        max: 16,
+                        step: 0.5,
+                        decimals: 1,
+                        unit: 'A',
+                        presets: const [0, 2, 5, 8, 10, 13, 16],
+                        special: (v) => v <= 0 ? (Tr.isAr ? 'معطل' : 'Off') : null,
+                        enabled: v2,
+                        suggestion: _ampSuggestion(state, s, n),
+                        suggestionNote: _ampSuggestionNote(state, s, n),
+                        onChanged: (v) => state.setOutletAmpLimit(s.mac, n, v),
                       ),
+                      const SizedBox(height: 8),
                       Text(
                         Tr.isAr
                             ? (o.ampLimit <= 0 ? 'لا يوجد حد أقصى للتيار لهذا المخرج' : 'يفصل المخرج فور تجاوز ${o.ampLimit.toStringAsFixed(1)} أمبير لحماية الأجهزة')
@@ -355,8 +364,17 @@ Future<void> _countdownDialog(BuildContext ctx, AppState state, Strip s, int n) 
   await state.addTimer(s.mac, n, on ? 'on' : 'off', delayS: delay, repeatS: repeat ? every : 0);
 }
 
-Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n) async {
-  if (n == 0 && s.outlets.any((o) => o.protected)) {
+/// Power-cycle every strip of a room at once (whole strips, outlet 0).
+Future<void> roomCycleDialog(BuildContext ctx, AppState state, List<Strip> strips, String roomName) =>
+    _cycleDialog(ctx, state, strips.first, 0, room: strips, roomName: roomName);
+
+/// Start the same on/off loop on every strip of a room.
+Future<void> roomLoopDialog(BuildContext ctx, AppState state, List<Strip> strips, String roomName) =>
+    _loopDialog(ctx, state, strips.first, 0, room: strips, roomName: roomName);
+
+Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n, {List<Strip>? room, String? roomName}) async {
+  final targets = room ?? [s];
+  if (n == 0 && targets.any((x) => x.outlets.any((o) => o.protected))) {
     await confirmDialog(ctx, t('cycle_strip'), t('protected_cycle_block'));
     return;
   }
@@ -370,7 +388,7 @@ Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n) asyn
     builder: (dctx) => StatefulBuilder(
       builder: (dctx, setLocal) => AlertDialog(
         backgroundColor: C.surface,
-        title: Text(n == 0 ? t('cycle_strip') : '${t('cycle')} · ${state.outletName(s, n)}', style: const TextStyle(fontSize: 18)),
+        title: Text(roomName != null ? '${t('cycle')} · $roomName' : (n == 0 ? t('cycle_strip') : '${t('cycle')} · ${state.outletName(s, n)}'), style: const TextStyle(fontSize: 18)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text(t('cycle_off_for'), style: TextStyle(color: C.muted, fontSize: 13)),
           const SizedBox(height: 6),
@@ -391,7 +409,10 @@ Future<void> _cycleDialog(BuildContext ctx, AppState state, Strip s, int n) asyn
       ),
     ),
   );
-  if (ok == true) await state.addTimer(s.mac, n, 'cycle', delayS: later ? delay : 0, offS: off, repeatS: repeat ? every : 0);
+  if (ok != true) return;
+  for (final x in targets) {
+    await state.addTimer(x.mac, n, 'cycle', delayS: later ? delay : 0, offS: off, repeatS: repeat ? every : 0);
+  }
 }
 
 Widget _repeatPicker(bool repeat, int every, ValueChanged<bool> onRepeat, ValueChanged<int> onEvery) =>
@@ -407,8 +428,9 @@ Widget _repeatPicker(bool repeat, int every, ValueChanged<bool> onRepeat, ValueC
       ],
     ]);
 
-Future<void> _loopDialog(BuildContext ctx, AppState state, Strip s, int n) async {
-  if (n == 0 ? s.outlets.any((o) => o.protected) : s.outlets.firstWhere((x) => x.n == n).protected) {
+Future<void> _loopDialog(BuildContext ctx, AppState state, Strip s, int n, {List<Strip>? room, String? roomName}) async {
+  final targets = room ?? [s];
+  if (n == 0 ? targets.any((x) => x.outlets.any((o) => o.protected)) : s.outlets.firstWhere((x) => x.n == n).protected) {
     await confirmDialog(ctx, t('loop'), t('protected_cycle_block'));
     return;
   }
@@ -419,7 +441,7 @@ Future<void> _loopDialog(BuildContext ctx, AppState state, Strip s, int n) async
     builder: (dctx) => StatefulBuilder(
       builder: (dctx, setLocal) => AlertDialog(
         backgroundColor: C.surface,
-        title: Text(n == 0 ? '${t('loop')} · ${t('whole_strip')}' : '${t('loop')} · ${state.outletName(s, n)}', style: const TextStyle(fontSize: 18)),
+        title: Text(roomName != null ? '${t('loop')} · $roomName' : (n == 0 ? '${t('loop')} · ${t('whole_strip')}' : '${t('loop')} · ${state.outletName(s, n)}'), style: const TextStyle(fontSize: 18)),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text(t('loop_hint'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
           const SizedBox(height: 12),
@@ -439,7 +461,10 @@ Future<void> _loopDialog(BuildContext ctx, AppState state, Strip s, int n) async
       ),
     ),
   );
-  if (ok == true) await state.addTimer(s.mac, n, 'loop', onS: onS, offS: offS);
+  if (ok != true) return;
+  for (final x in targets) {
+    await state.addTimer(x.mac, n, 'loop', onS: onS, offS: offS);
+  }
 }
 
 Widget _tile(IconData icon, String title, String? sub, VoidCallback? onTap) => ListTile(
@@ -538,3 +563,26 @@ Widget _iconButton(BuildContext ctx, String icon, ValueChanged<String> onSelecte
 Future<void> _pickIconDialog(BuildContext ctx, ValueChanged<String> onSelected, [String current = '']) =>
     showNotionIconPicker(context: ctx, currentIcon: current, onSelected: onSelected);
 
+
+/// Highest current this outlet drew in the last 30 days (recorded by the app), or null if nothing yet.
+double? _peakAmps(Strip s, int n) {
+  final h = OutletHistory.instance;
+  final since = OutletHistory.dayKey(DateTime.now().subtract(const Duration(days: 30)));
+  final p = h.peakOver(h.dates.where((d) => d >= since), s.mac, n);
+  if (p == null || p.peakW < 5) return null;
+  final v = (s.voltage ?? 230) < 150 ? 230.0 : (s.voltage ?? 230).toDouble();
+  return p.peakW / v;
+}
+
+/// Smart limit: about 40% above the highest draw seen, rounded up to half an amp.
+double? _ampSuggestion(AppState state, Strip s, int n) {
+  final a = _peakAmps(s, n);
+  if (a == null) return null;
+  return ((a * 1.4 * 2).ceil() / 2).clamp(1.0, 16.0).toDouble();
+}
+
+String? _ampSuggestionNote(AppState state, Strip s, int n) {
+  final a = _peakAmps(s, n);
+  if (a == null) return null;
+  return Tr.isAr ? 'أعلى سحب اتسجل آخر 30 يوم ${a.toStringAsFixed(1)} A، والحد أعلى منه بحوالي 40%' : 'Highest draw in 30 days: ${a.toStringAsFixed(1)} A, limit set about 40% above it';
+}

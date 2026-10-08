@@ -155,12 +155,12 @@ class C {
         warn = const Color(0xFFB45309);
         break;
       case 'midnight':
-        bg = const Color(0xFF070B12);
-        surface = const Color(0xFF111A27);
-        surface2 = const Color(0xFF182334);
-        tile = const Color(0xFF121B29);
-        border = const Color(0x24A0C8E6);
-        nav = const Color(0xFF0B1220);
+        bg = const Color(0xFF060B18);
+        surface = const Color(0xFF101A2E);
+        surface2 = const Color(0xFF17233C);
+        tile = const Color(0xFF111C31);
+        border = const Color(0x2E82B4FF);
+        nav = const Color(0xFF0A1226);
         text = const Color(0xFFE7F0F7);
         textSoft = const Color(0xFFC3D0DD);
         muted = const Color(0xFF8796A6);
@@ -179,7 +179,7 @@ class C {
         danger = const Color(0xFFFF7A59);
         accent2 = const Color(0xFF8B7CFF);
         warn = const Color(0xFFFFB547);
-        wash = const [Color(0xFF0F6B78), Color(0xFF3A2A8C), Color(0xFF0C4F43)];
+        wash = const [Color(0xFF1A4FA0), Color(0xFF3A2A8C), Color(0xFF0F6B78)];
         break;
       case 'pearl':
         bg = const Color(0xFFEEF1F7);
@@ -192,10 +192,10 @@ class C {
         textSoft = const Color(0xFF2C3446);
         muted = const Color(0xFF5F6779);
         faint = const Color(0xFF9CA4B5);
-        accent = const Color(0xFF0A84FF);
-        accentBg = const Color(0xFFDCEBFF);
-        tileOn = const Color(0xFFE6F1FF);
-        tileOnBorder = const Color(0xFF8DBEFF);
+        accent = const Color(0xFF0E9F7E);
+        accentBg = const Color(0xFFDDF4EC);
+        tileOn = const Color(0xFFE6F7F1);
+        tileOnBorder = const Color(0xFF7FD3BC);
         onAccent = const Color(0xFFFFFFFF);
         switchOff = const Color(0xFFC9D1DE);
         miniOff = const Color(0x8CFFFFFF);
@@ -206,7 +206,7 @@ class C {
         danger = const Color(0xFFE5484D);
         accent2 = const Color(0xFF7C5CFF);
         warn = const Color(0xFFD97706);
-        wash = const [Color(0xFF9CC8FF), Color(0xFFD6B8FF), Color(0xFFA8F0D0)];
+        wash = const [Color(0xFFA8F0D0), Color(0xFFB9D8F6), Color(0xFFF3D9C2)];
         break;
       default:
         useId('dark');
@@ -214,12 +214,12 @@ class C {
     }
     // see-through cards on glass themes, solid ones everywhere else
     card = switch (id) {
-      'midnight' => const Color(0x7A16202E),
+      'midnight' => const Color(0x80142238),
       'pearl' => const Color(0x8CFFFFFF),
       _ => surface,
     };
     cardEdge = switch (id) {
-      'midnight' => const Color(0x24A0C8E6),
+      'midnight' => const Color(0x2E82B4FF),
       'pearl' => const Color(0x99FFFFFF),
       _ => border,
     };

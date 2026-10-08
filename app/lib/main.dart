@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
 import 'i18n.dart';
+import 'latin_digits.dart';
 import 'screens/energy_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/welcome_screen.dart';
@@ -114,6 +115,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
       locale: Locale(lang),
       supportedLocales: const [Locale('ar'), Locale('en')],
       localizationsDelegates: const [
+        LatinArMaterialDelegate(),
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,

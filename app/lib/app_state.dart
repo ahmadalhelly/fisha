@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'i18n.dart';
 import 'models.dart';
 import 'services/google_sync.dart';
+import 'services/outlet_history.dart';
 
 enum ConnMode { offline, local, cloud }
 
@@ -964,6 +965,7 @@ class AppState extends ChangeNotifier {
         list.add(s);
       }
       _strips = list;
+      OutletHistory.instance.sample(list); // app-side per-outlet kWh + daily peak (services/outlet_history.dart)
       for (final s in list) {
         if (!_order.contains(s.mac)) _order.add(s.mac);
       }

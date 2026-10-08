@@ -154,7 +154,7 @@ class _ScenesScreenState extends State<ScenesScreen> {
                         decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(14)),
                         child: _running == sc.id
                             ? Padding(padding: const EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2, color: C.accent))
-                            : Icon(Icons.auto_awesome, color: C.accent),
+                            : ScenesIcon(size: 24, color: C.accent),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

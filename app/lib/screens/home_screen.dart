@@ -13,6 +13,7 @@ import '../widgets/notion_icon_picker.dart';
 import 'add_strip_screen.dart';
 import 'automations_screen.dart';
 import 'events_screen.dart';
+import 'outlet_sheet.dart' show roomCycleDialog, roomLoopDialog;
 import 'rooms_screen.dart';
 import 'schedules_screen.dart' show ScheduleEditor;
 import 'scenes_screen.dart';
@@ -194,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _summary(),
       const SizedBox(height: 12),
       Row(children: [
-        Expanded(child: _quick(Icons.auto_awesome, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenesScreen(state: s)))),
+        Expanded(child: _quick(null, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenesScreen(state: s)))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.schedule, t('q_sched'), () => s.setTab(1))),
         const SizedBox(width: 8),
@@ -371,7 +372,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ]),
       );
 
-  Widget _quick(IconData icon, String label, VoidCallback onTap, {int badge = 0}) => Material(
+  Widget _quick(IconData? icon, String label, VoidCallback onTap, {int badge = 0}) => Material(
         color: C.card,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
@@ -385,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 isLabelVisible: badge > 0,
                 label: Text('$badge'),
                 backgroundColor: C.danger,
-                child: Icon(icon, color: C.accent, size: 22),
+                child: icon == null ? ScenesIcon(size: 22, color: C.accent) : Icon(icon, color: C.accent, size: 22),
               ),
               const SizedBox(height: 6),
               Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
@@ -649,6 +650,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (ctx, _) {
           final r = s.rooms.firstWhere((x) => x.id == room.id, orElse: () => room);
           final strips = s.strips.where((st) => r.stripMacs.contains(st.mac) && st.online).toList();
+          final roomStrips = s.strips.where((st) => r.stripMacs.contains(st.mac)).toList();
           final v2 = s.hubV2 && strips.isNotEmpty;
           Widget tile(IconData icon, String title, String? sub, VoidCallback? onTap) => ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -719,6 +721,51 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pop(ctx);
                 _push(AutomationEditor(state: s, presetRoom: r.id));
               }),
+              tile(Icons.restart_alt, Tr.isAr ? 'إعادة تشغيل الغرفة' : 'Power-cycle the room', Tr.isAr ? 'يفصل كل مشتركات الغرفة مدة ويرجعها' : 'Turns every strip off for a while, then back on',
+                  !v2 ? null : () => roomCycleDialog(ctx, s, strips, r.name)),
+              tile(Icons.all_inclusive, t('loop'), Tr.isAr ? 'تشغيل وإيقاف متكرر لكل مشتركات الغرفة' : 'Repeating on/off for every strip in the room',
+                  !v2 ? null : () => roomLoopDialog(ctx, s, strips, r.name)),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(Icons.fingerprint, color: C.accent, size: 20),
+                ),
+                activeTrackColor: C.accent,
+                title: Text(Tr.isAr ? 'بصمة للغرفة' : 'Fingerprint for the room'),
+                subtitle: Text(Tr.isAr ? 'يطلب البصمة قبل تشغيل أو إيقاف أي مشترك في الغرفة كله' : 'Asks for a fingerprint before switching any whole strip in the room',
+                    style: TextStyle(color: C.muted, fontSize: 12)),
+                value: roomStrips.isNotEmpty && roomStrips.every((st) => s.requiresBio(st.mac, 0)),
+                onChanged: roomStrips.isEmpty
+                    ? null
+                    : (v) async {
+                        for (final st in roomStrips) {
+                          await s.setRequiresBio(st.mac, 0, v);
+                        }
+                      },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(Icons.notifications_outlined, color: C.accent, size: 20),
+                ),
+                activeTrackColor: C.accent,
+                title: Text(Tr.isAr ? 'إشعارات الغرفة' : 'Room notifications'),
+                subtitle: Text(t('notify_strip_sub'), style: TextStyle(color: C.muted, fontSize: 12)),
+                value: strips.isNotEmpty && strips.every((st) => st.notifyMask & 0x10 != 0),
+                onChanged: !v2
+                    ? null
+                    : (v) async {
+                        for (final st in strips) {
+                          await s.setNotifyMask(st, v ? st.notifyMask | 0x10 : st.notifyMask & ~0x10);
+                        }
+                      },
+              ),
               tile(Icons.category_outlined, Tr.isAr ? 'أيقونة الغرفة' : 'Room icon', null, () => showNotionIconPicker(
                     context: ctx,
                     currentIcon: r.icon,

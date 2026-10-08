@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'about_screen.dart';
 import 'account_screen.dart';
 import 'backup_screen.dart';
 import 'connection_screen.dart';
@@ -130,8 +131,8 @@ class SettingsScreen extends StatelessWidget {
                       (ThemePref.graphite, _tr('جرافيت', 'Graphite'), const Color(0xFF25292F), const Color(0xFF4FD8B8)),
                       (ThemePref.light, t('th_light'), const Color(0xFFF1F6FA), const Color(0xFF079E7D)),
                       (ThemePref.saffron, _tr('زعفران', 'Saffron'), const Color(0xFFF8F1E4), const Color(0xFFC27803)),
-                      (ThemePref.midnight, _tr('زجاج داكن', 'Midnight'), const Color(0xFF0F6B78), const Color(0xFF3EE0C0)),
-                      (ThemePref.pearl, _tr('زجاج فاتح', 'Pearl'), const Color(0xFFD6B8FF), const Color(0xFF0A84FF)),
+                      (ThemePref.midnight, _tr('زجاج داكن', 'Midnight'), const Color(0xFF1A4FA0), const Color(0xFF3EE0C0)),
+                      (ThemePref.pearl, _tr('زجاج فاتح', 'Pearl'), const Color(0xFFB9D8F6), const Color(0xFF0E9F7E)),
                     ])
                       SizedBox(width: 74, child: _swatch(label, a, b, st.themePref == p, () => st.setThemePref(p))),
                   ]),
@@ -148,7 +149,8 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 18),
               _group(_tr('مساعدة', 'Help'), [
                 _row(context, Icons.menu_book_outlined, C.accent2, _tr('طريقة التوصيل', 'Setup guide'), _tr('من الأول للآخر', 'Start to finish'),
-                    () => _open(context, const GuideScreen()), last: true),
+                    () => _open(context, const GuideScreen())),
+                _row(context, Icons.info_outline, C.accent, _tr('عن التطبيق', 'About'), appVersion, () => _open(context, AboutScreen(state: st)), last: true),
               ]),
               const SizedBox(height: 18),
               _group(t('sec_privacy'), [
