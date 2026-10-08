@@ -20,7 +20,15 @@ class FoundStrip {
 
 String provErrorText(String code) {
   if (code == 'no_ap') return t('prov_no_ap');
-  if (code == 'join_failed') return t('prov_join');
+  if (code == 'join_failed:auth') {
+    return _tr('المشترك رفض باسورد شبكة الإعداد بتاعته. غالباً الفيرموير بتاعه بيستخدم باسورد مختلف.',
+        "The strip refused its setup network password. Its firmware likely uses a different one.");
+  }
+  if (code == 'join_failed:gone') {
+    return _tr('شبكة المشترك اختفت وقت الإضافة. افصل أي موبايل أو لابتوب متوصل بيها، وتأكد إن لمبة المشترك لسه بترمش، وجرب تاني.',
+        "The strip's network disappeared while joining. Disconnect any phone or laptop on it, check the strip is still blinking, and retry.");
+  }
+  if (code.startsWith('join_failed')) return '${t('prov_join')} (${code.substring(code.indexOf(':') + 1)})';
   if (code == 'hub_listener_unavailable') return t('prov_listener_unavailable');
   if (code == 'no_dial' || code == 'hub_tcp_no_client') return t('prov_tcp_no_client');
   if (code == 'still_setup') {

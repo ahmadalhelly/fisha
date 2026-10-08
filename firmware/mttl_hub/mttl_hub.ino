@@ -75,7 +75,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.2";
+const char* FW_VERSION = "2.14.3";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2689,6 +2689,8 @@ bool setupSession(const String& hubIp, String& r) {
 }
 
 void connectWiFi();
+volatile uint8_t provDiscReason = 0;   // last STA disconnect reason, for join_failed details
+
 void provFail(const String& msg) { provState = "error"; provMsg = msg; stateDirty = true; Serial.printf("[prov] error: %s\n", msg.c_str()); }
 
 void runProvision() {
@@ -2701,16 +2703,21 @@ void runProvision() {
   int n = WiFi.scanNetworks();
   String ap;
   int best = -1000;
+  int apCh = 0;
+  uint8_t apBssid[6] = {0};
   for (int i = 0; i < n; i++) {
     String ss = WiFi.SSID(i);
-    if ((ss.startsWith("TONLY_TAP_") || ss.startsWith("ONLY_TAP_")) && WiFi.RSSI(i) > best) { ap = ss; best = WiFi.RSSI(i); }
+    if ((ss.startsWith("TONLY_TAP_") || ss.startsWith("ONLY_TAP_")) && WiFi.RSSI(i) > best) {
+      ap = ss; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6);
+    }
   }
   WiFi.scanDelete();
   if (provSsid.length()) {                       // the user picked a specific strip
     if (ap != provSsid) {
       bool seen = false;
       int m = WiFi.scanNetworks();
-      for (int i = 0; i < m; i++) if (WiFi.SSID(i) == provSsid) { seen = true; best = WiFi.RSSI(i); }
+      for (int i = 0; i < m; i++)
+        if (WiFi.SSID(i) == provSsid) { seen = true; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6); }
       WiFi.scanDelete();
       if (!seen) { provFail("no_ap"); return; }
     }
@@ -2723,17 +2730,32 @@ void runProvision() {
   Serial.printf("[prov] joining %s (%d dBm)\n", ap.c_str(), best);
 
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "provisioning");
-  WiFi.disconnect();
-  delay(300);
-  WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP on the strip's AP
-  WiFi.begin(ap.c_str(), pass.c_str());
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(250);
+  // v2.14.3: no auto-reconnect to the home Wi-Fi meanwhile, pin the strip's channel + BSSID, two tries,
+  // and report why the join failed (wrong password vs AP gone) instead of a bare join_failed
+  WiFi.setAutoReconnect(false);
+  for (int attempt = 0; attempt < 2 && WiFi.status() != WL_CONNECTED; attempt++) {
+    WiFi.disconnect(true);
+    delay(400);
+    WiFi.mode(WIFI_STA);
+    WiFi.config(IPAddress((uint32_t)0), IPAddress((uint32_t)0), IPAddress((uint32_t)0));   // DHCP on the strip's AP
+    provDiscReason = 0;
+    if (apCh > 0) WiFi.begin(ap.c_str(), pass.c_str(), apCh, apBssid);
+    else WiFi.begin(ap.c_str(), pass.c_str());
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) { delay(250); esp_task_wdt_reset(); }
+    if (WiFi.status() != WL_CONNECTED)
+      Serial.printf("[prov] join try %d failed: reason %u (ch %d)\n", attempt + 1, provDiscReason, apCh);
+  }
+  WiFi.setAutoReconnect(true);
 
   bool ok = false;
   String r;
   if (WiFi.status() != WL_CONNECTED) {
-    r = "join_failed";
+    uint8_t why = provDiscReason;
+    // 2 AUTH_EXPIRE, 15 4WAY_HANDSHAKE_TIMEOUT, 202 AUTH_FAIL, 204 HANDSHAKE_TIMEOUT: the AP refused the password
+    if (why == 2 || why == 15 || why == 202 || why == 204) r = "join_failed:auth";
+    else if (why == 201) r = "join_failed:gone";   // NO_AP_FOUND: it left setup mode or another device holds it
+    else r = "join_failed:" + String(why);
   } else {
     delay(800);
     // one TCP session: up:ip, up:connect, up:reboot:0
@@ -2939,6 +2961,8 @@ void setup() {
     cfg.putUChar("nver", 2);
   }
   for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { provDiscReason = info.wifi_sta_disconnected.reason; },
+               ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 
