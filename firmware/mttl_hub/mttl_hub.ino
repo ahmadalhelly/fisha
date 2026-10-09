@@ -38,6 +38,7 @@ struct ApiRes;
   v2.14.13: strip firmware flashing from the hub (/stripfw): the .fwr is kept in the spare OTA slot, the hub joins
             the strip's setup network, sends up:ota:192.168.1.2 and serves GET /ota.bin on port 80 itself
             (a Windows PC with Bitdefender dropped the strip's inbound connection).
+  v2.14.14: /stripfw only auto-refreshes while a flash runs (it cleared the chosen file).
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -85,7 +86,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.13";
+const char* FW_VERSION = "2.14.14";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2377,7 +2378,8 @@ void handleStripFwPage() {
              "<input name=ssid placeholder=TONLY_TAP_91778E8 style='padding:8px'> "
              "<button style='padding:10px 16px'>2) Flash</button></form>"
              "<p>State: <b>" + provState + "</b> " + provMsg + "</p><pre style='white-space:pre-wrap'>" + stripOtaLog + "</pre>"
-             "<script>setTimeout(()=>location.reload(),5000)</script></body>";
+             + String((provState == "running" || provState == "queued") ? "<script>setTimeout(()=>location.reload(),5000)</script>" : "") +
+             "</body>";
   web.send(200, "text/html; charset=utf-8", h);
 }
 void handleStripFwDone() {
