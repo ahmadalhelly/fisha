@@ -36,7 +36,7 @@ String provErrorText(String code) {
         'The strip took the settings but is still in setup mode. Unplug it for 10 seconds and plug it back in; it will dial the hub by itself.');
   }
   if (code.startsWith('strip_said:')) return t('prov_said', {'x': code.substring(11)});
-  if (code == 'no answer on 30300') return t('prov_said', {'x': code});
+  if (code.startsWith('no answer on 30300')) return t('prov_said', {'x': code});
   return code.isEmpty ? t('add_timeout') : code;
 }
 

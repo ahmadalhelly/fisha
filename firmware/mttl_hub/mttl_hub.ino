@@ -79,7 +79,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.8";
+const char* FW_VERSION = "2.14.9";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2686,6 +2686,55 @@ void flushArp() {
   delay(100);
 }
 
+// v2.14.9: link diagnostics on the strip's setup network (does the strip answer ARP for .1 at all?)
+static volatile int provArpState = -1;
+static uint8_t provArpMac[6];
+static volatile int provLinkUp = -1, provNetifUp = -1;
+static struct netif* staNetif() {
+  esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  return nif ? (struct netif*)esp_netif_get_netif_impl(nif) : nullptr;
+}
+static void arpRequestCb(void*) {
+  struct netif* n = staNetif();
+  if (!n) return;
+  provLinkUp = netif_is_link_up(n) ? 1 : 0;
+  provNetifUp = netif_is_up(n) ? 1 : 0;
+  ip4_addr_t a;
+  IP4_ADDR(&a, 192, 168, 1, 1);
+  etharp_request(n, &a);
+}
+static void arpFindCb(void*) {
+  struct netif* n = staNetif();
+  if (!n) { provArpState = -2; return; }
+  ip4_addr_t a;
+  IP4_ADDR(&a, 192, 168, 1, 1);
+  struct eth_addr* e = nullptr;
+  const ip4_addr_t* ip = nullptr;
+  if (etharp_find_addr(n, &a, &e, &ip) >= 0 && e) { memcpy(provArpMac, e->addr, 6); provArpState = 1; }
+  else provArpState = 0;
+}
+void provLinkReport() {
+  uint8_t* b = WiFi.BSSID();
+  Serial.printf("[prov] diag: bssid %02X:%02X:%02X:%02X:%02X:%02X  rssi %d  ch %d  status %d\n",
+                b ? b[0] : 0, b ? b[1] : 0, b ? b[2] : 0, b ? b[3] : 0, b ? b[4] : 0, b ? b[5] : 0,
+                WiFi.RSSI(), WiFi.channel(), (int)WiFi.status());
+  for (int k = 0; k < 3; k++) {
+    provArpState = -1;
+    tcpip_callback(arpRequestCb, nullptr);
+    delay(1000);
+    tcpip_callback(arpFindCb, nullptr);
+    delay(100);
+    Serial.printf("[prov] diag: try %d  netif up %d  link up %d  arp .1 %s", k + 1, provNetifUp, provLinkUp,
+                  provArpState == 1 ? "answered by " : "NO ANSWER");
+    if (provArpState == 1)
+      Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X", provArpMac[0], provArpMac[1], provArpMac[2], provArpMac[3],
+                    provArpMac[4], provArpMac[5]);
+    Serial.println();
+    if (provArpState == 1) break;
+    esp_task_wdt_reset();
+  }
+}
+
 bool setupSession(const String& hubIp, String& r) {
   // v2.14.4: the setup service is on the strip AP's gateway (192.168.1.1 on older firmware); try the gateway
   // DHCP gave us first, then the usual addresses, a few rounds while the strip's service comes up
@@ -2701,6 +2750,7 @@ bool setupSession(const String& hubIp, String& r) {
   }
   flushArp();
   Serial.printf("[prov] joined, my ip %s gw %s (arp flushed)\n", WiFi.localIP().toString().c_str(), gw.toString().c_str());
+  provLinkReport();
   bool up = false;
   for (int round = 0; round < 3 && !up; round++) {
     for (int k = 0; k < 3 && !up; k++) {
@@ -2712,7 +2762,7 @@ bool setupSession(const String& hubIp, String& r) {
     }
     if (!up) delay(1500);
   }
-  if (!up) { r = "no answer on 30300"; return false; }
+  if (!up) { r = provArpState == 1 ? "no answer on 30300" : "no answer on 30300 (strip silent: no ARP)"; return false; }
   String reply;
   String cmd = "up:ip:" + hubIp;
   c.print(cmd + "\r\n");
@@ -2807,7 +2857,7 @@ void runProvision() {
     delay(800);
     // one TCP session: up:ip, up:connect, up:reboot:0
     ok = setupSession(hubIp, r);
-    if (!ok && r != "no answer on 30300") r = "strip_said:" + r;
+    if (!ok && !r.startsWith("no answer on 30300")) r = "strip_said:" + r;
   }
   WiFi.disconnect();
   delay(200);
