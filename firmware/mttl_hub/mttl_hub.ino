@@ -50,6 +50,9 @@ struct ApiRes;
 #include "mbedtls/base64.h"
 #include "esp_task_wdt.h"
 #include "esp_netif.h"
+#include "esp_netif_net_stack.h"
+#include "lwip/etharp.h"
+#include "lwip/tcpip.h"
 #include "lwip/sockets.h"
 #include <errno.h>
 #include <vector>
@@ -76,7 +79,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.7";
+const char* FW_VERSION = "2.14.8";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2658,7 +2661,10 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
       if (ch == '\n') return true;
       if (ch != '\r' && ch != 0) reply += ch;
     }
+    // v2.14.8: the strip may send its answer slowly and without a newline: stop on a complete ..._ok / fail
+    if (reply.endsWith("_ok") || reply.indexOf("fail") >= 0) { delay(150); while (c.available()) { char ch = c.read(); if (ch != '\r' && ch != '\n' && ch != 0) reply += ch; } return true; }
     if (!c.connected()) return reply.length() > 0;
+    esp_task_wdt_reset();
     delay(10);
   }
   return reply.length() > 0;
@@ -2666,6 +2672,20 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
 
 // Same as FG Link / mttl_local.py and hub 2.10.1, which provisioned strips successfully:
 // ONE TCP session -> up:ip, up:connect, up:reboot:0
+// v2.14.8: the home router and the strip's setup AP are BOTH 192.168.1.1. After switching networks the ARP cache
+// still maps .1 to the other side's MAC, so TCP to the strip went to the router's MAC (no answer on 30300) and,
+// back home, DNS/MQTT went to the strip's MAC for minutes. Drop the cached entries on every switch.
+static void flushArpCb(void*) {
+  esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (!nif) return;
+  struct netif* n = (struct netif*)esp_netif_get_netif_impl(nif);
+  if (n) etharp_cleanup_netif(n);
+}
+void flushArp() {
+  tcpip_callback(flushArpCb, nullptr);
+  delay(100);
+}
+
 bool setupSession(const String& hubIp, String& r) {
   // v2.14.4: the setup service is on the strip AP's gateway (192.168.1.1 on older firmware); try the gateway
   // DHCP gave us first, then the usual addresses, a few rounds while the strip's service comes up
@@ -2679,7 +2699,8 @@ bool setupSession(const String& hubIp, String& r) {
     gw = WiFi.gatewayIP();
     cands[0] = gw;
   }
-  Serial.printf("[prov] joined, my ip %s gw %s\n", WiFi.localIP().toString().c_str(), gw.toString().c_str());
+  flushArp();
+  Serial.printf("[prov] joined, my ip %s gw %s (arp flushed)\n", WiFi.localIP().toString().c_str(), gw.toString().c_str());
   bool up = false;
   for (int round = 0; round < 3 && !up; round++) {
     for (int k = 0; k < 3 && !up; k++) {
@@ -2695,16 +2716,16 @@ bool setupSession(const String& hubIp, String& r) {
   String reply;
   String cmd = "up:ip:" + hubIp;
   c.print(cmd + "\r\n");
-  readSetupLine(c, reply, 4000);
+  readSetupLine(c, reply, 12000);
   Serial.printf("[prov] >> %s  << %s\n", cmd.c_str(), reply.c_str());
   if (reply.indexOf("ip_ok") < 0) { r = reply; c.stop(); return false; }
   cmd = "up:connect:" + secSsid + ":" + secWifi;
   c.print(cmd + "\r\n");
-  readSetupLine(c, reply, 4000);
+  readSetupLine(c, reply, 12000);
   Serial.printf("[prov] >> up:connect:%s:****  << %s\n", secSsid.c_str(), reply.c_str());
   if (reply.indexOf("connect_ok") < 0) { r = reply; c.stop(); return false; }
   c.print("up:reboot:0\r\n");
-  readSetupLine(c, reply, 2500);     // the strip may answer or just drop the link
+  readSetupLine(c, reply, 6000);     // the strip may answer or just drop the link
   Serial.printf("[prov] >> up:reboot:0  << %s\n", reply.c_str());
   delay(300);
   c.stop();
@@ -2791,6 +2812,7 @@ void runProvision() {
   WiFi.disconnect();
   delay(200);
   connectWiFi();
+  flushArp();                          // .1 is the home router again, not the strip
   if (ok) {
     provState = "waiting";            // success is reported only when the strip dials in (bootinfo)
     provMsg = "";
