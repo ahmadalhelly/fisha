@@ -24,7 +24,7 @@ String eventText(AppState s, HubEvent e) {
     'button' => t(m == 'on' ? 'ev_button_on' : 'ev_button_off'),
     'remote' => t(m == 'on' ? 'ev_remote_on' : 'ev_remote_off'),
     'online' => t('ev_online'),
-    'offline' => t('ev_offline'),
+    'offline' => m == 'socket stuck' ? t('ev_offline_stuck') : (m == 'stale' ? t('ev_offline_stale') : t('ev_offline')),
     'voltage' => t('ev_voltage', {'x': m}),
     'overvolt' => t('ev_overvolt', {'x': m}),
     'overcurrent' => t('ev_overcurrent', {'x': m}),

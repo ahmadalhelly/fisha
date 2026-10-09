@@ -1277,6 +1277,12 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Fetches the state once even while the live stream is up (rule badges after a schedule/automation edit).
+  Future<void> _stateNow() async {
+    if (_localFresh) return _pollLocal();
+    return refresh();
+  }
+
   Future<void> refresh() async {
     if (_localFresh) {
       if (!sseLive) await _pollLocal();
@@ -1478,6 +1484,7 @@ class AppState extends ChangeNotifier {
     if (r.ok) {
       await loadSchedules();
       _mirrorSoon();
+      _stateNow(); // outlet badges follow at once, even on a hub older than 2.15.2
     }
     return r.ok;
   }
@@ -1510,6 +1517,7 @@ class AppState extends ChangeNotifier {
     _fail(r);
     await loadSchedules();
     _mirrorSoon();
+    _stateNow();
   }
 
   Future<bool> loadAutomations() async {
@@ -1531,6 +1539,7 @@ class AppState extends ChangeNotifier {
     if (r.ok) {
       await loadAutomations();
       _mirrorSoon();
+      _stateNow();
     }
     return r.ok;
   }
@@ -1544,6 +1553,7 @@ class AppState extends ChangeNotifier {
     _fail(r);
     await loadAutomations();
     _mirrorSoon();
+    _stateNow();
   }
 
   // ---------- saves waiting for the hub (this phone only, key 'pendingOps') ----------

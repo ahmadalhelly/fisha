@@ -43,6 +43,11 @@ struct ApiRes;
            limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
            is erased, so the app can put family members, schedules and rules back; family members can be
            exported and restored with their own passwords (users_export / user_restore, owner only).
+  v2.15.2: a strip is no longer dropped when one send is slow for a moment: unsent bytes wait (same bytes, same
+           order, no protocol change) and the strip is dropped only after 3 s stuck; that drop is now logged as an
+           "offline" event too ("socket stuck"). Live push (SSE) sends the state without extra copies and without
+           blocking. Saving or deleting a schedule/automation pushes the state at once (outlet badges were stale).
+           /api/health adds heap_min and sse (connected live clients).
   v2.15.1: a schedule can skip just its next run (schedule_skip, kept under its own NVS key so saved
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
@@ -93,7 +98,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.1";
+const char* FW_VERSION = "2.15.2";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -162,6 +167,8 @@ struct Strip {
   uint32_t ocoSince[4] = {0, 0, 0, 0};           // per-outlet over-current timer
   uint8_t warnA = 0, warnT = 0;                  // near-limit warning already sent (bit per outlet): current · temperature
   bool dead = false;                             // a write could not go out: dropped on the next pump
+  String txq;                                    // v2.15.2: bytes still waiting to go out to the strip (same bytes, same order)
+  uint32_t txSince = 0;                          // when txq started waiting
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
@@ -454,6 +461,23 @@ bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   return true;
 }
 bool sendStr(WiFiClient& c, const String& s, uint32_t maxMs) { return sendNB(c, s.c_str(), s.length(), maxMs); }
+// v2.15.2: like sendNB but reports how much went out (-1 = the socket is broken), so the rest can wait
+int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
+  int fd = c.fd();
+  if (fd < 0 || !c.connected()) return -1;
+  uint32_t t0 = millis();
+  int sent = 0;
+  while (len) {
+    int r = lwip_send(fd, p, len, MSG_DONTWAIT);
+    if (r > 0) { p += r; len -= r; sent += r; continue; }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      if (millis() - t0 < maxMs) { delay(1); continue; }
+      return sent;
+    }
+    return -1;
+  }
+  return sent;
+}
 
 // TCP keep-alive so a peer that vanished without closing is noticed in ~25 s
 void tcpKeepAlive(WiFiClient& c) {
@@ -466,13 +490,35 @@ void tcpKeepAlive(WiFiClient& c) {
   lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
 }
 
+// v2.15.2: a send that is slow for a moment (hub busy, Wi-Fi retry, low memory) no longer drops the strip.
+// What did not go out waits in txq and is sent from pumpStrips(); the strip is dropped only if it stays
+// stuck for TX_STUCK_MS or the backlog grows past TX_MAX. The bytes on the wire are unchanged.
+const uint32_t TX_STUCK_MS = 3000;
+const size_t TX_MAX = 2048;
+bool flushTx(Strip& s, uint32_t maxMs) {
+  if (!s.txq.length()) { s.txSince = 0; return true; }
+  int n = sendSome(s.c, s.txq.c_str(), s.txq.length(), maxMs);
+  if (n < 0) { s.dead = true; return false; }
+  if (n) s.txq.remove(0, n);
+  if (!s.txq.length()) { s.txSince = 0; return true; }
+  if (!s.txSince) s.txSince = millis();
+  if (millis() - s.txSince > TX_STUCK_MS) {
+    s.dead = true;                               // dropped by pumpStrips(), the strip re-dials by itself
+    Serial.printf("[tx %s] stuck %u ms, dropping\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), (unsigned)(millis() - s.txSince));
+  }
+  return false;
+}
+
 void sendLine(Strip& s, const String& line) {
   if (s.dead || !s.c.connected()) return;
-  if (!sendStr(s.c, line + "\r\n", 400)) {
-    s.dead = true;                               // dropped by pumpStrips(), the strip re-dials by itself
-    Serial.printf("[tx %s] stuck, dropping\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str());
+  if (s.txq.length() + line.length() + 2 > TX_MAX) {
+    s.dead = true;
+    Serial.printf("[tx %s] backlog full, dropping\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str());
     return;
   }
+  s.txq += line + "\r\n";
+  if (!flushTx(s, 150) && !s.dead)
+    Serial.printf("[tx %s] slow, %u bytes waiting\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), s.txq.length());
   Serial.printf("[tx %s] %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), line.c_str());
 }
 
@@ -652,7 +698,7 @@ void peakUpdate(int i, float watts) {
   }
 }
 
-void saveScheds() { cfg.putUChar("schN", schedCount); cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED); }
+void saveScheds() { cfg.putUChar("schN", schedCount); cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED); stateDirty = true; }   // v2.15.2: badges follow at once
 void saveSkips() { cfg.putBytes("schsk", schedSkip, sizeof(schedSkip)); }
 bool schedSkipped(uint32_t id) { for (int i = 0; i < MAX_SCHED; i++) if (id && schedSkip[i] == id) return true; return false; }
 void setSchedSkip(uint32_t id, bool on) {
@@ -661,7 +707,7 @@ void setSchedSkip(uint32_t id, bool on) {
   if (on) for (int i = 0; i < MAX_SCHED; i++) if (!schedSkip[i]) { schedSkip[i] = id; changed = true; break; }
   if (changed) saveSkips();
 }
-void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, sizeof(Autom) * MAX_AUTO); }
+void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, sizeof(Autom) * MAX_AUTO); stateDirty = true; }
 
 void loadGlobals() {
   tempMax = cfg.getUChar("tmax", 70);
@@ -790,13 +836,13 @@ String offlineMacs;                               // strips that dropped off, to
 // ---------- strip control ----------
 void dropStrip(Strip& s, const char* why) {
   Serial.printf("[-] %s %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), why);
-  if (s.identified && (!strcmp(why, "disconnected") || !strcmp(why, "stale"))) {
+  if (s.identified && (!strcmp(why, "disconnected") || !strcmp(why, "stale") || !strcmp(why, "socket stuck"))) {
     String mac = s.mac;
     if (offlineMacs.indexOf(mac) < 0) offlineMacs += mac + ",";
     s.c.stop();
     s = Strip();
     stateDirty = true;
-    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed) or "stale" (silent 45 s)
+    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send, v2.15.2)
     return;
   }
   s.c.stop();
@@ -1227,6 +1273,7 @@ void pumpStrips() {
       else s.rx = "";
     }
     if (!s.used) continue;
+    if (s.txq.length()) flushTx(s, 0);
     if (s.dead) { dropStrip(s, "socket stuck"); continue; }
     if (!s.identified && !s.poked && millis() - s.lastRx > 6000) {   // a strip that connected but never introduced itself
       s.poked = true;
@@ -2327,12 +2374,14 @@ void handleState() {
   }
 }
 
+int sseCount();
 void handleHealth() {
   int n = 0;
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
+           ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -2498,18 +2547,24 @@ void handleStripFwFlash() {
 // ---------- live push: Server-Sent Events on :8081 ----------
 struct SseClient { WiFiClient c; bool used = false, ready = false; String req; uint32_t since = 0; int userIdx = -1; };
 SseClient sse[MAX_SSE];
+int sseCount() { int n = 0; for (int i = 0; i < MAX_SSE; i++) n += sse[i].used && sse[i].ready; return n; }
 uint32_t lastSsePush = 0, lastSseBeat = 0;
 
+// v2.15.2: the state goes out in three pieces straight from the one copy (it used to be copied twice more per
+// phone, ~3 x the state size in RAM at once) and without blocking, so a push no longer starves the strips.
+bool sseWrite(WiFiClient& c, const char* ev, const String& body) {
+  String head = String("event: ") + ev + "\ndata: ";
+  return sendNB(c, head.c_str(), head.length(), 80) && sendNB(c, body.c_str(), body.length(), 80) && sendNB(c, "\n\n", 2, 80);
+}
 void sseSend(const char* ev, const String& data) {
+  bool isState = !strcmp(ev, "state");
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
     if (!sse[i].c.connected()) { sse[i].c.stop(); sse[i] = SseClient(); continue; }
-    String body = (sse[i].userIdx >= 0 && sse[i].userIdx < userCount && String(ev) == "state") ?
-                  userStateJson(users[sse[i].userIdx]) : data;
-    String chunk = String("event: ") + ev + "\ndata: " + body + "\n\n";
-    sse[i].c.setTimeout(80);
-    int written = sse[i].c.write((const uint8_t*)chunk.c_str(), chunk.length());
-    if (written < 0 || (size_t)written < chunk.length()) {
+    bool ok;
+    if (isState && sse[i].userIdx >= 0 && sse[i].userIdx < userCount) ok = sseWrite(sse[i].c, ev, userStateJson(users[sse[i].userIdx]));
+    else ok = sseWrite(sse[i].c, ev, data);
+    if (!ok) {
       sse[i].c.stop();
       sse[i] = SseClient();
     }
@@ -2571,7 +2626,7 @@ void ssePump() {
         x.c.print("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
                   "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n");
         String initData = (x.userIdx >= 0 && x.userIdx < userCount) ? userStateJson(users[x.userIdx]) : buildStateJson();
-        x.c.print("event: state\ndata: " + initData + "\n\n");
+        if (!sseWrite(x.c, "state", initData)) { x.c.stop(); x = SseClient(); continue; }
         x.ready = true;
       } else if (millis() - x.since > 3000) { x.c.stop(); x = SseClient(); continue; }
     }

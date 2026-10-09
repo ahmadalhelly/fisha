@@ -61,16 +61,45 @@ Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet
   await state.setOutlet(s.mac, o.n, on);
 }
 
+/// "All" with fingerprint-protected outlets: fingerprint first, then ask whether they are included too.
+/// true = include them, false = only the rest, null = cancel (nothing is switched).
+Future<bool?> _bioAllChoice(BuildContext context, AppState state, Strip s, List<Outlet> outs, bool on) async {
+  final passed = await authenticateBio(on
+      ? (Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On')
+      : (Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off'));
+  if (!context.mounted) return null;
+  final names = outs.map((o) => state.outletName(s, o.n)).join('، ');
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: C.surface,
+      icon: Icon(Icons.fingerprint, color: C.accent),
+      title: Text(t('bio_all_t'), style: const TextStyle(fontSize: 18)),
+      content: Text(t(passed ? 'bio_all_b' : 'bio_all_failed', {'x': names}), style: TextStyle(color: C.textSoft, height: 1.5)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('bio_all_rest'), style: TextStyle(color: C.accent))),
+        if (passed)
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t(on ? 'bio_all_on' : 'bio_all_off'), style: TextStyle(color: on ? C.accent : C.danger, fontWeight: FontWeight.w700))),
+      ],
+    ),
+  );
+}
+
 Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
   if (state.requiresBio(s.mac, 0)) {
     if (!await authenticateBio(Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On')) return;
   }
-  final needsBio = s.outlets.any((o) => !o.on && state.requiresBio(s.mac, o.n));
+  final bioOuts = s.outlets.where((o) => !o.on && state.requiresBio(s.mac, o.n)).toList();
   bool bioOk = true;
-  if (needsBio) {
-    final reason = Tr.isAr ? 'تأكيد البصمة لتشغيل الكل' : 'Authenticate for All On';
-    bioOk = await authenticateBio(reason);
+  if (bioOuts.isNotEmpty) {
+    if (!context.mounted) return;
+    final c = await _bioAllChoice(context, state, s, bioOuts, true);
+    if (c == null) return;
+    bioOk = c;
   }
   if (bioOk) {
     await state.setOutlet(s.mac, 0, true);
@@ -91,8 +120,10 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
   final bioOutlets = s.outlets.where((o) => o.on && state.requiresBio(s.mac, o.n)).toList();
   bool bioOk = true;
   if (bioOutlets.isNotEmpty) {
-    final reason = Tr.isAr ? 'تأكيد البصمة لإيقاف الكل' : 'Authenticate for All Off';
-    bioOk = await authenticateBio(reason);
+    if (!context.mounted) return;
+    final c = await _bioAllChoice(context, state, s, bioOutlets, false);
+    if (c == null) return;
+    bioOk = c;
   }
   final targets = s.outlets.where((o) => o.on && !o.keepOn && (bioOk || !state.requiresBio(s.mac, o.n))).toList();
   if (targets.isEmpty) return;
