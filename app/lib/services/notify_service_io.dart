@@ -212,7 +212,7 @@ class _NotifyHandler extends TaskHandler {
 
     if (type == 'button' || type == 'remote') {
       if (isAr) {
-        title = isOn ? '«$targetName» اتشغّل' : '«$targetName» اتقفل';
+        title = isOn ? '«$targetName» اشتغل' : '«$targetName» اتقفل';
         final source = type == 'button' ? 'من زرار المشترك' : 'من التطبيق';
         body = stripName.isNotEmpty && stripName != targetName ? '$stripName · $source' : source;
       } else {

@@ -200,6 +200,8 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     _loadPrefs();
+    _loadPendingOps();
+    if (pendingOps.isNotEmpty) _savePendingOps();
     ready = true;
     await restart();
     // the web build has no Google sign-in (see WEB.md)
@@ -218,7 +220,7 @@ class AppState extends ChangeNotifier {
   String _lastSyncSig = '';
 
   // per-phone keys that must not travel between devices through the Google copy
-  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail'};
+  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps'};
 
   Future<Map<String, dynamic>> _syncPayload() async {
     final b = await exportBackup(parts: {'app'}, withSecrets: true);
@@ -396,6 +398,7 @@ class AppState extends ChangeNotifier {
       final p = _prefs ?? await SharedPreferences.getInstance();
       _prefs = p;
       for (final k in p.getKeys()) {
+        if (k == 'pendingOps') continue;      // this phone's queue, not a setting
         final v = p.get(k);
         if (v is bool) {
           appMap[k] = {'t': 'b', 'v': v};
@@ -428,9 +431,11 @@ class AppState extends ChangeNotifier {
     if (parts.contains('hub') && mode != ConnMode.offline) {
       await loadSchedules();
       await loadAutomations();
+      final users = settings.isShared ? null : await _exportUsers();
       out['hub'] = <String, dynamic>{
-        'schedules': [for (final s in schedules) s.toJson()],
-        'automations': [for (final a in automations) a.toJson()],
+        if (users != null) 'users': users,
+        'schedules': [for (final s in schedules) if (s.sid > 0) s.toJson()],
+        'automations': [for (final a in automations) if (a.aid > 0) a.toJson()],
         'strips': [
           for (final s in allStrips)
             {
@@ -502,6 +507,22 @@ class AppState extends ChangeNotifier {
             final m = Map<String, dynamic>.from(raw)..remove('aid');
             await api('automation_save', m);
           }
+        }
+      }
+
+      // family members (hub 2.15+), with their own passwords so their phones keep working
+      if (hubData['users'] is List && !settings.isShared) {
+        for (final raw in hubData['users']) {
+          if (raw is! Map || (raw['pw'] ?? '').toString().isEmpty) continue;
+          final st = raw['strips'];
+          await api('user_restore', {
+            'id': raw['id'],
+            'name': raw['name'],
+            'role': raw['role'],
+            'all': raw['all'] == true,
+            'strips': st is List ? st.join(',') : (st ?? '').toString(),
+            'pw': raw['pw'],
+          });
         }
       }
 
@@ -799,6 +820,7 @@ class AppState extends ChangeNotifier {
       mode = m;
       notifyListeners();
       updateWidgetThrottled();
+      if (m != ConnMode.offline && pendingOps.isNotEmpty) Future.microtask(flushPending);
     }
   }
 
@@ -930,6 +952,8 @@ class AppState extends ChangeNotifier {
         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
       }
       if (j['reset'] != null) hubReset = j['reset'].toString();
+      final nvs = (j['nvs'] ?? '').toString();
+      if (nvs.isNotEmpty && !settings.isShared) _checkNvs(nvs);
       final cl = j['cloud'];
       if (cl is Map && fromLocal) {
         hubCloudUp = cl['up'] == true;
@@ -1129,12 +1153,17 @@ class AppState extends ChangeNotifier {
 
   /// Returns the invite code in [CmdResult.data]['code'].
   Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
-      _job('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')});
+      _job('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')}).then(_mirrorAfter);
 
   Future<CmdResult> updateUser(HubUser u) =>
-      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')});
+      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')}).then(_mirrorAfter);
 
-  Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id});
+  Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id}).then(_mirrorAfter);
+
+  CmdResult _mirrorAfter(CmdResult r) {
+    if (r.ok) _mirrorSoon();
+    return r;
+  }
 
   // ---------- joining someone else's hub ----------
   static Map<String, dynamic>? decodeInvite(String code) {
@@ -1432,24 +1461,36 @@ class AppState extends ChangeNotifier {
     if (r.ok && r.data != null) {
       final l = r.data!['schedules'];
       schedules = l is List ? l.whereType<Map<String, dynamic>>().map(Schedule.fromJson).toList() : [];
+      schedules = _withPending(schedules, 'schedule', 'sid', (s) => s.sid, Schedule.fromJson);
       schedules.sort((a, b) => (a.hh * 60 + a.mm).compareTo(b.hh * 60 + b.mm));
       notifyListeners();
     }
     return r.ok;
   }
 
+  /// Sent to the hub right away; when the hub can't be reached it waits on this phone and goes out
+  /// as soon as the hub is back (a time that passed meanwhile runs at once), so the save still counts.
   Future<bool> saveSchedule(Schedule s) async {
+    if (s.sid < 0) return _queueEdit('schedule', 'sid', s.sid, s.toJson());
     final r = await api('schedule_save', s.toJson());
+    if (_isConnErr(r)) return _queueEdit('schedule', 'sid', s.sid, s.toJson());
     _fail(r);
-    if (r.ok) await loadSchedules();
+    if (r.ok) {
+      await loadSchedules();
+      _mirrorSoon();
+    }
     return r.ok;
   }
 
   Future<void> deleteSchedule(int sid) async {
     schedules = schedules.where((x) => x.sid != sid).toList();
     notifyListeners();
-    _fail(await api('schedule_delete', {'sid': sid}));
+    if (sid < 0) return _dropQueued('schedule', 'sid', sid);
+    final r = await api('schedule_delete', {'sid': sid});
+    if (_isConnErr(r)) return _queueDelete('schedule', 'sid', sid);
+    _fail(r);
     await loadSchedules();
+    _mirrorSoon();
   }
 
   Future<bool> loadAutomations() async {
@@ -1457,23 +1498,240 @@ class AppState extends ChangeNotifier {
     if (r.ok && r.data != null) {
       final l = r.data!['automations'];
       automations = l is List ? l.whereType<Map<String, dynamic>>().map(Automation.fromJson).toList() : [];
+      automations = _withPending(automations, 'automation', 'aid', (a) => a.aid, Automation.fromJson);
       notifyListeners();
     }
     return r.ok;
   }
 
   Future<bool> saveAutomation(Automation a) async {
+    if (a.aid < 0) return _queueEdit('automation', 'aid', a.aid, a.toJson());
     final r = await api('automation_save', a.toJson());
+    if (_isConnErr(r)) return _queueEdit('automation', 'aid', a.aid, a.toJson());
     _fail(r);
-    if (r.ok) await loadAutomations();
+    if (r.ok) {
+      await loadAutomations();
+      _mirrorSoon();
+    }
     return r.ok;
   }
 
   Future<void> deleteAutomation(int aid) async {
     automations = automations.where((x) => x.aid != aid).toList();
     notifyListeners();
-    _fail(await api('automation_delete', {'aid': aid}));
+    if (aid < 0) return _dropQueued('automation', 'aid', aid);
+    final r = await api('automation_delete', {'aid': aid});
+    if (_isConnErr(r)) return _queueDelete('automation', 'aid', aid);
+    _fail(r);
     await loadAutomations();
+    _mirrorSoon();
+  }
+
+  // ---------- saves waiting for the hub (this phone only, key 'pendingOps') ----------
+  // op: {'k': 'schedule'|'automation', 'del': bool, 'id': int (negative = new, not on the hub yet), 'b': body, 'q': queued at}
+  List<Map<String, dynamic>> pendingOps = [];
+  bool _flushing = false;
+  Timer? _flushTimer;
+
+  bool _isConnErr(CmdResult r) =>
+      !r.ok && (r.error == t('err_no_conn') || r.error == t('err_failed') || r.error == t('err_no_ack'));
+
+  void _loadPendingOps() {
+    try {
+      final raw = _prefs?.getString('pendingOps');
+      pendingOps = raw == null ? [] : (jsonDecode(raw) as List).whereType<Map<String, dynamic>>().toList();
+    } catch (_) {
+      pendingOps = [];
+    }
+  }
+
+  void _savePendingOps() {
+    _prefs?.setString('pendingOps', jsonEncode(pendingOps));
+    _flushTimer?.cancel();
+    _flushTimer = pendingOps.isEmpty ? null : Timer.periodic(const Duration(seconds: 20), (_) => flushPending());
+    notifyListeners();
+  }
+
+  int get pendingCount => pendingOps.length;
+
+  bool _queueEdit(String kind, String idKey, int id, Map<String, dynamic> body) {
+    var qid = id;
+    if (qid == 0) qid = -(DateTime.now().millisecondsSinceEpoch % 1000000000) - 1 - (_seq++ % 1000);
+    final b = Map<String, dynamic>.from(body)..[idKey] = qid;
+    pendingOps.removeWhere((o) => o['k'] == kind && o['id'] == qid);
+    pendingOps.add({'k': kind, 'del': false, 'id': qid, 'b': b, 'q': DateTime.now().toIso8601String()});
+    _savePendingOps();
+    if (kind == 'schedule') {
+      final sc = Schedule.fromJson(b);
+      schedules = [...schedules.where((x) => x.sid != qid), sc]..sort((a, c) => (a.hh * 60 + a.mm).compareTo(c.hh * 60 + c.mm));
+    } else {
+      final au = Automation.fromJson(b);
+      automations = [...automations.where((x) => x.aid != qid), au];
+    }
+    lastError = t('queued_for_hub');
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> _queueDelete(String kind, String idKey, int id) async {
+    pendingOps.removeWhere((o) => o['k'] == kind && o['id'] == id);
+    pendingOps.add({'k': kind, 'del': true, 'id': id, 'b': {idKey: id}, 'q': DateTime.now().toIso8601String()});
+    _savePendingOps();
+    lastError = t('queued_for_hub');
+    notifyListeners();
+  }
+
+  Future<void> _dropQueued(String kind, String idKey, int id) async {
+    pendingOps.removeWhere((o) => o['k'] == kind && o['id'] == id);
+    _savePendingOps();
+  }
+
+  /// The hub's list plus what still waits on this phone (new ones added, edits shown, deletes hidden).
+  List<T> _withPending<T>(List<T> list, String kind, String idKey, int Function(T) idOf, T Function(Map<String, dynamic>) from) {
+    final out = List<T>.from(list);
+    for (final o in pendingOps.where((o) => o['k'] == kind)) {
+      final id = (o['id'] as num).toInt();
+      out.removeWhere((x) => idOf(x) == id);
+      if (o['del'] != true && o['b'] is Map) out.add(from(Map<String, dynamic>.from(o['b'] as Map)));
+    }
+    return out;
+  }
+
+  /// Sends what waited for the hub, oldest first. A schedule whose time came while it waited runs now.
+  Future<void> flushPending() async {
+    if (_flushing || pendingOps.isEmpty || mode == ConnMode.offline) return;
+    _flushing = true;
+    try {
+      while (pendingOps.isNotEmpty) {
+        final o = pendingOps.first;
+        final kind = o['k'].toString();
+        final idKey = kind == 'schedule' ? 'sid' : 'aid';
+        final id = (o['id'] as num).toInt();
+        final body = Map<String, dynamic>.from(o['b'] as Map);
+        if (id < 0) body[idKey] = 0;
+        final r = o['del'] == true
+            ? await api('${kind}_delete', {idKey: id})
+            : await api('${kind}_save', body);
+        if (_isConnErr(r)) break;               // still unreachable: keep it for the next try
+        pendingOps.removeAt(0);
+        _savePendingOps();
+        if (!r.ok) {
+          _fail(r);
+          continue;
+        }
+        if (kind == 'schedule' && o['del'] != true) {
+          final sc = Schedule.fromJson(body);
+          final q = DateTime.tryParse((o['q'] ?? '').toString());
+          if (q != null && sc.enabled && _missedSince(sc, q, DateTime.now())) {
+            await api('onoff', {'mac': sc.mac, 'outlet': sc.outlet, 'on': sc.on});
+          }
+        }
+      }
+    } finally {
+      _flushing = false;
+    }
+    await loadSchedules();
+    await loadAutomations();
+    _mirrorSoon();
+  }
+
+  /// true when the schedule had a run time after [from] and up to [to].
+  static bool _missedSince(Schedule s, DateTime from, DateTime to) {
+    if (s.days == 0) {
+      if (s.date <= 0) return false;
+      final at = DateTime(s.date ~/ 10000, (s.date ~/ 100) % 100, s.date % 100, s.hh, s.mm);
+      return at.isAfter(from) && !at.isAfter(to);
+    }
+    var d = DateTime(from.year, from.month, from.day);
+    for (var i = 0; i < 8 && !d.isAfter(to); i++, d = DateTime(d.year, d.month, d.day + 1)) {
+      final at = DateTime(d.year, d.month, d.day, s.hh, s.mm);
+      if (s.days & (1 << (d.weekday % 7)) != 0 && at.isAfter(from) && !at.isAfter(to)) return true;
+    }
+    return false;
+  }
+
+  // ---------- copy of the hub's data (prefs 'hubMirror': travels with Google sync and the backup file) ----------
+  // The hub reports a storage id ('nvs', fw 2.15+) that changes only when its saved data is erased (e.g. a full
+  // flash). Then the family members, schedules, rules and names come back from this copy by themselves.
+  String _hubNvs = '';
+  bool _mirrorBusy = false;
+  DateTime? _mirrorAt;
+  Timer? _mirrorDebounce;
+
+  Map<String, dynamic>? get _mirror {
+    try {
+      final raw = _prefs?.getString('hubMirror');
+      return raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _mirrorSoon() {
+    if (settings.isShared || _hubNvs.isEmpty || (_mirrorDebounce?.isActive ?? false)) return;
+    _mirrorDebounce = Timer(const Duration(seconds: 3), _refreshMirror);
+  }
+
+  Future<List<Map<String, dynamic>>?> _exportUsers() async {
+    final r = await api('users_export');
+    final l = r.data?['users'];
+    if (!r.ok || l is! List) return null;
+    return l.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> _refreshMirror() async {
+    if (_mirrorBusy || settings.isShared || _hubNvs.isEmpty || mode == ConnMode.offline) return;
+    _mirrorBusy = true;
+    try {
+      final nvs = _hubNvs;
+      final users = await _exportUsers();
+      final b = await exportBackup(parts: {'hub'});
+      final hub = b['hub'];
+      if (users == null || hub is! Map<String, dynamic> || nvs != _hubNvs) return;
+      hub['users'] = users;
+      final m = {'nvs': nvs, 'hub_id': settings.hubId.toUpperCase(), 'at': DateTime.now().toIso8601String(), ...hub};
+      await _prefs?.setString('hubMirror', jsonEncode(m));
+      _mirrorAt = DateTime.now();
+    } catch (_) {
+    } finally {
+      _mirrorBusy = false;
+    }
+  }
+
+  /// Called with every state from the hub (owner only).
+  void _checkNvs(String nvs) {
+    if (nvs == _hubNvs || _mirrorBusy) {
+      if (_mirrorAt == null || DateTime.now().difference(_mirrorAt!) > const Duration(minutes: 15)) _mirrorSoon();
+      return;
+    }
+    final m = _mirror;
+    final sameHub = m != null && (m['hub_id'] ?? '').toString() == settings.hubId.toUpperCase();
+    _hubNvs = nvs;
+    if (!sameHub || (m['nvs'] ?? '').toString().isEmpty || m['nvs'] == nvs) {
+      _mirrorSoon();
+      return;
+    }
+    Future.microtask(() => _restoreMirror(m));
+  }
+
+  /// The hub's storage was erased: put everything back, but only into a hub that is really empty
+  /// (another phone may already have done it, or the owner started over on purpose).
+  Future<void> _restoreMirror(Map<String, dynamic> m) async {
+    _mirrorBusy = true;
+    try {
+      final users = await _exportUsers();
+      final sOk = await loadSchedules();
+      final aOk = await loadAutomations();
+      if (users == null || !sOk || !aOk) return;
+      if (users.isNotEmpty || schedules.any((x) => x.sid > 0) || automations.any((x) => x.aid > 0)) return;
+      await importBackup({'fisha_backup': 1, 'hub': m}, parts: {'hub'});
+      lastError = t('hub_restored');
+      notifyListeners();
+    } catch (_) {
+    } finally {
+      _mirrorBusy = false;
+    }
+    await _refreshMirror();
   }
 
   // ---------- events ----------

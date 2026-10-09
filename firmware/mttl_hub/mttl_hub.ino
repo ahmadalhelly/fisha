@@ -39,6 +39,11 @@ struct ApiRes;
             the strip's setup network, sends up:ota:192.168.1.2 and serves GET /ota.bin on port 80 itself
             (a Windows PC with Bitdefender dropped the strip's inbound connection).
   v2.14.14: /stripfw only auto-refreshes while a flash runs (it cleared the chosen file).
+  v2.15.0: automations are armed as soon as they are saved and after every reboot (a load already past the
+           limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
+           is erased, so the app can put family members, schedules and rules back; family members can be
+           exported and restored with their own passwords (users_export / user_restore, owner only).
+           The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -86,7 +91,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.14";
+const char* FW_VERSION = "2.15.0";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -223,6 +228,7 @@ struct MqttCmd { char payload[640]; char topic[96]; };
 esp_mqtt_client_handle_t mqtt = nullptr;
 QueueHandle_t mqttQ = nullptr;
 volatile bool mqttUp = false, mqttFreshConnect = false;
+String nvsId;                                     // v2.15.0: changes only when the saved data is erased
 String hubId, tStatus, tInfo, tState, tEvent, tCmd, tAck;
 char mqttClientId[32];
 // v2.9: why the cloud link is down, and who sent the command being handled
@@ -677,7 +683,7 @@ void loadGlobals() {
   }
   ntfyTopic = cfg.getString("ntfy", "");
   notifyTypes = cfg.getUInt("ntypes", 0xFFFFFFFF);
-  for (int i = 0; i < MAX_AUTO; i++) { autoArmed[i] = false; autoSince[i] = 0; }
+  for (int i = 0; i < MAX_AUTO; i++) { autoArmed[i] = true; autoSince[i] = 0; }
 }
 
 // ---------- strips the hub has seen (shown as offline instead of disappearing) ----------
@@ -985,18 +991,15 @@ void evalStrip(int i) {
     if (r.outlet == 0) { pw = total; tc = hottest; cur = amps; on = anyOn; }
     else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = o.on ? (o.powerW / volts) : 0; on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
-    bool cond;
-    if (r.metric == 2) {                         // either limit (watts or temp)
-      if (pw < r.watts && tc < r.limit2) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
-      cond = autoArmed[a] && on;
-      if (tc >= r.limit2) p = tc;
-    } else if (r.above) {
-      if (p < r.watts) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
-      cond = autoArmed[a] && on;
-    } else {
-      if (p > r.watts) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }   // it went above first -> arm
-      cond = autoArmed[a] && on;
-    }
+    // v2.15.0: a rule is armed from the moment it is saved (and after every reboot), so a load that is already
+    // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
+    // Before, it only armed after the load crossed back first: a heater already above, or an outlet already in
+    // standby, never tripped, and every hub reboot (firmware update) disarmed all rules.
+    bool clear;
+    if (r.metric == 2) { clear = pw < r.watts && tc < r.limit2; if (tc >= r.limit2) p = tc; }   // either limit (watts or temp)
+    else clear = r.above ? p < r.watts : p > r.watts;
+    if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
+    bool cond = autoArmed[a];
     // near-threshold warning (color-code alert) before the countdown trips (v2.11)
     if (r.above && autoArmed[a] && on && !autoWarned[a]) {
       float warnAt = r.watts * 0.85f;
@@ -1006,7 +1009,7 @@ void evalStrip(int i) {
         addEvent("warn", s.mac, r.outlet, String(p, r.metric == 1 ? 0 : 1) + (r.metric == 1 ? "°C" : (r.metric == 3 ? " A" : " W")) + " (near " + String(r.watts, r.metric == 1 ? 0 : 1) + ")");
       }
     }
-    if (!cond) continue;
+    if (!cond) { autoSince[a] = 0; continue; }
     if (!autoSince[a]) autoSince[a] = now ? now : 1;
     if (now - autoSince[a] >= (uint32_t)r.holdS * 1000) {
       autoArmed[a] = false;
@@ -1448,7 +1451,7 @@ String timersJson() {
 String buildStateJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
              "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
-             ",\"uptime_s\":" + String(millis() / 1000) +
+             ",\"uptime_s\":" + String(millis() / 1000) + ",\"nvs\":\"" + nvsId + "\"" +
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
              ",\"v_protect\":" + (vProt ? "true" : "false") + ",\"v_restore\":" + (vRestore ? "true" : "false") +
@@ -1945,6 +1948,41 @@ ApiRes api(String path, const String& b) {
     publishUserState(u);
     return okRes();
   }
+  if (path == "users_export") {                   // v2.15.0: family members with their passwords, for the owner's backup
+    if (apiSrc == 2) return errRes("forbidden");
+    String j = "{\"users\":[";
+    for (int i = 0; i < userCount; i++) {
+      if (i) j += ",";
+      String uj = userJson(users[i]);
+      j += uj.substring(0, uj.length() - 1) + ",\"pw\":\"" + jsonEsc(String(users[i].pw)) + "\"}";
+    }
+    return okRes(j + "]}");
+  }
+  if (path == "user_restore") {                   // v2.15.0: {"id","name","role","all","strips","pw"} puts a backed-up member back
+    if (apiSrc == 2) return errRes("forbidden");  // (the cloud login stays on the server, so the member's phone keeps working)
+    String id = jsonValue(b, "id"), pw = jsonValue(b, "pw"), nm = jsonValue(b, "name");
+    nm.trim();
+    if (id.length() < 2 || id.length() >= sizeof(HubUser::id) || pw.length() < 8 || pw.length() >= sizeof(HubUser::pw) || !nm.length())
+      return errRes("bad user");
+    HubUser u; memset(&u, 0, sizeof u);
+    strlcpy(u.id, id.c_str(), sizeof u.id);
+    strlcpy(u.name, nm.c_str(), sizeof u.name);
+    strlcpy(u.pw, pw.c_str(), sizeof u.pw);
+    u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
+    u.all = jsonBool(b, "all") ? 1 : 0;
+    parseStrips(u, jsonValue(b, "strips"));
+    if (!u.all && !u.n) return errRes("pick at least one strip");
+    int i = findUser(u.id);
+    if (i < 0) {
+      if (userCount >= MAX_USERS) return errRes("max 10 users");
+      i = userCount++;
+    }
+    users[i] = u;
+    saveUsers();
+    publishUserState(u);
+    stateDirty = true;
+    return okRes();
+  }
   if (path == "user_revoke") {                    // {"id"} local network only
     if (apiSrc != 0) return errRes("local_only");
     int i = findUser(jsonValue(b, "id"));
@@ -2131,7 +2169,8 @@ ApiRes api(String path, const String& b) {
     r.act = constrain(jsonValue(b, "act").toInt(), 1, 3);
     r.enabled = jsonHas(b, "enabled") ? jsonBool(b, "enabled") : 1;
     strlcpy(r.label, jsonValue(b, "label").c_str(), sizeof r.label);
-    autoArmed[slot] = false;
+    autoArmed[slot] = true;
+    autoWarned[slot] = false;
     autoSince[slot] = 0;
     saveAutos();
     return okRes("{\"aid\":" + String(r.id) + "}");
@@ -3259,6 +3298,8 @@ void setup() {
   loadGlobals();
   loadKnown();
   loadTimers();
+  nvsId = cfg.getString("nvsid", "");
+  if (!nvsId.length()) { nvsId = randText(8); cfg.putString("nvsid", nvsId); }
   if (cfg.getUChar("nver", 0) < 2) {             // v2.6: every event, every outlet by default
     notifyTypes = 0xFFFFFFFF;
     cfg.putUInt("ntypes", notifyTypes);
