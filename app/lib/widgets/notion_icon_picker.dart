@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../i18n.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart' show PhosphorIcon;
 import 'phosphor_catalog.dart';
 
 /// Single item in the Notion-style icon catalog.
@@ -198,7 +197,14 @@ class FishaIcon extends StatelessWidget {
       final light = icon.endsWith('@light');
       final key = icon.substring(5, light ? icon.length - 6 : icon.length);
       final ph = kPhosphorIcons[key];
-      if (ph != null) return PhosphorIcon(light ? ph.$1 : ph.$2, size: size, color: color ?? C.textSoft, duotoneSecondaryOpacity: 0.28);
+      if (ph != null) {
+        final c = color ?? C.textSoft;
+        if (light) return Icon(ph.light, size: size, color: c);
+        return Stack(alignment: Alignment.center, children: [
+          Icon(ph.duoFill, size: size, color: c.withValues(alpha: 0.28)),
+          Icon(ph.duo, size: size, color: c),
+        ]);
+      }
       final data = kNotionIconMap[key] ?? defaultIcon ?? Icons.category_outlined;
       return Icon(data, size: size, color: color ?? C.textSoft);
     }
