@@ -728,8 +728,11 @@ class AppState extends ChangeNotifier {
     return Uri.parse('http://${settings.localHost}:${settings.localPort}$path');
   }
 
+  // An open live stream (SSE) is the local link itself: the hub only writes to it when something changes, with a
+  // heartbeat every 15 s, so a 7 s window alone flipped "Local" off between heartbeats and sent commands via the
+  // cloud. The stream drops itself after 25 s of silence (see _runSse), which clears sseLive.
   bool get _localFresh =>
-      _lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7);
+      sseLive || (_lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7));
 
   Future<void> _pollLocal() async {
     if (!kLocalCapable || _polling || settings.localHost.isEmpty) return;
