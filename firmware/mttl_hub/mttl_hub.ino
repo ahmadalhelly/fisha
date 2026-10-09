@@ -79,7 +79,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.10";
+const char* FW_VERSION = "2.14.11";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2799,11 +2799,12 @@ void runProvision() {
   String ap;
   int best = -1000;
   int apCh = 0;
+  int apEnc = -1;
   uint8_t apBssid[6] = {0};
   for (int i = 0; i < n; i++) {
     String ss = WiFi.SSID(i);
     if ((ss.startsWith("TONLY_TAP_") || ss.startsWith("ONLY_TAP_")) && WiFi.RSSI(i) > best) {
-      ap = ss; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6);
+      ap = ss; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6); apEnc = (int)WiFi.encryptionType(i);
     }
   }
   WiFi.scanDelete();
@@ -2812,7 +2813,7 @@ void runProvision() {
       bool seen = false;
       int m = WiFi.scanNetworks();
       for (int i = 0; i < m; i++)
-        if (WiFi.SSID(i) == provSsid) { seen = true; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6); }
+        if (WiFi.SSID(i) == provSsid) { seen = true; best = WiFi.RSSI(i); apCh = WiFi.channel(i); memcpy(apBssid, WiFi.BSSID(i), 6); apEnc = (int)WiFi.encryptionType(i); }
       WiFi.scanDelete();
       if (!seen) { provFail("no_ap"); return; }
     }
@@ -2822,12 +2823,15 @@ void runProvision() {
   provTarget = ap.substring(ap.lastIndexOf('_') + 1);
   provTarget.toUpperCase();
   String pass = "LGU_" + ap.substring(ap.lastIndexOf('_') + 1);
-  Serial.printf("[prov] joining %s (%d dBm)\n", ap.c_str(), best);
+  Serial.printf("[prov] joining %s (%d dBm, ch %d, auth %d)\n", ap.c_str(), best, apCh, apEnc);
 
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "provisioning");
   // v2.14.3: no auto-reconnect to the home Wi-Fi meanwhile, pin the strip's channel + BSSID, two tries,
   // and report why the join failed (wrong password vs AP gone) instead of a bare join_failed
   WiFi.setAutoReconnect(false);
+  // v2.14.11: Arduino-ESP32 3.x refuses APs weaker than WPA2-PSK by default (2.x accepted anything). The strip's
+  // setup AP is older WPA, so the join silently never happened (join_failed, no disconnect reason). Allow it here.
+  WiFi.setMinSecurity(WIFI_AUTH_OPEN);
   // v2.14.10: the loop below used to start with "status != CONNECTED" while the hub was still on the home Wi-Fi, so it
   // never ran and the hub "joined" YAYA (BSSID = router). Now: leave home first, forget the stored home AP, and only
   // count the join when the BSSID we are on is the strip's.
@@ -2855,6 +2859,7 @@ void runProvision() {
   }
   if (!onStrip && WiFi.status() == WL_CONNECTED) WiFi.disconnect(false, true);
   WiFi.setAutoReconnect(true);
+  WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);         // back to the default for the home network
 
   bool ok = false;
   String r;
