@@ -79,7 +79,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.9";
+const char* FW_VERSION = "2.14.10";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2828,21 +2828,32 @@ void runProvision() {
   // v2.14.3: no auto-reconnect to the home Wi-Fi meanwhile, pin the strip's channel + BSSID, two tries,
   // and report why the join failed (wrong password vs AP gone) instead of a bare join_failed
   WiFi.setAutoReconnect(false);
-  for (int attempt = 0; attempt < 2 && WiFi.status() != WL_CONNECTED; attempt++) {
-    WiFi.disconnect(true);
-    delay(400);
+  // v2.14.10: the loop below used to start with "status != CONNECTED" while the hub was still on the home Wi-Fi, so it
+  // never ran and the hub "joined" YAYA (BSSID = router). Now: leave home first, forget the stored home AP, and only
+  // count the join when the BSSID we are on is the strip's.
+  bool onStrip = false;
+  for (int attempt = 0; attempt < 3 && !onStrip; attempt++) {
+    WiFi.disconnect(false, true);                    // leave + erase the stored (home) AP config
+    for (int i = 0; i < 20 && WiFi.status() == WL_CONNECTED; i++) delay(100);
     WiFi.mode(WIFI_STA);
-    // v2.14.7: the strip's setup AP is 192.168.1.1 and leases from 192.168.1.2 (seen from a laptop). On this core the
-    // hub kept its home static .100 instead of taking a lease, and the strip ignored it, so take .2 statically
+    // the strip's setup AP is 192.168.1.1 and leases from 192.168.1.2 (seen from a laptop)
     WiFi.config(IPAddress(192, 168, 1, 2), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
     provDiscReason = 0;
     if (apCh > 0) WiFi.begin(ap.c_str(), pass.c_str(), apCh, apBssid);
     else WiFi.begin(ap.c_str(), pass.c_str());
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) { delay(250); esp_task_wdt_reset(); }
-    if (WiFi.status() != WL_CONNECTED)
+    if (WiFi.status() != WL_CONNECTED) {
       Serial.printf("[prov] join try %d failed: reason %u (ch %d)\n", attempt + 1, provDiscReason, apCh);
+      continue;
+    }
+    uint8_t* b = WiFi.BSSID();
+    onStrip = b && (apCh == 0 || memcmp(b, apBssid, 6) == 0) && WiFi.SSID() == ap;
+    if (!onStrip)
+      Serial.printf("[prov] join try %d landed on %s (%02X:%02X:%02X:%02X:%02X:%02X), not the strip: retrying\n", attempt + 1,
+                    WiFi.SSID().c_str(), b ? b[0] : 0, b ? b[1] : 0, b ? b[2] : 0, b ? b[3] : 0, b ? b[4] : 0, b ? b[5] : 0);
   }
+  if (!onStrip && WiFi.status() == WL_CONNECTED) WiFi.disconnect(false, true);
   WiFi.setAutoReconnect(true);
 
   bool ok = false;
