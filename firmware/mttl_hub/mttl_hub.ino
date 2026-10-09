@@ -35,6 +35,9 @@ struct ApiRes;
            the protection switch now only turns the under-voltage cut on/off (limit 170..260 V).
   v2.14.1: the "strip offline" event keeps why it dropped (disconnected / stale); schedules and automations
            are only saved for a strip the hub knows, with thresholds kept in a sane range.
+  v2.14.13: strip firmware flashing from the hub (/stripfw): the .fwr is kept in the spare OTA slot, the hub joins
+            the strip's setup network, sends up:ota:192.168.1.2 and serves GET /ota.bin on port 80 itself
+            (a Windows PC with Bitdefender dropped the strip's inbound connection).
 */
 #include <WiFi.h>
 #include <WebServer.h>
@@ -49,6 +52,8 @@ struct ApiRes;
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
 #include "esp_task_wdt.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_netif_net_stack.h"
@@ -80,7 +85,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.12";
+const char* FW_VERSION = "2.14.13";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -233,6 +238,12 @@ String exUrl, exKey, exSec, exLast;                                // EMQX manag
 volatile bool provRequested = false;
 uint32_t provAt = 0;
 String provState = "idle", provMsg = "", provSsid = "", provTarget = "";   // provTarget = last 7 hex of the new strip's MAC
+// v2.14.13: strip firmware (.fwr) kept raw in the spare OTA app slot, served to a strip in setup mode
+bool provOta = false;                  // this provisioning run flashes the strip instead of pointing it at the hub
+uint32_t stripFwSize = 0;              // bytes of the stored .fwr (0 = none), also in NVS "stripfw"/"size"
+const uint32_t STRIP_FW_MAX = 0x60000; // 384 KB; stock .fwr files are ~320 KB
+String stripOtaLog = "";               // last flash run, shown on /stripfw
+const esp_partition_t* stripFwPart();
 
 // ---------- helpers ----------
 std::vector<String> split(const String& s, char sep) {
@@ -2351,6 +2362,68 @@ void handleUpdateUpload() {
   }
 }
 
+// ---------- v2.14.13: strip firmware flashing (/stripfw) ----------
+uint32_t stripFwWritten = 0;
+bool stripFwErr = false;
+void handleStripFwPage() {
+  if (!otaAuth()) return web.requestAuthentication();
+  String h = "<meta name=viewport content='width=device-width,initial-scale=1'><meta charset=utf-8>"
+             "<body style='font-family:sans-serif;background:#0d1117;color:#e8edf3;padding:20px'>"
+             "<h3>Fisha Hub v" + String(FW_VERSION) + " &mdash; strip firmware</h3>"
+             "<p>Stored .fwr: <b>" + (stripFwSize ? String(stripFwSize) + " bytes" : String("none")) + "</b></p>"
+             "<form method=POST action=/stripfw enctype=multipart/form-data><input type=file name=f accept=.fwr,.bin> "
+             "<button style='padding:10px 16px'>1) Upload .fwr</button></form><hr>"
+             "<form method=POST action=/stripfw/flash>Strip in setup mode (Wi-Fi name): "
+             "<input name=ssid placeholder=TONLY_TAP_91778E8 style='padding:8px'> "
+             "<button style='padding:10px 16px'>2) Flash</button></form>"
+             "<p>State: <b>" + provState + "</b> " + provMsg + "</p><pre style='white-space:pre-wrap'>" + stripOtaLog + "</pre>"
+             "<script>setTimeout(()=>location.reload(),5000)</script></body>";
+  web.send(200, "text/html; charset=utf-8", h);
+}
+void handleStripFwDone() {
+  if (!otaAuth()) return web.requestAuthentication();
+  if (stripFwErr || !stripFwWritten) { stripFwSize = 0; web.send(500, "text/plain", "FAILED (file empty or larger than 384 KB)\n"); return; }
+  stripFwSize = stripFwWritten;
+  Preferences p;
+  p.begin("stripfw", false);
+  p.putUInt("size", stripFwSize);
+  p.end();
+  Serial.printf("[strip-ota] stored %u bytes\n", stripFwSize);
+  web.sendHeader("Location", "/stripfw");
+  web.send(303, "text/plain", "OK " + String(stripFwSize) + " bytes\n");
+}
+void handleStripFwUpload() {
+  if (!otaAuth()) return;
+  HTTPUpload& u = web.upload();
+  const esp_partition_t* part = stripFwPart();
+  if (u.status == UPLOAD_FILE_START) {
+    stripFwWritten = 0;
+    stripFwErr = !part || part->size < STRIP_FW_MAX;
+    if (!stripFwErr) stripFwErr = esp_partition_erase_range(part, 0, STRIP_FW_MAX) != ESP_OK;
+    Serial.printf("[strip-ota] upload %s%s\n", u.filename.c_str(), stripFwErr ? " (no spare slot)" : "");
+  } else if (u.status == UPLOAD_FILE_WRITE && !stripFwErr) {
+    if (stripFwWritten + u.currentSize > STRIP_FW_MAX) { stripFwErr = true; return; }
+    if (esp_partition_write(part, stripFwWritten, u.buf, u.currentSize) != ESP_OK) { stripFwErr = true; return; }
+    stripFwWritten += u.currentSize;
+  } else if (u.status == UPLOAD_FILE_ABORTED) {
+    stripFwErr = true;
+  }
+}
+void handleStripFwFlash() {
+  if (!otaAuth()) return web.requestAuthentication();
+  String ssid = web.arg("ssid");
+  ssid.trim();
+  if (!stripFwSize) { web.send(400, "text/plain", "upload the .fwr first\n"); return; }
+  if (!ssid.startsWith("TONLY_TAP_") && !ssid.startsWith("ONLY_TAP_")) { web.send(400, "text/plain", "ssid must be TONLY_TAP_...\n"); return; }
+  if (provState == "running" || provState == "waiting" || provRequested) { web.send(409, "text/plain", "busy\n"); return; }
+  stripOtaLog = "";
+  provOta = true;
+  provSsid = ssid;
+  requestProvision();
+  web.sendHeader("Location", "/stripfw");
+  web.send(303, "text/plain", "started: the hub leaves the home Wi-Fi for up to 2 minutes\n");
+}
+
 // ---------- live push: Server-Sent Events on :8081 ----------
 struct SseClient { WiFiClient c; bool used = false, ready = false; String req; uint32_t since = 0; int userIdx = -1; };
 SseClient sse[MAX_SSE];
@@ -2784,6 +2857,89 @@ bool setupSession(const String& hubIp, String& r) {
   return true;
 }
 
+// v2.14.13: flash a strip in setup mode. Same TCP 30300 service as provisioning: "up:ota:<our ip>" makes the strip
+// (fw 1.0.141 too, seen in Wireshark) fetch http://<our ip>:80/ota.bin, which the hub answers from the spare OTA slot.
+const esp_partition_t* stripFwPart() { return esp_ota_get_next_update_partition(nullptr); }
+
+void otaLog(const String& m) { Serial.println("[strip-ota] " + m); stripOtaLog += m + "\n"; }
+
+bool serveStripFw(uint32_t waitMs) {
+  const esp_partition_t* part = stripFwPart();
+  if (!part || !stripFwSize) { otaLog("no firmware stored"); return false; }
+  WiFiServer srv(80);
+  srv.begin();
+  bool sent = false;
+  uint32_t t0 = millis();
+  while (!sent && millis() - t0 < waitMs) {
+    esp_task_wdt_reset();
+    WiFiClient c = srv.accept();
+    if (!c) { delay(20); continue; }
+    String req;
+    uint32_t r0 = millis();
+    while (c.connected() && millis() - r0 < 5000 && req.indexOf("\r\n\r\n") < 0) {
+      while (c.available()) req += (char)c.read();
+      delay(5);
+    }
+    String first = req.substring(0, req.indexOf('\r'));
+    otaLog("request from " + c.remoteIP().toString() + ": " + first);
+    if (!first.startsWith("GET ") || first.indexOf("/ota.bin") < 0) {
+      c.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      c.stop();
+      continue;
+    }
+    c.setNoDelay(true);
+    c.print("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + String(stripFwSize) +
+            "\r\nConnection: close\r\n\r\n");
+    static uint8_t buf[1460];
+    uint32_t off = 0, lastLog = 0, s0 = millis();
+    while (off < stripFwSize && c.connected() && millis() - s0 < 120000) {
+      uint32_t n = min((uint32_t)sizeof buf, stripFwSize - off);
+      if (esp_partition_read(part, off, buf, n) != ESP_OK) { otaLog("flash read failed"); break; }
+      size_t w = 0;
+      while (w < n && c.connected()) {
+        size_t k = c.write(buf + w, n - w);
+        if (k == 0) delay(2); else w += k;
+        esp_task_wdt_reset();
+      }
+      off += w;
+      if (off - lastLog >= 65536) { lastLog = off; Serial.printf("[strip-ota] sent %u/%u\n", off, stripFwSize); }
+    }
+    c.flush();
+    delay(500);
+    c.stop();
+    otaLog("sent " + String(off) + "/" + String(stripFwSize) + " bytes in " + String((millis() - s0) / 1000) + " s");
+    sent = off == stripFwSize;
+  }
+  srv.end();
+  if (!sent && millis() - t0 >= waitMs) otaLog("the strip did not fetch /ota.bin");
+  return sent;
+}
+
+bool setupOtaSession(String& r) {
+  if (WiFi.localIP() != IPAddress(192, 168, 1, 2)) {
+    WiFi.config(IPAddress(192, 168, 1, 2), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
+    delay(500);
+  }
+  flushArp();
+  String me = WiFi.localIP().toString();
+  otaLog("joined, my ip " + me);
+  WiFiClient c;
+  bool up = false;
+  for (int k = 0; k < 6 && !up; k++) { up = c.connect(IPAddress(192, 168, 1, 1), 30300, 3000); if (!up) delay(1500); esp_task_wdt_reset(); }
+  if (!up) { r = "no answer on 30300"; otaLog(r); return false; }
+  String reply, cmd = "up:ota:" + me;
+  c.print(cmd + "\r\n");
+  readSetupLine(c, reply, 12000);
+  otaLog(">> " + cmd + "  << " + reply);
+  delay(200);
+  c.stop();
+  if (reply.indexOf("ota_ok") < 0) { r = "strip_said:" + reply; return false; }
+  if (!serveStripFw(90000)) { r = "not_fetched"; return false; }
+  otaLog("transfer done; the strip flashes and reboots by itself (keep it powered for 2 minutes)");
+  delay(5000);
+  return true;
+}
+
 void connectWiFi();
 volatile uint8_t provDiscReason = 0;   // last STA disconnect reason, for join_failed details
 volatile int provStaEvents = 0;        // STA connect/disconnect events seen during a provisioning join
@@ -2893,14 +3049,25 @@ void runProvision() {
     else r = "join_failed:" + String(why);
   } else {
     delay(800);
-    // one TCP session: up:ip, up:connect, up:reboot:0
-    ok = setupSession(hubIp, r);
-    if (!ok && !r.startsWith("no answer on 30300")) r = "strip_said:" + r;
+    if (provOta) {
+      ok = setupOtaSession(r);
+    } else {
+      // one TCP session: up:ip, up:connect, up:reboot:0
+      ok = setupSession(hubIp, r);
+      if (!ok && !r.startsWith("no answer on 30300")) r = "strip_said:" + r;
+    }
   }
   WiFi.disconnect();
   delay(200);
   connectWiFi();
   flushArp();                          // .1 is the home router again, not the strip
+  if (provOta) {
+    provOta = false;
+    if (ok) { provState = "idle"; provMsg = "ota_sent"; } else provFail("ota:" + r);
+    otaLog(ok ? "done" : "failed: " + r);
+    stateDirty = true;
+    return;
+  }
   if (ok) {
     provState = "waiting";            // success is reported only when the strip dials in (bootinfo)
     provMsg = "";
@@ -3100,6 +3267,7 @@ void setup() {
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++; },
                ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+  { Preferences p; p.begin("stripfw", true); stripFwSize = p.getUInt("size", 0); p.end(); }
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 
@@ -3112,6 +3280,9 @@ void setup() {
   web.on("/api/raw", HTTP_GET, handleRaw);
   web.on("/update", HTTP_GET, handleUpdatePage);
   web.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+  web.on("/stripfw", HTTP_GET, handleStripFwPage);
+  web.on("/stripfw", HTTP_POST, handleStripFwDone, handleStripFwUpload);
+  web.on("/stripfw/flash", HTTP_POST, handleStripFwFlash);
   web.onNotFound(handleOther);
   web.begin();
   webRoutesReady = true;
