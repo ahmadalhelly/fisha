@@ -50,6 +50,7 @@ struct ApiRes;
 #include "mbedtls/base64.h"
 #include "esp_task_wdt.h"
 #include "esp_netif.h"
+#include "esp_wifi.h"
 #include "esp_netif_net_stack.h"
 #include "lwip/etharp.h"
 #include "lwip/tcpip.h"
@@ -79,7 +80,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.14.11";
+const char* FW_VERSION = "2.14.12";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2785,6 +2786,7 @@ bool setupSession(const String& hubIp, String& r) {
 
 void connectWiFi();
 volatile uint8_t provDiscReason = 0;   // last STA disconnect reason, for join_failed details
+volatile int provStaEvents = 0;        // STA connect/disconnect events seen during a provisioning join
 
 void provFail(const String& msg) { provState = "error"; provMsg = msg; stateDirty = true; Serial.printf("[prov] error: %s\n", msg.c_str()); }
 
@@ -2839,31 +2841,51 @@ void runProvision() {
   for (int attempt = 0; attempt < 3 && !onStrip; attempt++) {
     WiFi.disconnect(false, true);                    // leave + erase the stored (home) AP config
     for (int i = 0; i < 20 && WiFi.status() == WL_CONNECTED; i++) delay(100);
-    WiFi.mode(WIFI_STA);
-    // the strip's setup AP is 192.168.1.1 and leases from 192.168.1.2 (seen from a laptop)
-    WiFi.config(IPAddress(192, 168, 1, 2), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
+    // v2.14.12: join through ESP-IDF directly, like a laptop does: any security, no PMF, full scan, no BSSID pin,
+    // and every step's result in the log (the Arduino WiFi.begin wrapper failed silently with reason 0)
     provDiscReason = 0;
-    if (apCh > 0) WiFi.begin(ap.c_str(), pass.c_str(), apCh, apBssid);
-    else WiFi.begin(ap.c_str(), pass.c_str());
+    provStaEvents = 0;
+    wifi_config_t cfg = {};
+    strlcpy((char*)cfg.sta.ssid, ap.c_str(), sizeof(cfg.sta.ssid));
+    strlcpy((char*)cfg.sta.password, pass.c_str(), sizeof(cfg.sta.password));
+    cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    cfg.sta.pmf_cfg.capable = false;
+    cfg.sta.pmf_cfg.required = false;
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    esp_err_t eCfg = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    esp_err_t eCon = esp_wifi_connect();
+    Serial.printf("[prov] try %d: set_config %s, connect %s\n", attempt + 1, esp_err_to_name(eCfg), esp_err_to_name(eCon));
+    // associated = the radio reports an AP (independent of IP/DHCP, which the Arduino status waits for)
+    wifi_ap_record_t rec;
+    bool assoc = false;
     uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) { delay(250); esp_task_wdt_reset(); }
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.printf("[prov] join try %d failed: reason %u (ch %d)\n", attempt + 1, provDiscReason, apCh);
+    while (millis() - t0 < 15000) {
+      if (esp_wifi_sta_get_ap_info(&rec) == ESP_OK) { assoc = true; break; }
+      delay(250);
+      esp_task_wdt_reset();
+    }
+    if (!assoc) {
+      Serial.printf("[prov] join try %d failed: status %d, reason %u, sta events %d (ch %d)\n", attempt + 1,
+                    (int)WiFi.status(), provDiscReason, provStaEvents, apCh);
       continue;
     }
-    uint8_t* b = WiFi.BSSID();
-    onStrip = b && (apCh == 0 || memcmp(b, apBssid, 6) == 0) && WiFi.SSID() == ap;
-    if (!onStrip)
-      Serial.printf("[prov] join try %d landed on %s (%02X:%02X:%02X:%02X:%02X:%02X), not the strip: retrying\n", attempt + 1,
-                    WiFi.SSID().c_str(), b ? b[0] : 0, b ? b[1] : 0, b ? b[2] : 0, b ? b[3] : 0, b ? b[4] : 0, b ? b[5] : 0);
+    onStrip = strcmp((const char*)rec.ssid, ap.c_str()) == 0;
+    Serial.printf("[prov] join try %d: on %s (%02X:%02X:%02X:%02X:%02X:%02X)%s\n", attempt + 1, (const char*)rec.ssid,
+                  rec.bssid[0], rec.bssid[1], rec.bssid[2], rec.bssid[3], rec.bssid[4], rec.bssid[5],
+                  onStrip ? "" : " - not the strip, retrying");
+    if (onStrip) {                                   // address on the strip's network: 192.168.1.2 (what it leases)
+      WiFi.config(IPAddress(192, 168, 1, 2), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
+      delay(500);
+    }
   }
-  if (!onStrip && WiFi.status() == WL_CONNECTED) WiFi.disconnect(false, true);
+  if (!onStrip) WiFi.disconnect(false, true);
   WiFi.setAutoReconnect(true);
   WiFi.setMinSecurity(WIFI_AUTH_WPA2_PSK);         // back to the default for the home network
 
   bool ok = false;
   String r;
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!onStrip) {
     uint8_t why = provDiscReason;
     // 2 AUTH_EXPIRE, 15 4WAY_HANDSHAKE_TIMEOUT, 202 AUTH_FAIL, 204 HANDSHAKE_TIMEOUT: the AP refused the password
     if (why == 2 || why == 15 || why == 202 || why == 204) r = "join_failed:auth";
@@ -3075,8 +3097,9 @@ void setup() {
     cfg.putUChar("nver", 2);
   }
   for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { provDiscReason = info.wifi_sta_disconnected.reason; },
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++; },
                ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 
