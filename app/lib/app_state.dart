@@ -1482,6 +1482,25 @@ class AppState extends ChangeNotifier {
     return r.ok;
   }
 
+  /// Skip only the next run of a schedule (hub 2.15+), or undo that.
+  Future<bool> skipNextSchedule(Schedule sc, bool skip) async {
+    final r = await api('schedule_skip', {'sid': sc.sid, 'skip': skip});
+    _fail(r);
+    if (r.ok) await loadSchedules();
+    return r.ok;
+  }
+
+  /// Runs a schedule's command right now, without waiting for its time.
+  Future<void> runScheduleNow(Schedule sc) async {
+    final r = await api('onoff', {'mac': sc.mac, 'outlet': sc.outlet, 'on': sc.on});
+    _fail(r);
+    if (r.ok) refresh();
+  }
+
+  /// Rule to highlight when its page opens (from an outlet's menu); cleared once shown.
+  int focusSid = 0;
+  int focusAid = 0;
+
   Future<void> deleteSchedule(int sid) async {
     schedules = schedules.where((x) => x.sid != sid).toList();
     notifyListeners();

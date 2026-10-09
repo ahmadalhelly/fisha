@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -244,6 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ConnMode.offline => (C.danger, t('mode_offline')),
     };
     final cap = (s.onlineCount == 0 ? 1 : s.onlineCount) * kStripMaxW;
+    final v = s.voltage;
     Widget chip(IconData icon, String text, {Color? color}) => Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, size: 15, color: color ?? C.muted),
           const SizedBox(width: 3),
@@ -260,27 +262,55 @@ class _HomeScreenState extends State<HomeScreen> {
           border: Border.all(color: C.border),
           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: C.dark ? 0.35 : 0.12), blurRadius: 18, offset: const Offset(0, 6))],
         ),
-        child: Row(children: [
-          const BrandMark(size: 24),
-          const SizedBox(width: 6),
-          Row(textDirection: TextDirection.ltr, crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
-            FlowColor(
-              colors: loadFlowColors(s.totalPower, cap),
-              child: AnimatedNumber(value: s.totalPower, style: mono(19, color: s.totalPower <= 0 ? C.muted : C.text)),
-            ),
-            const SizedBox(width: 2),
-            Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
-          ]),
-          const Spacer(),
-          chip(Icons.power_outlined, '${s.onCount}/${s.outletCount}'),
-          const SizedBox(width: 10),
-          s.allStrips.isEmpty
-              ? chip(Icons.thermostat, '—')
-              : FlowColor(colors: tempFlowColors(s.maxTemp), child: chip(Icons.thermostat, '${s.maxTemp}°C', color: C.text)),
-          const SizedBox(width: 10),
-          Tooltip(message: modeLabel, child: PulseDot(color: modeColor, active: s.mode != ConnMode.offline)),
-        ]),
+        // everything scales down together on a narrow phone instead of running off the bar
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: AlignmentDirectional.centerStart,
+          child: SizedBox(
+            width: math.max(0, MediaQuery.sizeOf(context).width - 48),
+            child: Row(children: [
+              const BrandMark(size: 24),
+              const SizedBox(width: 6),
+              Row(textDirection: TextDirection.ltr, crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+                FlowColor(
+                  colors: loadFlowColors(s.totalPower, cap),
+                  child: AnimatedNumber(value: s.totalPower, style: mono(19, color: s.totalPower <= 0 ? C.muted : C.text)),
+                ),
+                const SizedBox(width: 2),
+                Text('W', style: mono(11, color: C.muted, weight: FontWeight.w500)),
+              ]),
+              if (v != null && v > 0) ...[
+                const SizedBox(width: 8),
+                _voltChip(v),
+              ],
+              const Spacer(),
+              chip(Icons.power_outlined, '${s.onCount}/${s.outletCount}'),
+              const SizedBox(width: 10),
+              s.allStrips.isEmpty
+                  ? chip(Icons.thermostat, '—')
+                  : FlowColor(colors: tempFlowColors(s.maxTemp), child: chip(Icons.thermostat, '${s.maxTemp}°C', color: C.text)),
+              const SizedBox(width: 10),
+              Tooltip(message: modeLabel, child: PulseDot(color: modeColor, active: s.mode != ConnMode.offline)),
+            ]),
+          ),
+        ),
       ),
+    );
+  }
+
+  /// Mains voltage pill: plain inside 200..240 V, orange near the limits, red past the protection limits.
+  Widget _voltChip(double v) {
+    final bad = v < s.vMin || v > s.vMax;
+    final near = v < 200 || v > 240;
+    final color = bad ? C.danger : (near ? C.warn : C.textSoft);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: bad || near ? color.withValues(alpha: 0.12) : C.surface2.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: bad || near ? color.withValues(alpha: 0.5) : C.border),
+      ),
+      child: Text('${v.round()}V', textDirection: TextDirection.ltr, style: mono(12, color: color, weight: FontWeight.w600)),
     );
   }
 

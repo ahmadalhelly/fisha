@@ -41,6 +41,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
+        if (s.focusAid != 0) WidgetsBinding.instance.addPostFrameCallback((_) => s.focusAid = 0);
         final grouped = <String, List<Automation>>{};
         for (final a in s.automations) {
           grouped.putIfAbsent(a.mac, () => []).add(a);
@@ -73,7 +74,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             child: RefreshIndicator(
               color: C.accent,
               onRefresh: _load,
-              child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
+              child: ListView(cacheExtent: 4000, padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
                 if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
                   _tempCard(),
                   if (s.hubHasStripProt) ...[const SizedBox(height: 14), _stripProtCard()],
@@ -125,7 +126,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           Divider(height: 1, color: C.border),
           for (var i = 0; i < rules.length; i++) ...[
             if (i > 0) Divider(height: 1, color: C.border.withValues(alpha: 0.5), indent: 70),
-            _ruleRow(rules[i]),
+            FocusFlash(active: s.focusAid != 0 && s.focusAid == rules[i].aid, radius: 14, child: _ruleRow(rules[i])),
           ],
         ],
       ),
@@ -322,7 +323,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                       maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Text(
-                    _condText(a),
+                    automationCondText(a),
                     style: TextStyle(fontSize: 12, color: C.textSoft),
                   ),
                   Text('${s.nameForMac(a.mac, a.outlet)} ${Tr.isAr ? '←' : '→'} ${_actText(a.act)}',
@@ -570,7 +571,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
 
 /// "لما القدرة تنزل تحت 3 وات لمدة 2 دقيقة": Arabic units and words, so the line reads in one direction
 /// (mixing "3 W · 2 د" in RTL text scrambled the order).
-String _condText(Automation a) {
+String automationCondText(Automation a) {
   if (!Tr.isAr) {
     final w = a.watts.toStringAsFixed(a.isCurrent ? 1 : 0);
     final cond = a.isBoth

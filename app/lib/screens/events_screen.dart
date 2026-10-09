@@ -16,6 +16,7 @@ String eventText(AppState s, HubEvent e) {
     'automation' => t('ev_automation', {'x': m}),
     'schedule' => t('ev_schedule', {'x': m}),
     'missed' => t('ev_missed', {'x': m}),
+    'skipped' => t('ev_skipped', {'x': m}),
     'timer' => t('ev_timer', {'x': m == 'on' ? t('turn_on') : t('turn_off')}),
     'cycle' => t('ev_cycle', {'x': m}),
     'lock' => t('ev_lock'),

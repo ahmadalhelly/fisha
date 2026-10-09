@@ -8,7 +8,8 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart' show timerText, timerIcon, guardedSwitch;
-import 'automations_screen.dart' show AutomationEditor;
+import 'automations_screen.dart' show AutomationEditor, AutomationsScreen, automationCondText;
+import 'schedules_screen.dart' show daysText, dateText;
 
 
 String _autoOffLabel(int m) => m == 0 ? t('auto_off_none') : fmtDuration(m * 60);
@@ -195,6 +196,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   ),
                 ]),
                 const SizedBox(height: 10),
+                ..._linkedRules(ctx, state, s.mac, n, o.hasSchedule, o.hasRule),
                 _tile(Icons.edit_outlined, t('rename'), null, () async {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
@@ -301,6 +303,58 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
       },
     ),
   );
+}
+
+/// Schedules and automations that act on this outlet (or on its whole strip). A tap opens the rule's page
+/// and highlights it there.
+bool _linkedLoading = false;
+List<Widget> _linkedRules(BuildContext ctx, AppState state, String mac, int n, bool hasSched, bool hasRule) {
+  bool mine(String m, int outlet) => m.toUpperCase() == mac.toUpperCase() && (outlet == n || outlet == 0);
+  final scheds = state.schedules.where((x) => mine(x.mac, x.outlet)).toList();
+  final rules = state.automations.where((x) => mine(x.mac, x.outlet)).toList();
+  // the hub only flags that something exists; fetch the lists once if this phone hasn't yet
+  if (!_linkedLoading && ((hasSched && scheds.isEmpty) || (hasRule && rules.isEmpty))) {
+    _linkedLoading = true;
+    Future.wait([if (hasSched && scheds.isEmpty) state.loadSchedules(), if (hasRule && rules.isEmpty) state.loadAutomations()])
+        .whenComplete(() => _linkedLoading = false);
+  }
+  if (scheds.isEmpty && rules.isEmpty) return const [];
+  Widget row(IconData icon, Color color, String title, String sub, bool enabled, VoidCallback onTap) => ListTile(
+        dense: true,
+        leading: Icon(icon, color: enabled ? color : C.faint),
+        title: Text(title, style: TextStyle(fontWeight: FontWeight.w600, color: enabled ? C.text : C.muted)),
+        subtitle: Text(sub, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: C.muted)),
+        trailing: Icon(Tr.isAr ? Icons.chevron_left : Icons.chevron_right, color: C.faint),
+        onTap: onTap,
+      );
+  return [
+    Padding(
+      padding: const EdgeInsetsDirectional.only(start: 4, bottom: 6),
+      child: Text(t('linked_rules'), style: TextStyle(fontSize: 12, color: C.muted, fontWeight: FontWeight.w700)),
+    ),
+    Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: cardBox(radius: 16),
+      child: Column(children: [
+        for (final sc in scheds)
+          row(Icons.schedule, C.accent2, sc.label.isNotEmpty ? sc.label : t('linked_sched'),
+              '${fmtTime12(sc.hh, sc.mm)} ${sc.on ? t('turn_on') : t('turn_off')} · ${sc.days == 0 ? dateText(sc.date) : daysText(sc.days)}', sc.enabled, () {
+            final nav = Navigator.of(ctx);
+            nav.popUntil((r) => r.isFirst);           // schedules are a home tab
+            state.focusSid = sc.sid;
+            state.setTab(1);
+          }),
+        for (final a in rules)
+          row(Icons.bolt, C.warn, a.label.isNotEmpty ? a.label : t('linked_auto'), automationCondText(a), a.enabled, () {
+            final nav = Navigator.of(ctx);
+            nav.pop();
+            state.focusAid = a.aid;
+            nav.push(MaterialPageRoute(builder: (_) => AutomationsScreen(state: state)));
+          }),
+      ]),
+    ),
+    const SizedBox(height: 10),
+  ];
 }
 
 void _openRule(BuildContext ctx, AppState state, String mac, int outlet) {

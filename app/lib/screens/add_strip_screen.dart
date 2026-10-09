@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -48,7 +49,8 @@ class AddStripScreen extends StatefulWidget {
   State<AddStripScreen> createState() => _AddStripScreenState();
 }
 
-class _AddStripScreenState extends State<AddStripScreen> {
+class _AddStripScreenState extends State<AddStripScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _sweep = AnimationController(vsync: this, duration: const Duration(milliseconds: 2200))..repeat();
   AppState get s => widget.state;
   _Step _step = _Step.intro;
   String _error = '';
@@ -68,6 +70,7 @@ class _AddStripScreenState extends State<AddStripScreen> {
 
   @override
   void dispose() {
+    _sweep.dispose();
     _scanRun++;
     _tick?.cancel();
     s.removeListener(_onState);
@@ -90,6 +93,7 @@ class _AddStripScreenState extends State<AddStripScreen> {
       if (!r.ok) {
         if (r.error == 'unknown action') {
           setState(() {
+            _errAt = 1;
             _step = _Step.error;
             _error = t('err_old_fw');
           });
@@ -134,6 +138,7 @@ class _AddStripScreenState extends State<AddStripScreen> {
     if (!mounted) return;
     if (!r.ok) {
       setState(() {
+        _errAt = 2;
         _step = _Step.error;
         _error = provErrorText(r.error ?? '');
       });
@@ -156,6 +161,7 @@ class _AddStripScreenState extends State<AddStripScreen> {
       return _finish(_Step.done, '');
     }
     if (st == 'waiting' && _step != _Step.waiting) setState(() => _step = _Step.waiting);
+    if (_step == _Step.waiting) setState(() {});   // countdown ring
     if (_startedAt != null && DateTime.now().difference(_startedAt!) > const Duration(seconds: 180)) {
       _finish(_Step.error, t('add_timeout'));
     }
@@ -163,6 +169,7 @@ class _AddStripScreenState extends State<AddStripScreen> {
 
   void _finish(_Step step, String error) {
     _tick?.cancel();
+    if (step == _Step.error) _errAt = _step == _Step.waiting ? 3 : 2;
     setState(() {
       _step = step;
       _error = error;
@@ -198,30 +205,108 @@ class _AddStripScreenState extends State<AddStripScreen> {
     );
   }
 
+  /// Four named steps; the running one glows, finished ones get a tick.
   Widget _stepper() {
     final idx = switch (_step) {
-      _Step.intro || _Step.scanning || _Step.pick => 0,
-      _Step.sending || _Step.running => 1,
-      _Step.waiting => 2,
-      _Step.done => 3,
-      _Step.error => -1,
+      _Step.intro => 0,
+      _Step.scanning || _Step.pick => 1,
+      _Step.sending || _Step.running => 2,
+      _Step.waiting => 3,
+      _Step.done => 4,
+      _Step.error => _errAt,
     };
-    return Row(children: [
-      for (var i = 0; i < 3; i++) ...[
+    final names = [_tr('جهّز', 'Prepare'), _tr('دوّر', 'Search'), _tr('اربط', 'Link'), _tr('اتصل', 'Connect')];
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (var i = 0; i < 4; i++) ...[
         Expanded(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            height: 6,
-            decoration: BoxDecoration(
-              color: idx < 0 ? C.danger.withValues(alpha: 0.5) : (i < idx || idx == 3 ? C.accent : (i == idx ? C.tileOnBorder : C.surface2)),
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
+          child: Column(children: [
+            Row(children: [
+              Expanded(child: i == 0 ? const SizedBox() : Container(height: 2, color: i <= idx ? C.accent : C.border)),
+              _bubble(i, idx),
+              Expanded(child: i == 3 ? const SizedBox() : Container(height: 2, color: i < idx ? C.accent : C.border)),
+            ]),
+            const SizedBox(height: 6),
+            Text(names[i],
+                style: TextStyle(fontSize: 11.5, color: i == idx ? C.text : C.muted, fontWeight: i == idx ? FontWeight.w700 : FontWeight.w500)),
+          ]),
         ),
-        if (i < 2) const SizedBox(width: 6),
       ],
     ]);
   }
+
+  int _errAt = 2;
+
+  Widget _bubble(int i, int idx) {
+    final done = i < idx;
+    final now = i == idx;
+    final err = now && _step == _Step.error;
+    final color = err ? C.danger : C.accent;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      width: 32,
+      height: 32,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: done ? C.accent : C.surface,
+        border: Border.all(color: done || now ? color : C.border, width: 2),
+        boxShadow: now ? [BoxShadow(color: color.withValues(alpha: 0.25), blurRadius: 0, spreadRadius: 5)] : null,
+      ),
+      child: done
+          ? Icon(Icons.check, size: 17, color: C.onAccent)
+          : err
+              ? Icon(Icons.close, size: 16, color: C.danger)
+              : Text('${i + 1}', style: mono(13, color: now ? C.accent : C.faint, weight: FontWeight.w600)),
+    );
+  }
+
+  /// Countdown ring around a radar sweep: seconds left inside, the ring empties as time runs out.
+  Widget _ring(int left, int total) => SizedBox(
+        width: 156,
+        height: 156,
+        child: Stack(alignment: Alignment.center, children: [
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: ClipOval(
+              child: Container(
+                decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: C.border)),
+                child: RotationTransition(
+                  turns: _sweep,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: SweepGradient(colors: [Colors.transparent, Colors.transparent, C.accent.withValues(alpha: 0.35)], stops: const [0, 0.82, 1]),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: total == 0 ? 0 : (left / total).clamp(0.0, 1.0)),
+            duration: const Duration(milliseconds: 900),
+            builder: (context, v, child) => CustomPaint(size: const Size.square(156), painter: _RingPainter(v, C.accent, C.border)),
+          ),
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('$left', style: mono(34, color: C.text, weight: FontWeight.w600)),
+            Text(_tr('ثانية', 'sec'), style: TextStyle(fontSize: 11, color: C.muted)),
+          ]),
+        ]),
+      );
+
+  Widget _stage(Widget visual, String title, String body, List<Widget> extra) => Container(
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
+        decoration: cardBox(),
+        child: Column(children: [
+          visual,
+          const SizedBox(height: 10),
+          Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(body, textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 13, height: 1.6)),
+          ...extra,
+        ]),
+      );
+
+  int get _waitLeft => _startedAt == null ? 0 : math.max(0, 180 - DateTime.now().difference(_startedAt!).inSeconds);
 
   Widget _card() {
     switch (_step) {
@@ -237,9 +322,9 @@ class _AddStripScreenState extends State<AddStripScreen> {
           ],
         ]);
       case _Step.scanning:
-        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          _progress(_tr('الـ Hub بيدوّر على مشتركات في وضع الإعداد… ($_scanLeft ث)', 'The hub is looking for strips in setup mode… (${_scanLeft}s)')),
-          const SizedBox(height: 10),
+        return _stage(_ring(_scanLeft, 60), _tr('بيدوّر على مشتركات', 'Looking for strips'),
+            _tr('أول ما يلاقي مشترك في وضع الإعداد هيقف ويوريهولك.', 'It stops as soon as it finds a strip in setup mode.'), [
+          const SizedBox(height: 8),
           TextButton(onPressed: _stopScan, child: Text(t('cancel'), style: TextStyle(color: C.muted))),
         ]);
       case _Step.pick:
@@ -247,9 +332,33 @@ class _AddStripScreenState extends State<AddStripScreen> {
       case _Step.sending:
         return _progress(t('add_sending'));
       case _Step.running:
-        return _progress(t('add_running'));
+        return _stage(
+            SizedBox(width: 44, height: 44, child: CircularProgressIndicator(color: C.accent, strokeWidth: 3)),
+            t('add_running'),
+            _tr('الـ Hub بيفصل عن شبكة البيت ثواني ويرجع لوحده، فالتطبيق ممكن يبان فاصل شوية.',
+                'The hub leaves the home Wi-Fi for a few seconds and comes back by itself, so the app may look offline briefly.'),
+            [
+              const SizedBox(height: 12),
+              for (final line in [
+                _tr('يدخل شبكة المشترك', 'Joins the strip\'s network'),
+                _tr('يبعتله شبكة البيت', 'Sends it the home Wi-Fi'),
+                _tr('يعمله ريستارت', 'Restarts it'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(children: [
+                    Icon(Icons.circle, size: 6, color: C.faint),
+                    const SizedBox(width: 10),
+                    Text(line, style: TextStyle(fontSize: 13, color: C.textSoft)),
+                  ]),
+                ),
+              if (_chosen != null) Text('…${_chosen!.id}', textDirection: TextDirection.ltr, style: mono(12, color: C.faint)),
+            ]);
       case _Step.waiting:
-        return _progress(t('add_wait'));
+        return _stage(_ring(_waitLeft, 180), t('add_wait'),
+            _tr('المشترك بيعمل ريستارت ويدخل على شبكة البيت.', 'The strip restarts and joins the home Wi-Fi.'), [
+          if (_chosen != null) ...[const SizedBox(height: 6), Text('…${_chosen!.id}', textDirection: TextDirection.ltr, style: mono(12, color: C.faint))],
+        ]);
       case _Step.done:
         final mac = s.provMsg;
         return _box(Icons.check_circle_outline, C.green, t('add_done_t'), t('add_done_b'), [
@@ -344,4 +453,24 @@ class _AddStripScreenState extends State<AddStripScreen> {
           ...extra,
         ]),
       );
+}
+
+class _RingPainter extends CustomPainter {
+  final double v;
+  final Color color, track;
+  _RingPainter(this.v, this.color, this.track);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(5, 5, size.width - 10, size.height - 10);
+    final p = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(rect, 0, math.pi * 2, false, p..color = track);
+    if (v > 0) canvas.drawArc(rect, -math.pi / 2, math.pi * 2 * v, false, p..color = color);
+  }
+
+  @override
+  bool shouldRepaint(_RingPainter old) => old.v != v || old.color != color || old.track != track;
 }

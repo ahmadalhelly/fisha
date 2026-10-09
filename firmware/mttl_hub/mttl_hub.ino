@@ -43,6 +43,8 @@ struct ApiRes;
            limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
            is erased, so the app can put family members, schedules and rules back; family members can be
            exported and restored with their own passwords (users_export / user_restore, owner only).
+  v2.15.1: a schedule can skip just its next run (schedule_skip, kept under its own NVS key so saved
+           schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
 #include <WiFi.h>
@@ -91,7 +93,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.0";
+const char* FW_VERSION = "2.15.1";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -194,6 +196,7 @@ PeakLog peaks[MAX_STRIPS];
 uint32_t peakSavedAt[MAX_STRIPS];
 Timer timers[MAX_TIMERS];
 Sched scheds[MAX_SCHED];
+uint32_t schedSkip[MAX_SCHED];                    // v2.15.0: ids whose next run is skipped once (own NVS key, Sched layout unchanged)
 uint8_t schedCount = 0;
 Autom autos[MAX_AUTO];
 uint8_t autoCount = 0;
@@ -650,6 +653,14 @@ void peakUpdate(int i, float watts) {
 }
 
 void saveScheds() { cfg.putUChar("schN", schedCount); cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED); }
+void saveSkips() { cfg.putBytes("schsk", schedSkip, sizeof(schedSkip)); }
+bool schedSkipped(uint32_t id) { for (int i = 0; i < MAX_SCHED; i++) if (id && schedSkip[i] == id) return true; return false; }
+void setSchedSkip(uint32_t id, bool on) {
+  bool changed = false;
+  for (int i = 0; i < MAX_SCHED; i++) if (schedSkip[i] == id) { schedSkip[i] = 0; changed = true; }
+  if (on) for (int i = 0; i < MAX_SCHED; i++) if (!schedSkip[i]) { schedSkip[i] = id; changed = true; break; }
+  if (changed) saveSkips();
+}
 void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, sizeof(Autom) * MAX_AUTO); }
 
 void loadGlobals() {
@@ -662,6 +673,8 @@ void loadGlobals() {
   aProt = cfg.getBool("aprot", true);
   aMax = cfg.getFloat("amax", 16.0f);
   schedCount = 0;
+  memset(schedSkip, 0, sizeof(schedSkip));
+  if (cfg.getBytesLength("schsk") == sizeof(schedSkip)) cfg.getBytes("schsk", schedSkip, sizeof(schedSkip));
   if (cfg.getBytesLength("sch") == sizeof(Sched) * MAX_SCHED) {
     cfg.getBytes("sch", scheds, sizeof(Sched) * MAX_SCHED);
     schedCount = min((int)cfg.getUChar("schN", 0), (int)MAX_SCHED);
@@ -1378,6 +1391,12 @@ void tickSchedules() {
     if (!c.enabled || c.hh != t.tm_hour || c.mm != t.tm_min) continue;
     bool match = c.days ? (c.days & (1 << t.tm_wday)) : (c.date == today);
     if (!match) continue;
+    if (schedSkipped(c.id)) {                      // v2.15.0: skipped once, runs again next time
+      setSchedSkip(c.id, false);
+      addEvent("skipped", c.mac, c.outlet, String(c.label));
+      if (!c.days) { c.enabled = 0; save = true; }
+      continue;
+    }
     int idx = findStrip(c.mac);
     if (idx >= 0) { sendOnOff(strips[idx], c.outlet, c.on); addEvent("schedule", c.mac, c.outlet, String(c.label)); }
     else addEvent("missed", c.mac, c.outlet, String(c.label));
@@ -1483,7 +1502,8 @@ String buildStateJson() {
 String schedJson(const Sched& c) {
   return "{\"sid\":" + String(c.id) + ",\"mac\":\"" + String(c.mac) + "\",\"outlet\":" + String(c.outlet) + ",\"on\":" + (c.on ? "true" : "false") +
          ",\"days\":" + String(c.days) + ",\"hh\":" + String(c.hh) + ",\"mm\":" + String(c.mm) + ",\"date\":" + String(c.date) +
-         ",\"enabled\":" + (c.enabled ? "true" : "false") + ",\"label\":\"" + jsonEsc(String(c.label)) + "\"}";
+         ",\"enabled\":" + (c.enabled ? "true" : "false") + ",\"skip\":" + (schedSkipped(c.id) ? "true" : "false") +
+         ",\"label\":\"" + jsonEsc(String(c.label)) + "\"}";
 }
 String autoJson(const Autom& r) {
   return "{\"aid\":" + String(r.id) + ",\"mac\":\"" + String(r.mac) + "\",\"outlet\":" + String(r.outlet) + ",\"above\":" + (r.above ? "true" : "false") +
@@ -1709,7 +1729,7 @@ String resetText() {
 // what a shared user may call · 0 view · 1 control · 2 admin · -1 never
 int needRole(const String& p) {
   if (p == "state" || p == "events" || p == "energy" || p == "schedules" || p == "automations") return 0;
-  if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete") return 1;
+  if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete" || p == "schedule_skip") return 1;
   if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit" || p == "automation_save" || p == "automation_delete") return 2;
   return -1;
 }
@@ -1720,13 +1740,13 @@ String actionMac(const String& p, const String& b) {
     for (int t = 0; t < MAX_TIMERS; t++) if (timers[t].used && timers[t].id == id) return String(timers[t].mac);
     return "?";
   }
-  if (p == "schedule_delete" || (p == "schedule_save" && jsonValue(b, "sid").toInt())) {
+  if (p == "schedule_delete" || p == "schedule_skip" || (p == "schedule_save" && jsonValue(b, "sid").toInt())) {
     uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
     for (int i = 0; i < schedCount; i++) if (scheds[i].id == id) {
       if (p == "schedule_save" && jsonHas(b, "mac") && !jsonValue(b, "mac").equalsIgnoreCase(scheds[i].mac)) return "?";
       return String(scheds[i].mac);
     }
-    return p == "schedule_delete" ? "?" : jsonValue(b, "mac");
+    return p == "schedule_save" ? jsonValue(b, "mac") : "?";
   }
   if (p == "automation_delete" || (p == "automation_save" && jsonValue(b, "aid").toInt())) {
     uint32_t id = (uint32_t)jsonValue(b, "aid").toInt();
@@ -2122,10 +2142,20 @@ ApiRes api(String path, const String& b) {
     saveScheds();
     return okRes("{\"sid\":" + String(c.id) + "}");
   }
+  if (path == "schedule_skip") {                 // v2.15.0: {"sid","skip":true|false} skip only the next run
+    uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
+    for (int i = 0; i < schedCount; i++) {
+      if (scheds[i].id != id) continue;
+      setSchedSkip(id, jsonHas(b, "skip") ? jsonBool(b, "skip") : true);
+      return okRes();
+    }
+    return errRes("no such schedule");
+  }
   if (path == "schedule_delete") {
     uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
     for (int i = 0; i < schedCount; i++) {
       if (scheds[i].id != id) continue;
+      setSchedSkip(id, false);
       for (int j = i; j < schedCount - 1; j++) scheds[j] = scheds[j + 1];
       schedCount--;
       saveScheds();

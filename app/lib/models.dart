@@ -190,7 +190,8 @@ class Schedule {
   int date; // yyyymmdd for one-time
   bool enabled;
   String label;
-  Schedule({this.sid = 0, required this.mac, this.outlet = 1, this.on = true, this.days = 0x3E, this.hh = 8, this.mm = 0, this.date = 0, this.enabled = true, this.label = ''});
+  bool skip; // hub 2.15+: the next run is skipped once (set with schedule_skip, not saved through schedule_save)
+  Schedule({this.sid = 0, required this.mac, this.outlet = 1, this.on = true, this.days = 0x3E, this.hh = 8, this.mm = 0, this.date = 0, this.enabled = true, this.label = '', this.skip = false});
   factory Schedule.fromJson(Map<String, dynamic> j) => Schedule(
         sid: _i(j['sid']),
         mac: _s(j['mac']).toUpperCase(),
@@ -202,6 +203,7 @@ class Schedule {
         date: _i(j['date']),
         enabled: j['enabled'] == true,
         label: _s(j['label']),
+        skip: j['skip'] == true,
       );
   Map<String, dynamic> toJson() => {
         'sid': sid,

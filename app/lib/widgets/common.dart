@@ -694,3 +694,61 @@ class _RaysPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RaysPainter old) => old.color != color;
 }
+
+/// Scrolls itself into view and glows twice when [active]: a rule opened from an outlet's menu.
+class FocusFlash extends StatefulWidget {
+  final bool active;
+  final double radius;
+  final Widget child;
+  const FocusFlash({super.key, required this.active, required this.child, this.radius = 20});
+
+  @override
+  State<FocusFlash> createState() => _FocusFlashState();
+}
+
+class _FocusFlashState extends State<FocusFlash> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _start();
+  }
+
+  @override
+  void didUpdateWidget(FocusFlash old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) _start();
+  }
+
+  void _start() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await Scrollable.ensureVisible(context, alignment: 0.3, duration: const Duration(milliseconds: 350), curve: Curves.easeOutCubic);
+      if (mounted) _c.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _c,
+        child: widget.child,
+        builder: (context, child) {
+          final glow = _c.isAnimating ? math.sin(_c.value * math.pi * 4).abs() : 0.0;
+          return DecoratedBox(
+            position: DecorationPosition.foreground,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(widget.radius),
+              border: Border.all(color: C.accent.withValues(alpha: glow), width: 2.5),
+            ),
+            child: child,
+          );
+        },
+      );
+}

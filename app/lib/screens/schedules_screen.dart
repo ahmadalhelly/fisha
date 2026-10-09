@@ -5,6 +5,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'outlet_sheet.dart';
 
 // Sunday-first, matching the hub's bit order (bit 0 = Sunday).
 List<String> get _dayShort => Tr.isAr ? const ['ح', 'ن', 'ث', 'ر', 'خ', 'ج', 'س'] : const ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -50,6 +51,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
       listenable: s,
       builder: (context, _) {
         if (s.tab == 1 && _lastTab != 1) WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+        if (s.focusSid != 0) WidgetsBinding.instance.addPostFrameCallback((_) => s.focusSid = 0);
         _lastTab = s.tab;
         return Scaffold(
           backgroundColor: C.tabBg,
@@ -74,7 +76,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
             child: RefreshIndicator(
               color: C.accent,
               onRefresh: _load,
-              child: ListView(padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 76), children: [
+              child: ListView(cacheExtent: 4000, padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 76), children: [
                 Text(t('sched_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 16),
                 if (!s.hubV2)
@@ -83,7 +85,11 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                   if (!s.hubTimeOk) Padding(padding: const EdgeInsets.only(bottom: 12), child: emptyCard(t('need_time'), icon: Icons.schedule)),
                   if (_loading && s.schedules.isEmpty) Center(child: CircularProgressIndicator(color: C.accent)),
                   if (!_loading && s.schedules.isEmpty) emptyCard(t('sched_empty'), icon: Icons.alarm),
-                  for (final sc in s.schedules) Padding(padding: const EdgeInsets.only(bottom: 10), child: _card(sc)),
+                  for (final sc in s.schedules)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: FocusFlash(active: s.focusSid != 0 && s.focusSid == sc.sid, child: _card(sc)),
+                    ),
                 ],
               ]),
             ),
@@ -100,6 +106,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () => _edit(sc),
+        onLongPress: () => _menu(sc),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(children: [
@@ -122,6 +129,14 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                 const SizedBox(height: 4),
                 Text(sc.days == 0 ? '${t('once')} · ${dateText(sc.date)}' : daysText(sc.days),
                     maxLines: 2, style: TextStyle(fontSize: 12, color: C.textSoft)),
+                if (sc.skip) ...[
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    Icon(Icons.skip_next, size: 14, color: C.warn),
+                    const SizedBox(width: 3),
+                    Text(t('sched_skipped'), style: TextStyle(fontSize: 11.5, color: C.warn, fontWeight: FontWeight.w600)),
+                  ]),
+                ],
               ]),
             ),
             Switch(
@@ -136,6 +151,78 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
         ),
       ),
     );
+  }
+
+  /// Long-press on a schedule: run now, pause, skip the next run, edit, duplicate, open the outlet, delete.
+  Future<void> _menu(Schedule sc) async {
+    final name = sc.label.isNotEmpty ? sc.label : s.nameForMac(sc.mac, sc.outlet);
+    Widget item(String key, IconData icon, String title, {String? sub, bool danger = false}) => ListTile(
+          leading: Icon(icon, color: danger ? C.danger : C.accent),
+          title: Text(title, style: danger ? TextStyle(color: C.danger) : null),
+          subtitle: sub == null ? null : Text(sub, style: TextStyle(fontSize: 12, color: C.muted)),
+          onTap: () => Navigator.pop(context, key),
+        );
+    final pending = sc.sid <= 0;                 // still waiting on this phone for the hub
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: C.surface,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 2),
+              child: Text('${fmtTime12(sc.hh, sc.mm)} · ${sc.on ? t('turn_on') : t('turn_off')}',
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: C.muted)),
+            ),
+            item('run', Icons.play_arrow_rounded, t('sched_run_now'), sub: sc.on ? t('sched_run_on') : t('sched_run_off')),
+            item('toggle', sc.enabled ? Icons.pause_circle_outline : Icons.play_circle_outline, sc.enabled ? t('sched_pause') : t('sched_resume'),
+                sub: sc.enabled ? t('sched_pause_sub') : t('sched_resume_sub')),
+            if (!pending && sc.enabled)
+              item('skip', Icons.skip_next_outlined, sc.skip ? t('sched_unskip') : t('sched_skip'), sub: sc.skip ? null : t('sched_skip_sub')),
+            Divider(height: 12, indent: 20, endIndent: 20, color: C.border),
+            item('edit', Icons.edit_outlined, Tr.isAr ? 'تعديل' : 'Edit'),
+            item('dup', Icons.copy_all_outlined, Tr.isAr ? 'نسخة' : 'Duplicate'),
+            item('outlet', Icons.power_outlined, t('sched_go_outlet')),
+            Divider(height: 12, indent: 20, endIndent: 20, color: C.border),
+            item('del', Icons.delete_outline, t('delete'), danger: true),
+            const SizedBox(height: 8),
+          ]),
+        ),
+      ),
+    );
+    if (!mounted || act == null) return;
+    switch (act) {
+      case 'run':
+        await s.runScheduleNow(sc);
+      case 'toggle':
+        sc.enabled = !sc.enabled;
+        await s.saveSchedule(sc);
+      case 'skip':
+        await s.skipNextSchedule(sc, !sc.skip);
+      case 'edit':
+        _edit(sc);
+      case 'dup':
+        final copy = Schedule.fromJson(sc.toJson())
+          ..sid = 0
+          ..skip = false
+          ..label = sc.label.isEmpty ? '' : '${sc.label} (${Tr.isAr ? 'نسخة' : 'copy'})';
+        await s.saveSchedule(copy);
+      case 'outlet':
+        if (sc.outlet == 0) {
+          openStripSheet(context, s, sc.mac);
+        } else {
+          openOutletSheet(context, s, sc.mac, sc.outlet);
+        }
+      case 'del':
+        if (!await confirmDialog(context, t('delete'), name, ok: t('delete'), danger: true)) return;
+        await s.deleteSchedule(sc.sid);
+    }
   }
 }
 

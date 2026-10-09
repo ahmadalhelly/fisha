@@ -2,6 +2,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../i18n.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart' show PhosphorIcon;
+import 'phosphor_catalog.dart';
 
 /// Single item in the Notion-style icon catalog.
 class NotionIconItem {
@@ -138,6 +140,20 @@ const List<NotionIconItem> kNotionIcons = [
   NotionIconItem(key: 'fitness', icon: Icons.fitness_center_outlined, labelAr: 'جيم ورياضة', labelEn: 'Fitness / Gym', tags: ['gym', 'fitness', 'رياضة', 'جيم']),
   NotionIconItem(key: 'gift', icon: Icons.card_giftcard_outlined, labelAr: 'هدية', labelEn: 'Gift', tags: ['gift', 'present', 'هدية']),
   NotionIconItem(key: 'cake', icon: Icons.cake_outlined, labelAr: 'تورتة احتفال', labelEn: 'Cake', tags: ['cake', 'birthday', 'تورتة', 'عيد']),
+  // --- إضافات Phosphor (Phosphor extras) ---
+  NotionIconItem(key: 'robot', icon: Icons.smart_toy_outlined, labelAr: 'أتمتة روبوت', labelEn: 'Automation', tags: ['robot', 'auto', 'أتمتة']),
+  NotionIconItem(key: 'gauge', icon: Icons.speed_outlined, labelAr: 'عداد قياس', labelEn: 'Gauge', tags: ['meter', 'gauge', 'عداد']),
+  NotionIconItem(key: 'hair_dryer', icon: Icons.air_outlined, labelAr: 'سشوار', labelEn: 'Hair dryer', tags: ['dryer', 'hair', 'سشوار']),
+  NotionIconItem(key: 'toilet', icon: Icons.wc_outlined, labelAr: 'حمام تواليت', labelEn: 'Toilet', tags: ['wc', 'toilet', 'حمام']),
+  NotionIconItem(key: 'lamp_pendant', icon: Icons.light_outlined, labelAr: 'نجفة معلقة', labelEn: 'Pendant lamp', tags: ['chandelier', 'lamp', 'نجفة']),
+  NotionIconItem(key: 'projector', icon: Icons.videocam_outlined, labelAr: 'بروجيكتور', labelEn: 'Projector', tags: ['projector', 'cinema', 'بروجيكتور']),
+  NotionIconItem(key: 'dog', icon: Icons.pets_outlined, labelAr: 'كلب', labelEn: 'Dog', tags: ['dog', 'pet', 'كلب']),
+  NotionIconItem(key: 'cat', icon: Icons.pets_outlined, labelAr: 'قطة', labelEn: 'Cat', tags: ['cat', 'pet', 'قطة']),
+  NotionIconItem(key: 'charging', icon: Icons.ev_station_outlined, labelAr: 'شاحن عربية', labelEn: 'EV charger', tags: ['ev', 'charger', 'شاحن', 'عربية']),
+  NotionIconItem(key: 'plug_charging', icon: Icons.electrical_services_outlined, labelAr: 'فيشة بتشحن', labelEn: 'Charging plug', tags: ['charge', 'plug', 'شحن']),
+  NotionIconItem(key: 'wind', icon: Icons.air_outlined, labelAr: 'هوا / شفاط', labelEn: 'Air / extractor', tags: ['air', 'fan', 'شفاط', 'هوا']),
+  NotionIconItem(key: 'armchair', icon: Icons.chair_outlined, labelAr: 'فوتيه', labelEn: 'Armchair', tags: ['armchair', 'فوتيه']),
+  NotionIconItem(key: 'food', icon: Icons.restaurant_outlined, labelAr: 'أكل', labelEn: 'Food', tags: ['food', 'meal', 'أكل']),
 ];
 
 /// Map of key -> IconData for instant lookup.
@@ -178,7 +194,11 @@ class FishaIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (icon.startsWith('icon:')) {
-      final key = icon.substring(5);
+      // 'icon:<key>' = Phosphor duotone, 'icon:<key>@light' = Phosphor light; keys Phosphor lacks stay Material
+      final light = icon.endsWith('@light');
+      final key = icon.substring(5, light ? icon.length - 6 : icon.length);
+      final ph = kPhosphorIcons[key];
+      if (ph != null) return PhosphorIcon(light ? ph.$1 : ph.$2, size: size, color: color ?? C.textSoft, duotoneSecondaryOpacity: 0.28);
       final data = kNotionIconMap[key] ?? defaultIcon ?? Icons.category_outlined;
       return Icon(data, size: size, color: color ?? C.textSoft);
     }
@@ -229,6 +249,13 @@ class _NotionIconPickerDialog extends StatefulWidget {
 
 class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
   int _activeTab = 0; // 0 = Icon, 1 = Emoji
+  late bool _light = widget.currentIcon.endsWith('@light'); // Phosphor style: light, or duotone (default)
+  String _iconValue(String key) => 'icon:$key${_light ? '@light' : ''}';
+  String get _currentKey {
+    final c = widget.currentIcon;
+    if (!c.startsWith('icon:')) return '';
+    return c.endsWith('@light') ? c.substring(5, c.length - 6) : c.substring(5);
+  }
   final TextEditingController _searchCtrl = TextEditingController();
   final TextEditingController _emojiPasteCtrl = TextEditingController();
   String _searchQuery = '';
@@ -268,7 +295,7 @@ class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
     if (_activeTab == 0) {
       final icons = _filteredIcons.isNotEmpty ? _filteredIcons : kNotionIcons;
       final picked = icons[rand.nextInt(icons.length)];
-      widget.onSelected('icon:${picked.key}');
+      widget.onSelected(_iconValue(picked.key));
       Navigator.pop(context);
     } else {
       final picked = kCuratedEmojis[rand.nextInt(kCuratedEmojis.length)];
@@ -388,6 +415,16 @@ class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
                   ),
                 ],
               ),
+              if (_activeTab == 0) ...[
+                const SizedBox(height: 10),
+                Row(children: [
+                  Text(isAr ? 'الستايل' : 'Style', style: TextStyle(fontSize: 12, color: C.muted)),
+                  const SizedBox(width: 8),
+                  _styleChip(false, 'Duotone'),
+                  const SizedBox(width: 6),
+                  _styleChip(true, 'Light'),
+                ]),
+              ],
               const SizedBox(height: 12),
 
               // Body content
@@ -399,6 +436,23 @@ class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _styleChip(bool light, String label) {
+    final active = _light == light;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () => setState(() => _light = light),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? C.text : C.surface2,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: active ? C.text : C.border),
+        ),
+        child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? C.bg : C.textSoft)),
       ),
     );
   }
@@ -457,14 +511,14 @@ class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
         itemCount: icons.length,
         itemBuilder: (ctx, i) {
           final item = icons[i];
-          final isSelected = widget.currentIcon == 'icon:${item.key}';
+          final isSelected = _currentKey == item.key;
 
           return Tooltip(
             message: Tr.isAr ? item.labelAr : item.labelEn,
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () {
-                widget.onSelected('icon:${item.key}');
+                widget.onSelected(_iconValue(item.key));
                 Navigator.pop(context);
               },
               child: Container(
@@ -477,9 +531,9 @@ class _NotionIconPickerDialogState extends State<_NotionIconPickerDialog> {
                   ),
                 ),
                 alignment: Alignment.center,
-                child: Icon(
-                  item.icon,
-                  size: 20,
+                child: FishaIcon(
+                  icon: _iconValue(item.key),
+                  size: 22,
                   color: isSelected ? C.accent : C.textSoft,
                 ),
               ),
