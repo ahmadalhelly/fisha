@@ -43,6 +43,8 @@ struct ApiRes;
            limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
            is erased, so the app can put family members, schedules and rules back; family members can be
            exported and restored with their own passwords (users_export / user_restore, owner only).
+  v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
+           seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
   v2.15.2: a strip is no longer dropped when one send is slow for a moment: unsent bytes wait (same bytes, same
            order, no protocol change) and the strip is dropped only after 3 s stuck; that drop is now logged as an
            "offline" event too ("socket stuck"). Live push (SSE) sends the state without extra copies and without
@@ -98,7 +100,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.2";
+const char* FW_VERSION = "2.15.3";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2382,6 +2384,7 @@ void handleHealth() {
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
+           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -3069,6 +3072,8 @@ bool setupOtaSession(String& r) {
 void connectWiFi();
 volatile uint8_t provDiscReason = 0;   // last STA disconnect reason, for join_failed details
 volatile int provStaEvents = 0;        // STA connect/disconnect events seen during a provisioning join
+volatile uint8_t wifiLastReason = 0;    // v2.15.3: why the hub last lost the home Wi-Fi (ESP-IDF reason code)
+volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since boot (outside provisioning)
 
 void provFail(const String& msg) { provState = "error"; provMsg = msg; stateDirty = true; Serial.printf("[prov] error: %s\n", msg.c_str()); }
 
@@ -3392,7 +3397,10 @@ void setup() {
     cfg.putUChar("nver", 2);
   }
   for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++; },
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+                 provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++;
+                 if (!provRequested && provState != "running") { wifiLastReason = info.wifi_sta_disconnected.reason; wifiDiscCount++; }
+               },
                ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   { Preferences p; p.begin("stripfw", true); stripFwSize = p.getUInt("size", 0); p.end(); }
@@ -3452,6 +3460,9 @@ void loop() {
   }
   if (!wifiWasConnected) {
     wifiWasConnected = true;
+    // v2.15.3: every home Wi-Fi loss goes to the event log with its reason code and how long it lasted
+    if (wifiLostAt && !provRequested && provState != "running")
+      addEvent("wifi", "", 0, "reason " + String(wifiLastReason) + " · " + String((millis() - wifiLostAt) / 1000) + " s");
     Serial.println("[wifi] link restored; restarting listeners");
     startStripListener();
   }

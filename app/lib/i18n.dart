@@ -216,6 +216,7 @@ const Map<String, List<String>> _s = {
   'ev_remote_off': ['اتقفل من التطبيق', 'Turned off from the app'],
   'ev_online': ['رجع اتصل', 'Back online'],
   'ev_offline': ['فصل عن الـ Hub', 'Went offline'],
+  'ev_wifi': ['الـ Hub فصل عن الواي فاي ({x})', 'Hub lost the Wi-Fi ({x})'],
   'ev_offline_stuck': ['فصل: الـ Hub مقدرش يبعتله', 'Went offline: the hub could not send to it'],
   'ev_offline_stale': ['فصل: سكت ومردّش', 'Went offline: stopped answering'],
   'ev_voltage': ['فولت غير طبيعي ({x})', 'Unusual voltage ({x})'],
