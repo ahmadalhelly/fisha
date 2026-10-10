@@ -1,5 +1,7 @@
 // These declarations must precede Arduino's auto-generated function prototypes.
 struct Strip;
+void linkDrop(const String& mac);
+void linkUp(const String& mac);
 struct Note;
 struct Known;
 struct Sched;
@@ -117,7 +119,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.9";
+const char* FW_VERSION = "2.15.10";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -962,6 +964,7 @@ void dropStrip(Strip& s, const char* why) {
     s.c.stop();
     s = Strip();
     stateDirty = true;
+    linkDrop(mac);
     addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send, v2.15.2)
     return;
   }
@@ -1346,6 +1349,7 @@ void handleLine(int i, const String& line) {
     for (int j = 0; j < MAX_STRIPS; j++)
       if (j != i && strips[j].used && strips[j].mac == mac) dropStrip(strips[j], "replaced");
     s.mac = mac; s.model = f[0]; s.fw = f[3]; s.identified = true; s.connectedAt = millis();
+    linkUp(mac);
     loadStripCfg(i);
     refreshKnown(mac);
     Serial.printf("[*] strip %s online  model=%s fw=%s\n", mac.c_str(), s.model.c_str(), s.fw.c_str());
@@ -1733,6 +1737,125 @@ String autoJson(const Autom& r) {
          ",\"watts\":" + String(r.watts, 1) + ",\"hold_s\":" + String(r.holdS) + ",\"act\":" + String(r.act) +
          ",\"enabled\":" + (r.enabled ? "true" : "false") + ",\"metric\":" + String(r.metric) + ",\"limit2\":" + String(r.limit2, 0) + ",\"label\":\"" + jsonEsc(String(r.label)) + "\"}";
 }
+// ---------- v2.15.10 link history per strip (the app's "network & connection" card) ----------
+// Per strip and per day (7 days): seconds the hub was on Wi-Fi, seconds the strip was connected in that time, drops,
+// the longest drop, and the lowest/average RSSI. Drops while the hub itself is off Wi-Fi are not counted: that is the
+// hub's link, not the strip's. Kept in RAM and written to /links every 10 minutes.
+const uint8_t LINK_DAYS = 7, LINK_MAX = 8;
+struct LinkDay { int32_t day; uint32_t hubS, upS, longS; uint16_t drops, rN; int32_t rSum; int8_t minR; uint8_t pad[3]; };
+struct LinkLog { char mac[13]; uint8_t pad[3]; uint32_t lastDrop; LinkDay d[LINK_DAYS]; };
+struct LinkFile { uint32_t ver; uint32_t n; LinkLog l[LINK_MAX]; };
+LinkFile linkF;
+uint32_t linkDownAt[LINK_MAX];                     // epoch the strip dropped (RAM only, 0 = connected)
+uint32_t linkTickAt = 0, linkSaveAt = 0;
+uint32_t linkHubBlipAt = 0;                        // the hub's own Wi-Fi last dropped (strips drop with it: not counted)
+bool linkDirty = false;
+
+int linkIdx(const String& mac, bool create) {
+  for (uint32_t i = 0; i < linkF.n; i++) if (mac.equalsIgnoreCase(linkF.l[i].mac)) return i;
+  if (!create || mac.length() != 12) return -1;
+  uint32_t i = linkF.n;
+  if (i >= LINK_MAX) {                             // full: reuse the entry seen least recently
+    i = 0;
+    int32_t best = INT32_MAX;
+    for (uint32_t k = 0; k < LINK_MAX; k++) {
+      int32_t last = 0;
+      for (int d = 0; d < LINK_DAYS; d++) last = max(last, linkF.l[k].d[d].day);
+      if (last < best) { best = last; i = k; }
+    }
+  } else linkF.n++;
+  memset(&linkF.l[i], 0, sizeof(LinkLog));
+  strlcpy(linkF.l[i].mac, mac.c_str(), sizeof linkF.l[i].mac);
+  linkDownAt[i] = 0;
+  linkDirty = true;
+  return i;
+}
+LinkDay* linkToday(int i) {
+  int32_t today = localDay();
+  if (!today) return nullptr;
+  LinkDay& d = linkF.l[i].d[((today % LINK_DAYS) + LINK_DAYS) % LINK_DAYS];
+  if (d.day != today) { memset(&d, 0, sizeof d); d.day = today; }
+  return &d;
+}
+void linkLoad() {
+  memset(&linkF, 0, sizeof linkF);
+  if (!fileLoad("/links", &linkF, sizeof linkF) || linkF.ver != 1 || linkF.n > LINK_MAX) { memset(&linkF, 0, sizeof linkF); }
+  linkF.ver = 1;
+  memset(linkDownAt, 0, sizeof linkDownAt);
+}
+void linkSave() { if (fileSave("/links", &linkF, sizeof linkF)) linkDirty = false; }
+void linkDrop(const String& mac) {
+  if (!timeOk() || WiFi.status() != WL_CONNECTED) return;
+  if (linkHubBlipAt && millis() - linkHubBlipAt < 90000) return;   // fallout of the hub's own Wi-Fi drop
+  int i = linkIdx(mac, true);
+  if (i < 0 || linkDownAt[i]) return;
+  LinkDay* d = linkToday(i);
+  if (!d) return;
+  uint32_t t = (uint32_t)time(nullptr);
+  linkDownAt[i] = t;
+  linkF.l[i].lastDrop = t;
+  d->drops++;
+  linkDirty = true;
+}
+void linkUp(const String& mac) {
+  int i = linkIdx(mac, true);
+  if (i < 0 || !linkDownAt[i] || !timeOk()) { if (i >= 0) linkDownAt[i] = 0; return; }
+  uint32_t dur = (uint32_t)time(nullptr) - linkDownAt[i];
+  linkDownAt[i] = 0;
+  LinkDay* d = linkToday(i);
+  if (d && dur < 86400UL * 7 && dur > d->longS) d->longS = dur;
+  linkDirty = true;
+}
+void linkTick() {
+  uint32_t now = millis();
+  if (now - linkTickAt < 10000) return;
+  uint32_t dt = (now - linkTickAt) / 1000;
+  linkTickAt = now;
+  if (dt > 60 || !timeOk()) return;                // first tick, or the loop was held (Wi-Fi down): skip that gap
+  for (uint32_t i = 0; i < linkF.n; i++) {
+    String mac = linkF.l[i].mac;
+    if (isBlocked(mac)) continue;
+    LinkDay* d = linkToday(i);
+    if (!d) return;
+    d->hubS += dt;
+    int idx = findStrip(mac);
+    if (idx >= 0 && strips[idx].identified) {
+      d->upS += dt;
+      if (strips[idx].hasRssi && strips[idx].rssi < 0 && strips[idx].rssi > -127) {
+        int8_t r = strips[idx].rssi;
+        if (!d->rN || r < d->minR) d->minR = r;
+        d->rSum += r;
+        d->rN++;
+      }
+    }
+  }
+  linkDirty = true;
+  if (now - linkSaveAt > 600000) { linkSaveAt = now; linkSave(); }
+}
+String linkJson(const String& mac) {
+  int i = linkIdx(mac, false);
+  int idx = findStrip(mac);
+  String j = "{\"mac\":\"" + mac + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"rssi\":" +
+             (idx >= 0 && strips[idx].hasRssi ? String(strips[idx].rssi) : String("null")) + ",\"ip\":\"" + (idx >= 0 ? strips[idx].ip : String("")) + "\"";
+  if (i < 0) return j + ",\"last_drop\":0,\"down_since\":0,\"days\":[]}";
+  const LinkLog& L = linkF.l[i];
+  j += ",\"last_drop\":" + String(L.lastDrop) + ",\"down_since\":" + String(linkDownAt[i]) + ",\"days\":[";
+  // newest first; "day" counts days since 1970-01-01 (hub local date)
+  int32_t today = localDay();
+  bool first = true;
+  for (int back = 0; back < LINK_DAYS && today; back++) {
+    int32_t want = today - back;
+    const LinkDay& d = L.d[((want % LINK_DAYS) + LINK_DAYS) % LINK_DAYS];
+    if (d.day != want) continue;
+    if (!first) j += ",";
+    first = false;
+    j += "{\"day\":" + String(d.day) + ",\"hub_s\":" + String(d.hubS) + ",\"up_s\":" + String(d.upS) + ",\"drops\":" + String((unsigned)d.drops) +
+         ",\"long_s\":" + String(d.longS) + ",\"min\":" + (d.rN ? String((int)d.minR) : String("null")) +
+         ",\"avg\":" + (d.rN ? String((int)lround((double)d.rSum / d.rN)) : String("null")) + "}";
+  }
+  return j + "]}";
+}
+
 String eventsJson() {
   String j = "{\"events\":[";
   for (int n = 0; n < evCount; n++) {
@@ -1954,7 +2077,7 @@ String resetText() {
 
 // what a shared user may call · 0 view · 1 control · 2 admin · -1 never
 int needRole(const String& p) {
-  if (p == "state" || p == "events" || p == "energy" || p == "schedules" || p == "automations") return 0;
+  if (p == "state" || p == "events" || p == "energy" || p == "link" || p == "schedules" || p == "automations") return 0;
   if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete" || p == "schedule_skip") return 1;
   if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit" || p == "automation_save" || p == "automation_delete") return 2;
   return -1;
@@ -2443,6 +2566,11 @@ ApiRes api(String path, const String& b) {
     return errRes("no such automation");
   }
   if (path == "events") return okRes(eventsJson());
+  if (path == "link") {                            // v2.15.10 link history of one strip (?mac= or "mac" in the body)
+    String m = mac; m.toUpperCase();
+    if (m.length() != 12) return errRes("mac required");
+    return okRes(linkJson(m));
+  }
   if (path == "energy") {
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
@@ -3885,6 +4013,7 @@ void setup() {
   esp_task_wdt_reset();
   Serial.printf("[fs] %s\n", fsOk ? "LittleFS ok" : "LittleFS FAILED, history stays in NVS");
   loadGlobals();
+  linkLoad();
   loadKnown();
   loadTimers();
   nvsId = cfg.getString("nvsid", "");
@@ -3974,6 +4103,7 @@ void loop() {
   }
   if (!wifiWasConnected) {
     wifiWasConnected = true;
+    linkHubBlipAt = millis();
     Serial.println("[wifi] link restored; restarting listeners");
     startStripListener();
   }
@@ -3982,6 +4112,7 @@ void loop() {
   // counted from the driver so a drop that heals between two loop passes (a stalled loop) is not missed
   static uint32_t wifiDiscSeen = 0;
   if (wifiDiscCount != wifiDiscSeen) {
+    linkHubBlipAt = millis();
     uint32_t n = wifiDiscCount - wifiDiscSeen;
     wifiDiscSeen = wifiDiscCount;
     if (!provRequested && provState != "running")
@@ -4000,6 +4131,8 @@ void loop() {
   tickTimers();
   stg("schedules");
   tickSchedules();
+  stg("links");
+  linkTick();
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified && strips[i].gotInfo) {
     // auto-off timers must fire even between polls
     for (int k = 0; k < 4; k++) if (strips[i].autoOffAt[k] && (int32_t)(millis() - strips[i].autoOffAt[k]) >= 0) { evalStrip(i); break; }

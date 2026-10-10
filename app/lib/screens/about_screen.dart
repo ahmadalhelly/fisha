@@ -14,21 +14,23 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
-        (Icons.exposure, _tr('شريط − و + للقيم', 'A − / + bar for values'),
-            _tr('الأمبير والفولت والحرارة بشريط − و +، ودوس على الرقم تكتبه. واقتراح ذكي لحد الأمبير.', 'Amps, volts and temperature use a − / + bar; tap the number to type it. Plus a smart amp-limit suggestion.')),
-        (Icons.bolt, _tr('حماية الفولت العالي إجبارية', 'Over-voltage cut always on'),
-            _tr('لو الفولت عدّى الحد المشترك كله بيقفل حتى المخارج المحمية (Hub 2.14).', 'Above the limit the whole strip shuts off, protected outlets too (hub 2.14).')),
-        (Icons.touch_app_outlined, _tr('ضغط مطول على الأتمتة', 'Long-press automations'), _tr('تعديل ونسخة وحذف، والقاعدة من غير اسم بتظهر باسم المشترك.', 'Edit, duplicate or delete; unnamed rules show the strip name.')),
-        (Icons.gradient, _tr('ألوان متحركة', 'Moving colours'), _tr('الوات والحرارة في الهيدر والبار العائم بيتلونوا حسب الحمل والحرارة.', 'Watts and temperature in the header and floating bar take colour from load and heat.')),
-        (Icons.insights, _tr('استهلاك كل مخرج والـ Peak', 'Per-outlet use and peak'),
-            _tr('صفحة الطاقة بفلتر للمشترك والمخرج، ونسبة كل مخرج، وأعلى حمل بوقته.', 'Energy page with strip and outlet filters, each outlet\'s share and peak with its time.')),
-        (Icons.meeting_room_outlined, _tr('الغرف زي المشترك', 'Rooms act like strips'),
-            _tr('تشغيل وإيقاف، جدولة، أتمتة، إعادة تشغيل، تكرار، بصمة وإشعارات للغرفة كلها.', 'On/off, schedules, automations, power-cycle, loop, fingerprint and notifications per room.')),
-        (Icons.blur_on, _tr('ثيمات زجاجية', 'Glass themes'), _tr('Midnight وPearl بقوا الأساسيين حسب وضع الموبايل.', 'Midnight and Pearl are now the defaults, following the phone.')),
-        (Icons.donut_large, _tr('هالة الاستهلاك', 'Load halo'),
-            _tr('المخرج والمشترك بيقلبوا برتقالي من 70% وأحمر من 90% من 3500 وات.', 'Outlets and strips turn orange from 70% and red from 90% of 3500 W.')),
-        (Icons.family_restroom, _tr('مشاركة العائلة', 'Family sharing'), _tr('أفراد العائلة بيتحكموا محلي وكلاود.', 'Family members control locally and through the cloud.')),
-        (Icons.pin, _tr('أرقام إنجليزي', 'Western digits'), _tr('كل الأرقام في التطبيق 0-9.', 'Every number in the app uses 0-9.')),
+        (Icons.swipe, _tr('سحب مفتاح الباور', 'Slide the master switch'),
+            _tr('اضغط مطوّل على المفتاح الرئيسي واسحب يمين لتشغيل الكل أو شمال لإيقاف الكل، وارفع صباعك في النص تلغي.', 'Hold the master switch, slide right for all on or left for all off; lift in the middle to cancel.')),
+        (Icons.wifi, _tr('كارت الشبكة والاتصال', 'Network & connection card'),
+            _tr('في إعدادات كل مشترك: نسبة الاتصال والانقطاعات والإشارة لآخر 7 أيام، يوم بيوم (Hub 2.15.10).', 'In each strip\'s settings: uptime, drops and signal for the last 7 days, day by day (hub 2.15.10).')),
+        (Icons.gpp_good_outlined, _tr('حماية أقوى من الـ Hub', 'Stronger hub protection'),
+            _tr('فصل عند 3500 وات لكل مشترك، فصل فوري لما القراية تبعد جداً عن الحد، والـ Hub بيتأكد إن المخرج اتقفل ويعيد الأمر (Hub 2.15.9).', 'A 3500 W cut per strip, instant cuts far past a limit, and the hub checks the outlet really went off and resends (hub 2.15.9).')),
+        (Icons.notifications_active_outlined, _tr('إشعارات الحماية دايماً', 'Safety alerts always on'),
+            _tr('فصل الفولت والتيار والحمل بيوصلك حتى لو المشترك مكتوم.', 'Voltage, current and load cuts reach you even when the strip is muted.')),
+        (Icons.notifications_outlined, _tr('إشعاراتي وسجل النظام', 'My notifications and system log'),
+            _tr('إشعاراتي فيها اللي مفعّله بس ومتقسّمة بالأيام، وسجل الـ Hub لوحده بفلاتر. المقفول مش بيظهر في أي مكان.', 'My notifications shows only what you enabled, grouped by day; the hub log is separate with filters. Disabled types show nowhere.')),
+        (Icons.insights, _tr('صفحة طاقة جديدة', 'New energy page'),
+            _tr('ترتيب أوضح، النسبة ودلوقتي وأعلى حمل لكل مخرج، واليوم اللي ملوش بيانات بيفضل ظاهر.', 'Clearer layout; share, now and peak per outlet; days with no data stay visible.')),
+        (Icons.system_update_alt, _tr('تحديث فيرموير المشتركات', 'Strip firmware updates'),
+            _tr('الـ Hub بيحدّث المشتركات واحد واحد من غير زرار، وبيتأكد من النسخة بعد كل واحد (Hub 2.15.8).', 'The hub updates strips one at a time without a button press and checks each version (hub 2.15.8).')),
+        (Icons.lan_outlined, _tr('عنوان IP لكل مشترك', 'IP of each strip'), _tr('في قسم الجهاز في إعدادات المشترك.', 'In the device section of the strip settings.')),
+        (Icons.electric_bolt, _tr('الأمبير برقمين عشريين', 'Amps with 2 decimals'), _tr('عشان الأحمال الصغيرة تبان.', 'So small loads show.')),
+        (Icons.auto_awesome, _tr('شاشة بداية جديدة', 'New splash screen'), _tr('حركة خفيفة للشعار.', 'A light logo animation.')),
       ];
 
   static List<(IconData, String)> get _features => [
@@ -40,7 +42,9 @@ class AboutScreen extends StatelessWidget {
         (Icons.bar_chart, _tr('استهلاك وتكلفة لـ 90 يوم', '90 days of energy and cost')),
         (Icons.notifications_outlined, _tr('إشعارات لحظية', 'Instant notifications')),
         (Icons.cloud_sync_outlined, _tr('نسخ احتياطي ومزامنة مع Google', 'Backup and Google sync')),
-        (Icons.system_update_alt, _tr('تحديث فيرموير الـ Hub من الموبايل', 'Hub firmware updates from the phone')),
+        (Icons.system_update_alt, _tr('تحديث فيرموير الـ Hub والمشتركات من الموبايل', 'Hub and strip firmware updates from the phone')),
+        (Icons.wifi, _tr('سجل اتصال كل مشترك لآخر 7 أيام', '7-day link history for each strip')),
+        (Icons.meeting_room_outlined, _tr('غرف وأتمتة ومشاركة مع العائلة', 'Rooms, automations and family sharing')),
       ];
 
   @override

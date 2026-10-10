@@ -117,6 +117,8 @@ class _EventsScreenState extends State<EventsScreen> {
           if (AppState.isSystemEvent(e.type) && (_filter == 'all' || _sysGroup(e.type) == _filter)) e
       ];
 
+  int _sysCount(String g) => s.events.where((e) => AppState.isSystemEvent(e.type) && (g == 'all' || _sysGroup(e.type) == g)).length;
+
   int _dayKey(int ts) {
     final d = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
     return d.year * 10000 + d.month * 100 + d.day;
@@ -180,21 +182,29 @@ class _EventsScreenState extends State<EventsScreen> {
         ]),
       );
 
-  Widget _chip(String key, String label) {
+  // 2.0.13: log filter chip with an icon and how many events it holds
+  Widget _chip(String key, String label, IconData? icon, int n) {
     final on = _filter == key;
     return Padding(
       padding: const EdgeInsetsDirectional.only(end: 6),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => setState(() => _filter = key),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
-            color: on ? C.accentBg : C.surface2,
+            color: on ? C.surface2 : Colors.transparent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: on ? Colors.transparent : C.border),
+            border: Border.all(color: on ? C.accent.withValues(alpha: 0.3) : C.border),
           ),
-          child: Text(label, style: TextStyle(fontSize: 12, color: on ? C.accent : C.textSoft, fontWeight: on ? FontWeight.w600 : FontWeight.w500)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (icon != null) ...[Icon(icon, size: 14, color: on ? C.accent : C.muted), const SizedBox(width: 6)],
+            Text(label, style: TextStyle(fontSize: 12, color: on ? C.text : C.muted, fontWeight: on ? FontWeight.w600 : FontWeight.w500)),
+            const SizedBox(width: 6),
+            Text('$n', textDirection: TextDirection.ltr, style: mono(10.5, color: on ? C.accent : C.faint, weight: FontWeight.w600)),
+          ]),
         ),
       ),
     );
@@ -243,17 +253,10 @@ class _EventsScreenState extends State<EventsScreen> {
               color: C.accent,
               onRefresh: s.loadEvents,
               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
-                SegmentedButton<bool>(
-                  segments: [
-                    ButtonSegment(
-                        value: false,
-                        label: Text(_newCount > 0 ? '${t('events_mine')} · $_newCount' : t('events_mine')),
-                        icon: const Icon(Icons.notifications_outlined)),
-                    ButtonSegment(value: true, label: Text(t('events_system')), icon: const Icon(Icons.list_alt)),
-                  ],
-                  selected: {_system},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (v) => setState(() => _system = v.first),
+                _TabSwitch(
+                  system: _system,
+                  newCount: _newCount,
+                  onChanged: (v) => setState(() => _system = v),
                 ),
                 const SizedBox(height: 4),
                 if (!s.hubV2) ...[const SizedBox(height: 8), emptyCard(t('err_old_fw'))],
@@ -262,10 +265,10 @@ class _EventsScreenState extends State<EventsScreen> {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(children: [
-                      _chip('all', _tr('الكل', 'All')),
-                      _chip('wifi', _tr('الواي فاي', 'Wi-Fi')),
-                      _chip('hub', _tr('الـ Hub', 'Hub')),
-                      _chip('fw', _tr('الفيرموير', 'Firmware')),
+                      _chip('all', _tr('الكل', 'All'), null, _sysCount('all')),
+                      _chip('wifi', _tr('الواي فاي', 'Wi-Fi'), Icons.wifi, _sysCount('wifi')),
+                      _chip('hub', _tr('الـ Hub', 'Hub'), Icons.memory, _sysCount('hub')),
+                      _chip('fw', _tr('الفيرموير', 'Firmware'), Icons.system_update_alt, _sysCount('fw')),
                     ]),
                   ),
                   if (sys.isEmpty) ...[const SizedBox(height: 12), emptyCard(t('events_empty'), icon: Icons.notifications_none)],
@@ -280,6 +283,101 @@ class _EventsScreenState extends State<EventsScreen> {
           },
         ),
       ),
+    );
+  }
+}
+
+/// 2.0.13: "My notifications / System log" switch: a track with a sliding pill and a thin glowing line under it.
+class _TabSwitch extends StatelessWidget {
+  final bool system;
+  final int newCount;
+  final ValueChanged<bool> onChanged;
+  const _TabSwitch({required this.system, required this.newCount, required this.onChanged});
+
+  Widget _tab(bool sys, IconData icon, IconData iconOn, String label, int? count) {
+    final on = system == sys;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => onChanged(sys),
+        child: SizedBox(
+          height: 42,
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(on ? iconOn : icon, size: 17, color: on ? C.accent : C.muted),
+            const SizedBox(width: 7),
+            Flexible(
+              child: Text(label,
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: on ? C.accent : C.muted)),
+            ),
+            if (count != null && count > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                constraints: const BoxConstraints(minWidth: 18),
+                height: 18,
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: on ? C.accent.withValues(alpha: 0.16) : C.surface, borderRadius: BorderRadius.circular(999)),
+                child: Text('$count', textDirection: TextDirection.ltr, style: mono(10.5, color: on ? C.accent : C.muted, weight: FontWeight.w700)),
+              ),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    // the first tab sits at the start side: right in Arabic, left in English
+    final align = (system ? 1.0 : -1.0) * (rtl ? -1 : 1);
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(16), border: Border.all(color: C.border)),
+      child: Stack(children: [
+        Positioned.fill(
+          child: AnimatedAlign(
+            alignment: Alignment(align, 0),
+            duration: const Duration(milliseconds: 380),
+            curve: const Cubic(.3, 1.35, .5, 1),
+            child: FractionallySizedBox(
+              widthFactor: 0.5,
+              heightFactor: 1,
+              child: Stack(clipBehavior: Clip.none, children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: C.accentBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: C.accent.withValues(alpha: 0.25)),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: -1,
+                  child: FractionallySizedBox(
+                    widthFactor: 0.56,
+                    child: Container(
+                      height: 2,
+                      decoration: BoxDecoration(
+                        color: C.accent,
+                        borderRadius: BorderRadius.circular(2),
+                        boxShadow: [BoxShadow(color: C.accent.withValues(alpha: 0.6), blurRadius: 10, spreadRadius: 1)],
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ),
+        Row(children: [
+          _tab(false, Icons.notifications_outlined, Icons.notifications, t('events_mine'), newCount),
+          _tab(true, Icons.list_alt_outlined, Icons.list_alt, t('events_system'), null),
+        ]),
+      ]),
     );
   }
 }

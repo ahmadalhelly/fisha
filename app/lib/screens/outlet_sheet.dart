@@ -6,6 +6,7 @@ import '../models.dart';
 import '../services/outlet_history.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/link_card.dart';
 import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart' show timerText, timerIcon, guardedSwitch;
 import 'automations_screen.dart' show AutomationEditor, AutomationsScreen, automationCondText;
@@ -122,6 +123,8 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                     () => openOutletSheet(ctx, state, s.mac, o.n),
                   ),
                 ..._timerList(ctx, state, state.timersFor(s.mac)),
+                const SizedBox(height: 14),
+                if (state.hubV2) LinkCard(state: state, mac: s.mac),
                 Divider(color: C.border, height: 24),
                 Text(t('device'), style: TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w600)),
                 _info(Tr.isAr ? 'متصل من' : 'Connected since', s.online && s.upS != null ? formatHumanDuration(s.upS!) : '—'),
