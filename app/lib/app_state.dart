@@ -220,7 +220,7 @@ class AppState extends ChangeNotifier {
   String _lastSyncSig = '';
 
   // per-phone keys that must not travel between devices through the Google copy
-  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps'};
+  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps', 'notifyFilter'};
 
   Future<Map<String, dynamic>> _syncPayload() async {
     final b = await exportBackup(parts: {'app'}, withSecrets: true);
@@ -398,7 +398,7 @@ class AppState extends ChangeNotifier {
       final p = _prefs ?? await SharedPreferences.getInstance();
       _prefs = p;
       for (final k in p.getKeys()) {
-        if (k == 'pendingOps') continue;      // this phone's queue, not a setting
+        if (k == 'pendingOps' || k == 'notifyFilter') continue;      // this phone's queue / cache, not a setting
         final v = p.get(k);
         if (v is bool) {
           appMap[k] = {'t': 'b', 'v': v};
@@ -998,6 +998,7 @@ class AppState extends ChangeNotifier {
         list.add(s);
       }
       _strips = list;
+      _saveNotifyFilter();
       OutletHistory.instance.sample(list); // app-side per-outlet kWh + daily peak (services/outlet_history.dart)
       for (final s in list) {
         if (!_order.contains(s.mac)) _order.add(s.mac);
@@ -1413,9 +1414,20 @@ class AppState extends ChangeNotifier {
   // ---------- notifications (hub pushes them through ntfy) ----------
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
 
+  /// The background notification service filters with the hub's state from the cloud; when that state is missing it
+  /// let everything through. It now falls back to this copy of the user's choices (prefs 'notifyFilter').
+  String _notifyFilterSaved = '';
+  void _saveNotifyFilter() {
+    final f = jsonEncode({'types': notifyTypes, 'masks': {for (final x in _strips) x.mac: x.notifyMask}});
+    if (f == _notifyFilterSaved) return;
+    _notifyFilterSaved = f;
+    _prefs?.setString('notifyFilter', f);
+  }
+
   Future<bool> setNotifyConfig({String? topic, int? types}) async {
     if (topic != null) ntfyTopic = topic;
     if (types != null) notifyTypes = types;
+    _saveNotifyFilter();
     notifyListeners();
     final r = await api('notify', {if (topic != null) 'ntfy': topic, if (types != null) 'types': types});
     _fail(r);
@@ -1425,6 +1437,7 @@ class AppState extends ChangeNotifier {
   Future<void> setNotifyMask(Strip s, int mask) async {
     final before = _strips;
     _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, upS: x.upS, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
+    _saveNotifyFilter();
     notifyListeners();
     final r = await api('notify', {'mac': s.mac, 'mask': mask});
     if (!r.ok) _strips = before;

@@ -43,6 +43,8 @@ struct ApiRes;
            limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
            is erased, so the app can put family members, schedules and rules back; family members can be
            exported and restored with their own passwords (users_export / user_restore, owner only).
+  v2.15.4: events made while the cloud link is down are kept (newest 12) and sent when it is back, so phone
+           notifications are no longer lost on a Wi-Fi blip or an MQTT reconnect.
   v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
            seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
   v2.15.2: a strip is no longer dropped when one send is slow for a moment: unsent bytes wait (same bytes, same
@@ -100,7 +102,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.3";
+const char* FW_VERSION = "2.15.4";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -625,6 +627,22 @@ void sendNotes() {
   xQueueSend(noteQ, &m, 0);
 }
 
+// v2.15.4: an event made while the cloud link is down (Wi-Fi blip, MQTT reconnecting) used to be lost, so the phone
+// never got its notification although the app's log showed it. It now waits here and goes out on reconnect.
+const uint8_t EV_OUTBOX = 12;
+String evOutJ[EV_OUTBOX], evOutMac[EV_OUTBOX];
+uint8_t evOutN = 0;
+void publishEvent(const String& j, const String& mac) {
+  mqttPub(tEvent, j, 1, false);
+  for (int u = 0; u < userCount; u++)
+    if (mac.length() ? userHas(users[u], mac) : users[u].all) mqttPub("mttl/" + hubId + "/u/" + users[u].id + "/event", j, 1, false);
+}
+void flushEventOutbox() {
+  for (uint8_t i = 0; i < evOutN; i++) publishEvent(evOutJ[i], evOutMac[i]);
+  for (uint8_t i = 0; i < evOutN; i++) { evOutJ[i] = ""; evOutMac[i] = ""; }
+  evOutN = 0;
+}
+
 void addEvent(const String& type, const String& mac, int outlet, const String& msg) {
   Ev& e = events[evHead];
   e.ts = timeOk() ? (uint32_t)time(nullptr) : 0;
@@ -634,9 +652,14 @@ void addEvent(const String& type, const String& mac, int outlet, const String& m
   String j = "{\"ts\":" + String(e.ts) + ",\"type\":\"" + type + "\",\"mac\":\"" + mac + "\",\"outlet\":" + String(outlet) +
              ",\"msg\":\"" + jsonEsc(msg) + "\"}";
   Serial.printf("[event] %s\n", j.c_str());
-  mqttPub(tEvent, j, 1, false);
-  for (int u = 0; u < userCount; u++)
-    if (mac.length() ? userHas(users[u], mac) : users[u].all) mqttPub("mttl/" + hubId + "/u/" + users[u].id + "/event", j, 1, false);
+  if (mqtt && mqttUp) publishEvent(j, mac);
+  else if (secMqtt.length()) {                     // keep the newest EV_OUTBOX events for the reconnect
+    if (evOutN == EV_OUTBOX) {
+      for (uint8_t i = 1; i < EV_OUTBOX; i++) { evOutJ[i - 1] = evOutJ[i]; evOutMac[i - 1] = evOutMac[i]; }
+      evOutN--;
+    }
+    evOutJ[evOutN] = j; evOutMac[evOutN] = mac; evOutN++;
+  }
   sseSend("event", j);
   queueNotify(type, mac, outlet, msg);
 }
@@ -2791,6 +2814,7 @@ void mqttProcess() {
     mqttPub(tInfo, "{\"hub\":\"" + hubId + "\",\"fw\":\"" + FW_VERSION + "\",\"ip\":\"" + WiFi.localIP().toString() +
             "\",\"web_port\":" + String(WEB_PORT) + ",\"sse_port\":" + String(SSE_PORT) + "}", 1, true);
     publishState();
+    flushEventOutbox();
   }
   MqttCmd c;
   while (xQueueReceive(mqttQ, &c, 0) == pdTRUE) {

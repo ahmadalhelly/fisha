@@ -91,6 +91,8 @@ class _NotifyHandler extends TaskHandler {
   String _base = '';
   Map<String, dynamic> _state = {};
   int _id = 1;
+  Map<String, dynamic>? _filter; // the app's copy of the user's choices (prefs 'notifyFilter'), when the hub state is missing
+  final _seen = <String>[]; // recent events, so one held back by the hub and sent on reconnect never shows twice
   DateTime _startedAt = DateTime.now();
   bool _connecting = false;
 
@@ -101,7 +103,17 @@ class _NotifyHandler extends TaskHandler {
     final lang = prefs.getInt('langPref') ?? 0;
     Tr.lang = lang == 2 ? 'en' : (lang == 1 ? 'ar' : (Platform.localeName.startsWith('en') ? 'en' : 'ar'));
     await _notes.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+    await _loadFilter();
     await _connect();
+  }
+
+  Future<void> _loadFilter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload(); // this isolate's copy does not see the app's writes otherwise
+      final f = prefs.getString('notifyFilter');
+      _filter = f == null ? null : jsonDecode(f) as Map<String, dynamic>;
+    } catch (_) {}
   }
 
   Future<void> _connect() async {
@@ -171,16 +183,23 @@ class _NotifyHandler extends TaskHandler {
     final msg = (e['msg'] ?? '').toString();
     final ts = (e['ts'] as num?)?.toInt() ?? 0;
     if (ts > 0 && DateTime.fromMillisecondsSinceEpoch(ts * 1000).isBefore(_startedAt.subtract(const Duration(minutes: 2)))) return;
-    // same filters the user set in the app (stored on the hub)
+    final key = '$ts|$type|$mac|$outlet|$msg';
+    if (ts > 0) {
+      if (_seen.contains(key)) return;
+      _seen.add(key);
+      if (_seen.length > 60) _seen.removeAt(0);
+    }
+    // same filters the user set in the app (stored on the hub); without the hub's state yet, the app's saved copy
     final cfg = _state['config'];
-    final types = cfg is Map ? (cfg['ntypes'] as num?)?.toInt() ?? 0xFFFFFFFF : 0xFFFFFFFF;
+    final fTypes = (_filter?['types'] as num?)?.toInt();
+    final types = cfg is Map && cfg['ntypes'] is num ? (cfg['ntypes'] as num).toInt() : (fTypes ?? 0xFFFFFFFF);
     final bit = _types.indexOf(type);
     if (type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
     final strip = mac.isEmpty ? null : _strip(mac);
-    if (strip != null) {
-      final mask = (strip['notify'] as num?)?.toInt() ?? 0x1F;
-      if (outlet == 0 ? mask & 0x10 == 0 : mask & (1 << (outlet - 1)) == 0) return;
-    }
+    final fMasks = _filter?['masks'];
+    final savedMask = fMasks is Map ? (fMasks[mac] as num?)?.toInt() : null;
+    final mask = strip != null ? (strip['notify'] as num?)?.toInt() ?? savedMask ?? 0x1F : savedMask;
+    if (mask != null && (outlet == 0 ? mask & 0x10 == 0 : mask & (1 << (outlet - 1)) == 0)) return;
     var stripName = '';
     if (strip != null) {
       final label = (strip['label'] ?? '').toString();
@@ -275,6 +294,7 @@ class _NotifyHandler extends TaskHandler {
 
   @override
   void onRepeatEvent(DateTime timestamp) {
+    _loadFilter();
     _connect();
   }
 
