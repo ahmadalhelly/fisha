@@ -47,6 +47,8 @@ struct ApiRes;
            notifications are no longer lost on a Wi-Fi blip or an MQTT reconnect.
   v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
            seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
+  v2.15.7: energy and peak history moved from NVS to files (LittleFS on the unused SPIFFS partition); old data is
+           moved over on first boot and its NVS entries freed. NVS was 500/630 full and saves had started to fail.
   v2.15.6: Wi-Fi settings are kept in RAM, not NVS (with NVS full the strip join failed: ESP_ERR_NVS_NOT_ENOUGH_SPACE);
            the strip's setup network is also recognised by its BSSID; /api/health adds nvs_used/nvs_free/nvs_total.
   v2.15.5: the strip flasher listens on port 80 before sending up:ota (the strip dials it ~0.1 s after ota_ok).
@@ -75,6 +77,7 @@ struct ApiRes;
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "nvs.h"
+#include <LittleFS.h>
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_netif_net_stack.h"
@@ -106,7 +109,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.6";
+const char* FW_VERSION = "2.15.7";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -675,8 +678,43 @@ void saveLocks(Strip& s) {
   cfg.putUChar(("l" + s.mac).c_str(), s.lockMask);
   cfg.putUChar(("s" + s.mac).c_str(), s.lockState);
 }
-void saveElog(int i) { cfg.putBytes(("e" + strips[i].mac).c_str(), &elogs[i], sizeof(ELog)); }
-void savePeak(int i) { cfg.putBytes(("k" + strips[i].mac).c_str(), &peaks[i], sizeof(PeakLog)); peakSavedAt[i] = millis(); }
+// v2.15.7: the energy/peak history (~2.4 KB per strip, rewritten every few minutes) lives in files on the unused
+// SPIFFS partition (LittleFS), not in NVS: it filled NVS (500/630 entries) and saves started to fail.
+bool fsOk = false;
+bool fileSave(const String& path, const void* d, size_t n) {
+  if (!fsOk) return false;
+  String tmp = path + ".t";
+  File f = LittleFS.open(tmp, "w");
+  if (!f) return false;
+  size_t w = f.write((const uint8_t*)d, n);
+  f.close();
+  if (w != n) { LittleFS.remove(tmp); return false; }
+  LittleFS.remove(path);
+  return LittleFS.rename(tmp, path);
+}
+bool fileLoad(const String& path, void* d, size_t n) {
+  if (!fsOk || !LittleFS.exists(path)) return false;
+  File f = LittleFS.open(path, "r");
+  if (!f) return false;
+  bool ok = f.size() == n && f.read((uint8_t*)d, n) == n;
+  f.close();
+  return ok;
+}
+// file first; NVS only as a fallback when the file system is not available
+void saveBlob(const String& key, const void* d, size_t n) {
+  if (fileSave("/" + key, d, n)) { if (cfg.isKey(key.c_str())) cfg.remove(key.c_str()); }
+  else cfg.putBytes(key.c_str(), d, n);
+}
+// loads from the file, or from NVS once (old data), moving it to a file and freeing the NVS entries
+bool loadBlob(const String& key, void* d, size_t n) {
+  if (fileLoad("/" + key, d, n)) return true;
+  if (cfg.getBytesLength(key.c_str()) != n) return false;
+  cfg.getBytes(key.c_str(), d, n);
+  if (fileSave("/" + key, d, n)) cfg.remove(key.c_str());
+  return true;
+}
+void saveElog(int i) { saveBlob("e" + strips[i].mac, &elogs[i], sizeof(ELog)); }
+void savePeak(int i) { saveBlob("k" + strips[i].mac, &peaks[i], sizeof(PeakLog)); peakSavedAt[i] = millis(); }
 
 void loadStripCfg(int i) {
   Strip& s = strips[i];
@@ -692,14 +730,14 @@ void loadStripCfg(int i) {
   if (cfg.getBytesLength(("x" + s.mac).c_str()) == sizeof(s.ampX2)) cfg.getBytes(("x" + s.mac).c_str(), s.ampX2, sizeof(s.ampX2));
   else memset(s.ampX2, 0, sizeof(s.ampX2));
   ELog& el = elogs[i];
-  if (cfg.getBytesLength(("e" + s.mac).c_str()) == sizeof(ELog)) cfg.getBytes(("e" + s.mac).c_str(), &el, sizeof(ELog));
+  loadBlob("e" + s.mac, &el, sizeof(ELog));
   if (el.magic != 0xE1E1) {
     memset(&el, 0, sizeof(ELog));
     el.magic = 0xE1E1;
     for (int d = 0; d < ELOG_DAYS; d++) el.dayOf[d] = -1;
   }
   PeakLog& pl = peaks[i];
-  if (cfg.getBytesLength(("k" + s.mac).c_str()) == sizeof(PeakLog)) cfg.getBytes(("k" + s.mac).c_str(), &pl, sizeof(PeakLog));
+  loadBlob("k" + s.mac, &pl, sizeof(PeakLog));
   if (pl.magic != 0xBEA7) {
     memset(&pl, 0, sizeof(PeakLog));
     pl.magic = 0xBEA7;
@@ -2420,7 +2458,7 @@ void handleHealth() {
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
-           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) + nvsStatsJson() +
+           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -3427,6 +3465,8 @@ void setup() {
   loadEmqx();
   loadUsers();
   cfg.begin("mttl", false);
+  fsOk = LittleFS.begin(true);                   // v2.15.7: formats the unused SPIFFS partition on first boot
+  Serial.printf("[fs] %s\n", fsOk ? "LittleFS ok" : "LittleFS FAILED, history stays in NVS");
   loadGlobals();
   loadKnown();
   loadTimers();
