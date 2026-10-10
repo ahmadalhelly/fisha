@@ -149,6 +149,56 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return t;
   }
 
+  // 2.0.15: stable colour per strip (by name order, same as the filter), and 4 tones of it for its outlets
+  static const _palette = [
+    Color(0xFF2EE6B0), Color(0xFF38BDF8), Color(0xFFA78BFA), Color(0xFFFFB547),
+    Color(0xFFFF8A80), Color(0xFFF472B6), Color(0xFF84CC16), Color(0xFF94A3B8),
+  ];
+  List<String> get _macOrder => _whIdx.keys.toList()..sort((a, b) => _stripLabel(a).compareTo(_stripLabel(b)));
+  Color _stripColor(String mac) => _palette[math.max(0, _macOrder.indexOf(mac)) % _palette.length];
+  Color _outletColor(String mac, int n) {
+    final c = _stripColor(mac);
+    return switch (n) {
+      1 => c,
+      2 => Color.lerp(c, Colors.black, .3)!,
+      3 => Color.lerp(c, Colors.white, .42)!,
+      _ => Color.lerp(c, Colors.black, .55)!,
+    };
+  }
+
+  /// the chart's stacked parts under the current filter: strips (all), outlets (one strip) or one outlet; days oldest first
+  ({List<String> labels, List<Color> colors, List<_StackDay> days}) _stack(List<_DayStat> daily) {
+    final labels = <String>[], colors = <Color>[], keys = <(String, int)>[];
+    if (_mac == null) {
+      for (final m in _macOrder) {
+        labels.add(_stripLabel(m));
+        colors.add(_stripColor(m));
+        keys.add((m, -1));
+      }
+    } else if (_outlet == 0) {
+      for (var n = 1; n <= 4; n++) {
+        labels.add(_outletLabel(_mac!, n));
+        colors.add(_outletColor(_mac!, n));
+        keys.add((_mac!, n - 1));
+      }
+    } else {
+      labels.add(_outletLabel(_mac!, _outlet));
+      colors.add(_stripColor(_mac!));
+      keys.add((_mac!, _outlet - 1));
+    }
+    final days = [
+      for (final d in daily.reversed)
+        _StackDay(d.date, d.missing, d.peakW, [for (final (m, k) in keys) k < 0 ? _stripWh(m, [d.date]) : _outletWh(m, d.date, k)]),
+    ];
+    return (labels: labels, colors: colors, days: days);
+  }
+
+  String get _filterTitle => _mac == null
+      ? _tr('كل المشتركات', 'All strips')
+      : _outlet == 0
+          ? _stripLabel(_mac!)
+          : '${_stripLabel(_mac!)} · ${_outletLabel(_mac!, _outlet)}';
+
   String _stripLabel(String mac) {
     final st = s.live(mac);
     return st == null ? mac : s.stripName(st);
@@ -287,27 +337,42 @@ class _EnergyScreenState extends State<EnergyScreen> {
                   _filterCard(),
                 ],
                 const SizedBox(height: 14),
+                // 2.0.15: the total cost first, then the use; the average day and how many days have data under them
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 4, bottom: 8),
+                  child: Text('$_filterTitle · ${_tr('آخر', 'last')} $_range ${_tr('يوم', 'days')}',
+                      style: TextStyle(color: C.textSoft, fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
                 Row(children: [
-                  Expanded(
-                      child: _bigStat(t('total_used'), kwh.toStringAsFixed(2), 'kWh',
-                          foot: _mac == null || allWh == 0 ? null : '${(totalWh * 100 / allWh).toStringAsFixed(0)}% ${_tr('من الإجمالي', 'of total')}')),
-                  const SizedBox(width: 10),
                   Expanded(
                     child: InkWell(
                       borderRadius: BorderRadius.circular(22),
                       onTap: _editTariff,
-                      child: _bigStat(t('est_cost'), (kwh * s.tariff).toStringAsFixed(2), t('egp'),
+                      child: _bigStat(_tr('التكلفة الإجمالية', 'Total cost'), (kwh * s.tariff).toStringAsFixed(2), t('egp'),
                           foot: '${t('tariff')}: ${s.tariff.toStringAsFixed(2)} ✎'),
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _bigStat(t('total_used'), kwh.toStringAsFixed(2), 'kWh',
+                          foot: _mac == null || allWh == 0 ? null : '${(totalWh * 100 / allWh).toStringAsFixed(0)}% ${_tr('من الإجمالي', 'of total')}')),
                 ]),
+                if (daily.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _summaryLine(daily, totalWh),
+                ],
                 const SizedBox(height: 14),
                 if (_loading && _data.isEmpty) Center(child: Padding(padding: const EdgeInsets.all(24), child: CircularProgressIndicator(color: C.accent))),
                 if (!_loading && daily.isEmpty) emptyCard(t('energy_empty'), icon: Icons.bar_chart),
                 if (daily.isNotEmpty) ...[
                   _peakCard(daily, strips),
                   const SizedBox(height: 14),
-                  section(t('daily_usage'), [SizedBox(height: 190, child: _Bars(daily: daily.reversed.toList(), range: _range))]),
+                  Builder(builder: (_) {
+                    final st = _stack(daily);
+                    return section(t('daily_usage'), [
+                      _StackBars(key: ValueKey('$_mac/$_outlet/$_range'), days: st.days, labels: st.labels, colors: st.colors, tariff: s.tariff),
+                    ]);
+                  }),
                   const SizedBox(height: 14),
                   section(_tr('استهلاك كل يوم', 'Daily Consumption'), [
                     _dailyList(daily),
@@ -424,6 +489,24 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return section(_tr('أعلى استهلاك (Peak)', 'Peak'), lines);
   }
 
+  Widget _summaryLine(List<_DayStat> daily, int totalWh) {
+    final withData = daily.where((d) => !d.missing).length;
+    final avg = withData == 0 ? 0.0 : totalWh / withData / 1000;
+    final st = TextStyle(color: C.muted, fontSize: 12);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(children: [
+        Text('${_tr('متوسط اليوم', 'Daily avg')} ', style: st),
+        valUnit(avg.toStringAsFixed(2), 'kWh', size: 12, color: C.textSoft, weight: FontWeight.w500),
+        Text('  ·  ', style: st),
+        valUnit((avg * s.tariff).toStringAsFixed(2), t('egp'), size: 12, color: C.textSoft, weight: FontWeight.w500),
+        const Spacer(),
+        Text('${_tr('أيام ببيانات', 'Days with data')} ', style: st),
+        Text('$withData/${daily.length}', textDirection: TextDirection.ltr, style: mono(12, color: C.textSoft)),
+      ]),
+    );
+  }
+
   Widget _bigStat(String label, String value, String unit, {String? foot}) => Container(
         padding: const EdgeInsets.all(16),
         decoration: cardBox(),
@@ -466,7 +549,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
               ],
             ]),
           ),
-          valUnit((kwh * s.tariff).toStringAsFixed(2), t('egp'), size: 12, color: C.muted, weight: FontWeight.w500),
+          valUnit((kwh * s.tariff).toStringAsFixed(2), t('egp'), size: 14, color: C.text, weight: FontWeight.w600),
         ]),
         const SizedBox(height: 6),
         for (final r in st.outlets) _outletRow(r, stripWh),
@@ -497,6 +580,8 @@ class _EnergyScreenState extends State<EnergyScreen> {
           Row(children: [
             Expanded(child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
             valUnit((r.wh / 1000).toStringAsFixed(2), 'kWh', size: 14),
+            const SizedBox(width: 10),
+            valUnit((r.wh / 1000 * s.tariff).toStringAsFixed(2), t('egp'), size: 13, color: C.textSoft, weight: FontWeight.w600),
           ]),
           const SizedBox(height: 7),
           ClipRRect(
@@ -606,126 +691,233 @@ class _EnergyScreenState extends State<EnergyScreen> {
   }
 }
 
-class _Bars extends StatefulWidget {
-  final List<_DayStat> daily; // oldest first
-  final int range;
-  const _Bars({required this.daily, required this.range});
-
-  @override
-  State<_Bars> createState() => _BarsState();
+class _StackDay {
+  final int date; // yyyymmdd
+  final bool missing;
+  final int peakW;
+  final List<int> parts; // Wh per stacked part (strip or outlet)
+  const _StackDay(this.date, this.missing, this.peakW, this.parts);
+  int get wh => parts.fold(0, (a, b) => a + b);
 }
 
-class _BarsState extends State<_Bars> {
-  int? _selectedDate;
+String _dayLabel(int k) {
+  final d = DateTime(k ~/ 10000, (k ~/ 100) % 100, k % 100);
+  const ar = ['الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت', 'الأحد'];
+  const en = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return '${Tr.isAr ? ar[d.weekday - 1] : en[d.weekday - 1]} ${d.day}/${d.month}';
+}
+
+/// 2.0.15: one bar per day, stacked by strip (or by outlet when a strip is picked), a dashed average line, an outlined
+/// slot for a day with no record, and a detail box with the day's use and cost split by part.
+class _StackBars extends StatefulWidget {
+  final List<_StackDay> days; // oldest first
+  final List<String> labels;
+  final List<Color> colors;
+  final double tariff;
+  const _StackBars({super.key, required this.days, required this.labels, required this.colors, required this.tariff});
+
+  @override
+  State<_StackBars> createState() => _StackBarsState();
+}
+
+class _StackBarsState extends State<_StackBars> {
+  int? _sel; // index into days
+
+  static const _padL = 30.0, _labelH = 18.0;
+
+  void _tap(Offset p, double w) {
+    final n = widget.days.length;
+    if (n == 0 || p.dx < _padL) return;
+    final i = ((p.dx - _padL) / ((w - _padL) / n)).floor().clamp(0, n - 1);
+    setState(() => _sel = _sel == i ? null : i);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (widget.daily.isEmpty) return const SizedBox.shrink();
-    final maxWh = widget.daily.fold<int>(1, (a, e) => math.max(a, e.wh));
-    final gap = widget.daily.length > 40 ? 1.0 : (widget.daily.length > 10 ? 3.0 : 6.0);
-
-    final selectedDay = widget.daily.firstWhere(
-      (e) => e.date == _selectedDate,
-      orElse: () => widget.daily.last,
-    );
-
-    return Directionality(
-      textDirection: TextDirection.ltr,
-      child: Column(children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
-            child: Text(
-              selectedDay.missing
-                  ? '${_d(selectedDay.date)} · ${Tr.isAr ? 'مفيش بيانات' : 'No data'}'
-                  : '${_d(selectedDay.date)} · ${(selectedDay.wh / 1000).toStringAsFixed(2)} kWh${selectedDay.peakW > 0 ? " · ⚡ ${selectedDay.peakW} W" : ""}',
-              style: mono(12, color: selectedDay.missing ? C.muted : C.accent),
-              textDirection: TextDirection.ltr,
+    final days = widget.days;
+    if (days.isEmpty) return const SizedBox.shrink();
+    final anyMissing = days.any((d) => d.missing);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(
+        height: 180,
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: LayoutBuilder(
+            builder: (_, c) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (d) => _tap(d.localPosition, c.maxWidth),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 550),
+                curve: Curves.easeOutCubic,
+                builder: (_, v, __) => CustomPaint(
+                  size: Size(c.maxWidth, c.maxHeight),
+                  painter: _StackPainter(days, widget.colors, _sel, v, _padL, _labelH),
+                ),
+              ),
             ),
           ),
         ),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final h = constraints.maxHeight;
-              final showLabels = widget.range == 7;
-              final maxBarH = showLabels ? math.max(10.0, h - 18) : math.max(10.0, h);
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  for (final e in widget.daily)
-                    Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          setState(() => _selectedDate = e.date);
-                        },
-                        child: Tooltip(
-                          message: e.missing
-                              ? '${_d(e.date)}: ${Tr.isAr ? 'مفيش بيانات' : 'No data'}'
-                              : '${_d(e.date)}: ${(e.wh / 1000).toStringAsFixed(2)} kWh${e.peakW > 0 ? " · ${e.peakW} W" : ""}',
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(horizontal: gap / 2),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                if (showLabels) ...[
-                                  Text(
-                                    e.missing ? '—' : (e.wh / 1000).toStringAsFixed(1),
-                                    style: mono(9, color: (e.date == selectedDay.date && widget.range != 7) ? C.accent : C.muted),
-                                    textDirection: TextDirection.ltr,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.clip,
-                                  ),
-                                  const SizedBox(height: 2),
-                                ],
-                                TweenAnimationBuilder<double>(
-                                  tween: Tween(begin: 0, end: e.missing ? 0.3 : (maxWh > 0 ? e.wh / maxWh : 0.0)),
-                                  duration: const Duration(milliseconds: 600),
-                                  curve: Curves.easeOutCubic,
-                                  builder: (_, v, __) {
-                                    final barH = math.max(4.0, v * maxBarH);
-                                    final isSelected = e.date == selectedDay.date;
-                                    final isLatest = e == widget.daily.last;
-                                    Color barColor;
-                                    if (widget.range == 7) {
-                                      barColor = isLatest ? C.chart : C.chart.withValues(alpha: 0.55);
-                                    } else {
-                                      barColor = isSelected ? C.chart : C.chart.withValues(alpha: 0.4);
-                                    }
-                                    // a day with no record keeps its slot as a faint outline (2.0.10)
-                                    return Container(
-                                      height: barH,
-                                      decoration: BoxDecoration(
-                                        color: e.missing ? Colors.transparent : barColor,
-                                        border: e.missing ? Border.all(color: C.muted.withValues(alpha: isSelected ? 0.8 : 0.45)) : null,
-                                        borderRadius: BorderRadius.circular(widget.daily.length > 40 ? 1 : 4),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            },
+      ),
+      const SizedBox(height: 10),
+      if (widget.labels.length > 1 || anyMissing)
+        Wrap(spacing: 12, runSpacing: 6, children: [
+          if (widget.labels.length > 1)
+            for (var i = 0; i < widget.labels.length; i++) _legend(widget.colors[i], widget.labels[i]),
+          if (anyMissing) _legend(null, Tr.isAr ? 'مفيش بيانات' : 'No data'),
+        ]),
+      const SizedBox(height: 10),
+      _tip(),
+    ]);
+  }
+
+  Widget _legend(Color? c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: c == null ? 14 : 9,
+          height: 9,
+          decoration: BoxDecoration(
+            color: c,
+            borderRadius: BorderRadius.circular(3),
+            border: c == null ? Border.all(color: C.muted.withValues(alpha: .6)) : null,
           ),
         ),
-        const SizedBox(height: 6),
-        Row(children: [
-          Text(_d(widget.daily.first.date), style: TextStyle(fontSize: 11, color: C.muted)),
-          const Spacer(),
-          Text(t('today'), style: TextStyle(fontSize: 11, color: C.muted)),
+        const SizedBox(width: 5),
+        Text(label, style: TextStyle(fontSize: 11.5, color: C.textSoft)),
+      ]);
+
+  Widget _tip() {
+    final box = BoxDecoration(color: C.surface2.withValues(alpha: .8), borderRadius: BorderRadius.circular(14));
+    final i = _sel;
+    if (i == null || i >= widget.days.length) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: box,
+        child: Text(Tr.isAr ? 'دوس على يوم تشوف استهلاكه وتكلفته.' : 'Tap a day to see its use and cost.', style: TextStyle(color: C.muted, fontSize: 12)),
+      );
+    }
+    final d = widget.days[i];
+    final egp = t('egp');
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: box,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
+          Text(_dayLabel(d.date), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          if (d.missing)
+            Text(Tr.isAr ? 'الـ Hub ماسجلش اليوم ده، ومش محسوب في المتوسط.' : 'The hub has no record for this day; it is left out of the average.',
+                style: TextStyle(color: C.muted, fontSize: 12))
+          else ...[
+            valUnit((d.wh / 1000).toStringAsFixed(2), 'kWh', size: 12.5, color: C.accent),
+            valUnit((d.wh / 1000 * widget.tariff).toStringAsFixed(2), egp, size: 12.5),
+            if (d.peakW > 0) valUnit('${d.peakW}', 'W ⚡', size: 12, color: C.textSoft, weight: FontWeight.w500),
+          ],
         ]),
+        if (!d.missing && d.parts.length > 1) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 14, runSpacing: 6, children: [
+            for (var k = 0; k < d.parts.length; k++)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: widget.colors[k], borderRadius: BorderRadius.circular(2))),
+                const SizedBox(width: 5),
+                Text('${widget.labels[k]} ', style: TextStyle(fontSize: 11.5, color: C.textSoft)),
+                valUnit((d.parts[k] / 1000 * widget.tariff).toStringAsFixed(2), egp, size: 11.5, color: C.text, weight: FontWeight.w500),
+              ]),
+          ]),
+        ],
       ]),
     );
   }
+}
 
-  String _d(int k) => '${k % 100}/${(k ~/ 100) % 100}';
+class _StackPainter extends CustomPainter {
+  final List<_StackDay> days;
+  final List<Color> colors;
+  final int? sel;
+  final double grow; // 0..1 entry animation
+  final double padL, labelH;
+  _StackPainter(this.days, this.colors, this.sel, this.grow, this.padL, this.labelH);
+
+  void _text(Canvas c, String s, Offset at, Color color, {double size = 9.5, TextAlign align = TextAlign.center, bool ar = false}) {
+    final tp = TextPainter(
+      text: TextSpan(text: s, style: ar ? TextStyle(color: color, fontSize: size) : mono(size, color: color)),
+      textDirection: ar ? TextDirection.rtl : TextDirection.ltr,
+    )..layout();
+    final dx = align == TextAlign.center ? at.dx - tp.width / 2 : (align == TextAlign.right ? at.dx - tp.width : at.dx);
+    tp.paint(c, Offset(dx, at.dy));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = days.length;
+    final h = size.height - labelH;
+    final ok = days.where((d) => !d.missing).toList();
+    final top = ok.isEmpty ? 1 : ok.map((d) => d.wh).reduce(math.max);
+    final max = math.max(1, top) * 1.12;
+    final avg = ok.isEmpty ? 0.0 : ok.fold<int>(0, (a, d) => a + d.wh) / ok.length;
+    double y(num v) => h - v / max * h;
+
+    // grid at half and full of the top value, labelled in kWh
+    final grid = Paint()
+      ..color = C.border
+      ..strokeWidth = 1;
+    for (final f in [.5, 1.0]) {
+      final v = top * f;
+      canvas.drawLine(Offset(padL, y(v)), Offset(size.width, y(v)), grid);
+      _text(canvas, (v / 1000).toStringAsFixed(v >= 10000 ? 1 : 2), Offset(0, y(v) - 6), C.faint, size: 9, align: TextAlign.left);
+    }
+
+    final bw = (size.width - padL) / n;
+    final gap = math.min(6.0, bw * .28);
+    final w = math.max(1.5, bw - gap);
+    final r = Radius.circular(math.min(4.0, w / 3));
+    final every = n <= 7 ? 1 : (n <= 14 ? 2 : (n <= 31 ? 5 : 15));
+    for (var i = 0; i < n; i++) {
+      final d = days[i];
+      final x = padL + i * bw + gap / 2;
+      final dim = sel != null && sel != i;
+      if (d.missing) {
+        final rect = RRect.fromRectAndCorners(Rect.fromLTWH(x, h * .45, w, h * .55), topLeft: r, topRight: r);
+        canvas.drawRRect(
+            rect,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1
+              ..color = C.muted.withValues(alpha: sel == i ? .9 : .45));
+      } else {
+        var acc = 0;
+        final last = d.parts.lastIndexWhere((p) => p > 0);
+        for (var k = 0; k < d.parts.length; k++) {
+          final v = d.parts[k];
+          if (v <= 0) continue;
+          final y1 = y((acc + v) * grow), y0 = y(acc * grow);
+          final gapPx = d.parts.length > 1 && k != last ? 1.0 : 0.0;
+          final rect = Rect.fromLTRB(x, y1, x + w, math.max(y1, y0 - gapPx));
+          canvas.drawRRect(
+            k == last ? RRect.fromRectAndCorners(rect, topLeft: r, topRight: r) : RRect.fromRectAndRadius(rect, const Radius.circular(1)),
+            Paint()..color = colors[k].withValues(alpha: dim ? .32 : .95),
+          );
+          acc += v;
+        }
+      }
+      if ((n - 1 - i) % every == 0) {
+        _text(canvas, '${d.date % 100}', Offset(x + w / 2, h + 5), sel == i ? C.text : C.muted);
+      }
+    }
+
+    // dashed average line with its value
+    if (avg > 0) {
+      final ay = y(avg * grow);
+      final dash = Paint()
+        ..color = C.warn
+        ..strokeWidth = 1.2;
+      for (var x = padL; x < size.width; x += 8) {
+        canvas.drawLine(Offset(x, ay), Offset(math.min(x + 4, size.width), ay), dash);
+      }
+      _text(canvas, '${Tr.isAr ? 'المتوسط' : 'avg'} ${(avg / 1000).toStringAsFixed(2)}', Offset(padL + 2, ay - 14), C.warn,
+          size: 9.5, align: TextAlign.left, ar: Tr.isAr);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StackPainter o) => o.days != days || o.sel != sel || o.grow != grow || o.colors != colors;
 }
