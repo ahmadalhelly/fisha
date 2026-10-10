@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -146,8 +147,25 @@ class BootScreen extends StatefulWidget {
   State<BootScreen> createState() => _BootScreenState();
 }
 
+// 2.0.11 splash «د»: the plug settles in (0.92 → 1 with a fade), a soft mint glow opens right behind it, the bolt
+// flickers once, then the name, the handle and a small dot that pulses twice. About 0.85 s; static when the system
+// asks for reduced motion.
 class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..forward();
+  static const _mint = Color(0xFF2EE6B0);
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    if (MediaQuery.of(context).disableAnimations) {
+      _c.value = 1;
+    } else {
+      _c.forward();
+    }
+  }
 
   @override
   void dispose() {
@@ -155,28 +173,115 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
+  /// 0 → 1 between [from] and [to] ms of the timeline, with the splash curve
+  double _seg(double ms, double from, double to, [Curve curve = const Cubic(.2, .8, .2, 1)]) =>
+      curve.transform(((ms - from) / (to - from)).clamp(0.0, 1.0));
+
   @override
   Widget build(BuildContext context) {
+    const logo = 120.0;
     return Scaffold(
       backgroundColor: const Color(0xFF070D19),
       body: Center(
         child: AnimatedBuilder(
           animation: _c,
-          builder: (_, child) {
-            final v = Curves.easeOutBack.transform(_c.value.clamp(0.0, 1.0));
-            return Opacity(opacity: _c.value, child: Transform.scale(scale: 0.7 + 0.3 * v, child: child));
+          builder: (_, __) {
+            final ms = _c.value * 1500;
+            final mark = _seg(ms, 0, 450);
+            final glow = _seg(ms, 150, 950, Curves.easeOut);
+            final f = ms >= 250 && ms <= 500 ? (ms - 250) / 250 : 0.0; // bolt flicker: up, dip, up, out
+            final bolt = f == 0 ? 0.0 : (f < .3 ? f / .3 : f < .45 ? .35 : f < .65 ? 1.0 : (1 - f) / .35);
+            final name = _seg(ms, 450, 750);
+            final handle = _seg(ms, 550, 850);
+            final p = ms < 850 ? 0.0 : ((ms - 850) / 300) % 1.0; // two pulses after the text is in
+            final pulse = ms < 850 || ms >= 1450 ? 0.0 : math.sin(p * math.pi);
+            return Column(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                width: logo * 2.2,
+                height: logo * 1.5,
+                child: Stack(alignment: Alignment.center, clipBehavior: Clip.none, children: [
+                  Opacity(
+                    opacity: glow * 0.9,
+                    child: Container(
+                      width: logo * 2.2,
+                      height: logo * 2.2,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(colors: [_mint.withValues(alpha: 0.22), _mint.withValues(alpha: 0.06), _mint.withValues(alpha: 0)], stops: const [0, .45, 1]),
+                      ),
+                    ),
+                  ),
+                  Opacity(
+                    opacity: mark,
+                    child: Transform.scale(
+                      scale: 0.92 + 0.08 * mark,
+                      child: SizedBox(
+                        width: logo,
+                        height: logo,
+                        child: Stack(children: [
+                          const BrandMark(size: logo),
+                          if (bolt > 0) Positioned.fill(child: CustomPaint(painter: _BoltPainter(bolt))),
+                        ]),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+              Opacity(
+                opacity: name,
+                child: Transform.translate(
+                  offset: Offset(0, 6 * (1 - name)),
+                  child: Text(t('app_name'), style: const TextStyle(color: _mint, fontSize: 30, fontWeight: FontWeight.w700)),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Opacity(
+                opacity: handle,
+                child: Row(mainAxisSize: MainAxisSize.min, textDirection: TextDirection.ltr, children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: _mint,
+                      shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: _mint.withValues(alpha: 0.6 * pulse), blurRadius: 4 + 6 * pulse, spreadRadius: 2 * pulse)],
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  const Text('@ahmadalhelly', textDirection: TextDirection.ltr, style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 13, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ]);
           },
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const BrandMark(size: 120),
-            const SizedBox(height: 8),
-            Text(t('app_name'), style: const TextStyle(color: Color(0xFF2EE6B0), fontSize: 30, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            const Text('@ahmadalhelly', textDirection: TextDirection.ltr, style: TextStyle(color: Color(0xFF9AA7B8), fontSize: 13, fontWeight: FontWeight.w600)),
-          ]),
         ),
       ),
     );
   }
+}
+
+/// Lights the bolt cut-out of the brand mark (same geometry as tool/brand.py, icon_fg.png at scale 0.95).
+class _BoltPainter extends CustomPainter {
+  final double v;
+  const _BoltPainter(this.v);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final k = size.width / 1024, sc = 0.95, cx = 512.0, y0 = 512 - 30 - 60 * sc;
+    Offset pt(double dx, double dy) => Offset((cx + dx * sc) * k, (y0 + dy * sc) * k);
+    final path = Path()
+      ..moveTo(pt(18, 38).dx, pt(18, 38).dy)
+      ..lineTo(pt(-52, 140).dx, pt(-52, 140).dy)
+      ..lineTo(pt(-6, 140).dx, pt(-6, 140).dy)
+      ..lineTo(pt(-24, 214).dx, pt(-24, 214).dy)
+      ..lineTo(pt(54, 104).dx, pt(54, 104).dy)
+      ..lineTo(pt(8, 104).dx, pt(8, 104).dy)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85 * v)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+    canvas.drawPath(path, Paint()..color = const Color(0xFFEFFFF9).withValues(alpha: v));
+  }
+
+  @override
+  bool shouldRepaint(_BoltPainter old) => old.v != v;
 }
 
 class Shell extends StatefulWidget {

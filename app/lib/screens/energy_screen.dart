@@ -31,8 +31,22 @@ class _DayStat {
   final int date; // yyyymmdd
   final int wh;
   final int peakW; // max peakW across strips (-1 if unknown)
-  const _DayStat({required this.date, required this.wh, required this.peakW});
+  final bool missing; // 2.0.10: a calendar day inside the history with no record (kept as an empty slot, not dropped)
+  const _DayStat({required this.date, required this.wh, required this.peakW, this.missing = false});
 }
+
+/// "12.3 W": number and unit always together, left-to-right, the unit a little smaller (2.0.10)
+Widget valUnit(String v, String unit, {double size = 13, Color? color, FontWeight weight = FontWeight.w600, Color? unitColor}) => Row(
+      mainAxisSize: MainAxisSize.min,
+      textDirection: TextDirection.ltr,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(v, style: mono(size, color: color ?? C.text, weight: weight)),
+        SizedBox(width: size * 0.28),
+        Text(unit, style: TextStyle(fontSize: size * 0.72, color: unitColor ?? C.muted, fontWeight: FontWeight.w500)),
+      ],
+    );
 
 class _StripUse {
   final String mac;
@@ -98,8 +112,25 @@ class _EnergyScreenState extends State<EnergyScreen> {
     _allDates = dates.toList()..sort((a, b) => b.compareTo(a));
   }
 
-  /// the dates of the selected period, newest first (same for every filter, so shares add up)
-  List<int> get _period => _allDates.take(_range).toList();
+  /// the calendar days of the selected period, newest first (same for every filter, so shares add up). 2.0.10: a day
+  /// with no record inside the history (e.g. one the hub could not save) stays in the list as a missing day.
+  List<int> get _period {
+    if (_allDates.isEmpty) return const [];
+    final oldest = _allDates.last;
+    var d = DateTime.now();
+    final newestKey = OutletHistory.dayKey(d);
+    if (_allDates.first > newestKey) d = DateTime(_allDates.first ~/ 10000, (_allDates.first ~/ 100) % 100, _allDates.first % 100);
+    final out = <int>[];
+    for (var i = 0; i < _range; i++) {
+      final k = OutletHistory.dayKey(d);
+      if (k < oldest) break;
+      out.add(k);
+      d = DateTime(d.year, d.month, d.day - 1);
+    }
+    return out;
+  }
+
+  bool _hasDay(int date) => _selMacs.any((m) => _whIdx[m]?.containsKey(date) ?? false);
 
   Iterable<String> get _selMacs => _mac == null ? _whIdx.keys : [if (_whIdx.containsKey(_mac)) _mac!];
 
@@ -156,7 +187,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
           if (p > 0 && p > peak) peak = p;
         }
       }
-      out.add(_DayStat(date: d, wh: wh, peakW: peak));
+      out.add(_DayStat(date: d, wh: wh, peakW: peak, missing: !_hasDay(d)));
     }
     return out;
   }
@@ -352,7 +383,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
           ]),
         ),
         const SizedBox(width: 10),
-        Text('$w W', textDirection: TextDirection.ltr, style: mono(big ? 22 : 16, color: C.accent)),
+        valUnit('$w', 'W', size: big ? 22 : 16, color: C.accent),
       ]);
 
   Widget _peakCard(List<_DayStat> daily, List<_StripUse> strips) {
@@ -418,63 +449,93 @@ class _EnergyScreenState extends State<EnergyScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         InkWell(
           onTap: _mac == null ? () => _pick(st.mac) : null,
-          child: Row(children: [
-            Expanded(child: Text(st.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
-            Text('${kwh.toStringAsFixed(2)} kWh', textDirection: TextDirection.ltr, style: mono(15, color: C.accent)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(child: Text(st.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700))),
+            valUnit(kwh.toStringAsFixed(2), 'kWh', size: 18, color: C.accent),
           ]),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 4),
         Row(children: [
-          Text('${(share * 100).toStringAsFixed(0)}% ${_tr('من الإجمالي', 'of total')}', style: TextStyle(color: C.muted, fontSize: 12)),
-          const Spacer(),
-          Text('${(kwh * s.tariff).toStringAsFixed(2)} ${t('egp')}', style: TextStyle(color: C.muted, fontSize: 12)),
+          Expanded(
+            child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, children: [
+              Text('${(share * 100).toStringAsFixed(0)}% ${_tr('من الإجمالي', 'of total')}', style: TextStyle(color: C.muted, fontSize: 12)),
+              if (st.peakW > 0) ...[
+                Text('·', style: TextStyle(color: C.muted, fontSize: 12)),
+                Text(_tr('أعلى حمل', 'Peak'), style: TextStyle(color: C.muted, fontSize: 12)),
+                valUnit('${st.peakW}', 'W', size: 12, color: C.textSoft, weight: FontWeight.w500),
+              ],
+            ]),
+          ),
+          valUnit((kwh * s.tariff).toStringAsFixed(2), t('egp'), size: 12, color: C.muted, weight: FontWeight.w500),
         ]),
-        if (st.peakW > 0) ...[
-          const SizedBox(height: 4),
-          Row(children: [
-            Text(_tr('أعلى استهلاك: ', 'Peak: '), style: TextStyle(color: C.muted, fontSize: 12)),
-            Text('${st.peakW} W', textDirection: TextDirection.ltr, style: mono(12, color: C.textSoft)),
-          ]),
-        ],
-        const SizedBox(height: 12),
-        for (final r in st.outlets) Padding(padding: const EdgeInsets.only(bottom: 10), child: _outletRow(r, stripWh)),
+        const SizedBox(height: 6),
+        for (final r in st.outlets) _outletRow(r, stripWh),
       ]),
     );
   }
 
+  // 2.0.10: name + kWh, bar, then three fixed cells (share · now · peak with its day and time on a second line)
   Widget _outletRow(_Row r, int total) {
     final share = total == 0 ? 0.0 : r.wh / total;
     final p = r.peak;
     final selected = _mac == r.mac && _outlet == r.n;
+    Widget cell(String label, Widget value, [Widget? sub]) => Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: TextStyle(color: C.muted, fontSize: 10.5)),
+            const SizedBox(height: 3),
+            value,
+            if (sub != null) ...[const SizedBox(height: 2), sub],
+          ]),
+        );
     return InkWell(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(10),
       onTap: () => _pick(r.mac, selected ? 0 : r.n),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Expanded(child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
-          Text('${(r.wh / 1000).toStringAsFixed(2)} kWh', textDirection: TextDirection.ltr, style: mono(12, color: C.textSoft)),
-        ]),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(value: share.clamp(0.0, 1.0), minHeight: 8, color: C.accent, backgroundColor: C.surface2),
-        ),
-        const SizedBox(height: 5),
-        Row(children: [
-          Text('${(share * 100).toStringAsFixed(0)}%', textDirection: TextDirection.ltr, style: mono(11, color: C.muted)),
-          const SizedBox(width: 8),
-          Text('${_tr('دلوقتي', 'Now')} ', style: TextStyle(color: C.muted, fontSize: 11)),
-          Text('${r.liveW.round()} W', textDirection: TextDirection.ltr, style: mono(11, color: r.liveW > 0 ? C.accent : C.muted)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: p != null && p.peakW > 0
-                ? Text('⚡ ${p.peakW} W${p.peakAt > 0 ? ' · ${_when(p.peakAt)}' : ''}',
-                    maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.end, style: TextStyle(color: C.textSoft, fontSize: 11))
-                : const SizedBox.shrink(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(border: Border(top: BorderSide(color: C.border.withValues(alpha: 0.6)))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Expanded(child: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
+            valUnit((r.wh / 1000).toStringAsFixed(2), 'kWh', size: 14),
+          ]),
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(value: share.clamp(0.0, 1.0), minHeight: 6, color: C.accent, backgroundColor: C.surface2),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(color: C.surface2.withValues(alpha: 0.7), borderRadius: BorderRadius.circular(12)),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              cell(_tr('النسبة', 'Share'), Text('${(share * 100).toStringAsFixed(0)}%', textDirection: TextDirection.ltr, style: mono(13, weight: FontWeight.w600))),
+              cell(_tr('دلوقتي', 'Now'), valUnit(_w(r.liveW), 'W', color: r.liveW > 0 ? C.accent : C.text)),
+              cell(
+                _tr('أعلى حمل', 'Peak'),
+                p != null && p.peakW > 0 ? valUnit('${p.peakW}', 'W') : Text('—', style: mono(13, color: C.muted)),
+                p != null && p.peakW > 0 && p.peakAt > 0 ? _whenText(p.peakAt) : null,
+              ),
+            ]),
           ),
         ]),
-      ]),
+      ),
     );
+  }
+
+  String _w(double w) => w > 0 && w < 10 ? w.toStringAsFixed(1) : w.round().toString();
+
+  /// "اليوم · 1:55 م" / "8/10 · 9:10 م" as one right-to-left line, digits kept left-to-right
+  Widget _whenText(int epochS) {
+    final d = DateTime.fromMillisecondsSinceEpoch(epochS * 1000);
+    return Text('${_shortDate(OutletHistory.dayKey(d))} · ${fmtTime12(d.hour, d.minute)}',
+        maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: C.muted, fontSize: 10.5));
+  }
+
+  /// today / yesterday / d/m (d/m/yyyy only for another year)
+  String _shortDate(int k) {
+    final f = _formatDate(k);
+    if (!f.contains('/')) return f;
+    return k ~/ 10000 == DateTime.now().year ? '${k % 100}/${(k ~/ 100) % 100}' : f;
   }
 
   Widget _dailyList(List<_DayStat> daily) {
@@ -487,47 +548,47 @@ class _EnergyScreenState extends State<EnergyScreen> {
     );
   }
 
+  // 2.0.10: date · bar · kWh on one line, peak and cost under it; a missing day keeps its row
   Widget _dailyRow(_DayStat d, int maxWh) {
     final kwh = d.wh / 1000;
-    final cost = kwh * s.tariff;
     final ratio = maxWh > 0 ? (d.wh / maxWh).clamp(0.0, 1.0) : 0.0;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 9),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: C.border.withValues(alpha: 0.5)))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Text(_formatDate(d.date), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-              const Spacer(),
-              Text('${kwh.toStringAsFixed(2)} kWh', textDirection: TextDirection.ltr, style: mono(13.5, color: C.accent, weight: FontWeight.w600)),
-              const SizedBox(width: 10),
-              Text('${cost.toStringAsFixed(2)} ${t('egp')}', style: TextStyle(fontSize: 12, color: C.muted)),
-            ],
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          SizedBox(
+            width: 72,
+            child: Text(_shortDate(d.date), style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5, color: d.missing ? C.muted : C.text)),
           ),
-          const SizedBox(height: 5),
-          Row(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: ratio,
-                    minHeight: 6,
-                    backgroundColor: C.surface2,
-                    color: C.accent,
-                  ),
-                ),
-              ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: d.missing
+                  ? Container(height: 6, color: C.surface2)
+                  : LinearProgressIndicator(value: ratio, minHeight: 6, backgroundColor: C.surface2, color: C.accent),
+            ),
+          ),
+          const SizedBox(width: 12),
+          d.missing
+              ? Text(_tr('مفيش بيانات', 'No data'), style: TextStyle(fontSize: 12, color: C.muted))
+              : valUnit(kwh.toStringAsFixed(2), 'kWh', size: 13.5, color: C.accent),
+        ]),
+        if (!d.missing) ...[
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsetsDirectional.only(start: 72),
+            child: Row(children: [
               if (d.peakW > 0) ...[
-                const SizedBox(width: 12),
-                Text('⚡ ${d.peakW} W', textDirection: TextDirection.ltr, style: mono(11, color: C.textSoft)),
+                Text('${_tr('أعلى حمل', 'Peak')} ', style: TextStyle(fontSize: 11, color: C.muted)),
+                valUnit('${d.peakW}', 'W', size: 11, color: C.textSoft, weight: FontWeight.w500),
               ],
-            ],
+              const Spacer(),
+              valUnit((kwh * s.tariff).toStringAsFixed(2), t('egp'), size: 11, color: C.muted, weight: FontWeight.w500),
+            ]),
           ),
         ],
-      ),
+      ]),
     );
   }
 
@@ -577,8 +638,10 @@ class _BarsState extends State<_Bars> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
             child: Text(
-              '${_d(selectedDay.date)} · ${(selectedDay.wh / 1000).toStringAsFixed(2)} kWh${selectedDay.peakW > 0 ? " · ⚡ ${selectedDay.peakW} W" : ""}',
-              style: mono(12, color: C.accent),
+              selectedDay.missing
+                  ? '${_d(selectedDay.date)} · ${Tr.isAr ? 'مفيش بيانات' : 'No data'}'
+                  : '${_d(selectedDay.date)} · ${(selectedDay.wh / 1000).toStringAsFixed(2)} kWh${selectedDay.peakW > 0 ? " · ⚡ ${selectedDay.peakW} W" : ""}',
+              style: mono(12, color: selectedDay.missing ? C.muted : C.accent),
               textDirection: TextDirection.ltr,
             ),
           ),
@@ -600,7 +663,9 @@ class _BarsState extends State<_Bars> {
                           setState(() => _selectedDate = e.date);
                         },
                         child: Tooltip(
-                          message: '${_d(e.date)}: ${(e.wh / 1000).toStringAsFixed(2)} kWh${e.peakW > 0 ? " · ${e.peakW} W" : ""}',
+                          message: e.missing
+                              ? '${_d(e.date)}: ${Tr.isAr ? 'مفيش بيانات' : 'No data'}'
+                              : '${_d(e.date)}: ${(e.wh / 1000).toStringAsFixed(2)} kWh${e.peakW > 0 ? " · ${e.peakW} W" : ""}',
                           child: Padding(
                             padding: EdgeInsets.symmetric(horizontal: gap / 2),
                             child: Column(
@@ -608,7 +673,7 @@ class _BarsState extends State<_Bars> {
                               children: [
                                 if (showLabels) ...[
                                   Text(
-                                    (e.wh / 1000).toStringAsFixed(1),
+                                    e.missing ? '—' : (e.wh / 1000).toStringAsFixed(1),
                                     style: mono(9, color: (e.date == selectedDay.date && widget.range != 7) ? C.accent : C.muted),
                                     textDirection: TextDirection.ltr,
                                     maxLines: 1,
@@ -617,7 +682,7 @@ class _BarsState extends State<_Bars> {
                                   const SizedBox(height: 2),
                                 ],
                                 TweenAnimationBuilder<double>(
-                                  tween: Tween(begin: 0, end: maxWh > 0 ? e.wh / maxWh : 0.0),
+                                  tween: Tween(begin: 0, end: e.missing ? 0.3 : (maxWh > 0 ? e.wh / maxWh : 0.0)),
                                   duration: const Duration(milliseconds: 600),
                                   curve: Curves.easeOutCubic,
                                   builder: (_, v, __) {
@@ -630,10 +695,12 @@ class _BarsState extends State<_Bars> {
                                     } else {
                                       barColor = isSelected ? C.chart : C.chart.withValues(alpha: 0.4);
                                     }
+                                    // a day with no record keeps its slot as a faint outline (2.0.10)
                                     return Container(
                                       height: barH,
                                       decoration: BoxDecoration(
-                                        color: barColor,
+                                        color: e.missing ? Colors.transparent : barColor,
+                                        border: e.missing ? Border.all(color: C.muted.withValues(alpha: isSelected ? 0.8 : 0.45)) : null,
                                         borderRadius: BorderRadius.circular(widget.daily.length > 40 ? 1 : 4),
                                       ),
                                     );

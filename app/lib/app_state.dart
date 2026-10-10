@@ -1431,6 +1431,9 @@ class AppState extends ChangeNotifier {
     return e.outlet == 0 ? mask & 0x10 != 0 : mask & (1 << (e.outlet - 1)) != 0;
   }
 
+  /// The hub's own events that have no switch in notification settings; they go to the system log only (2.0.11).
+  static bool isSystemEvent(String type) => type != 'test' && !notifyBitTypes.contains(type);
+
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
 
   /// The background notification service filters with the hub's state from the cloud; when that state is missing it
@@ -1891,8 +1894,11 @@ class AppState extends ChangeNotifier {
       if (!_eventKeys.add(e.key)) return;
       events.insert(0, e);
       if (events.length > 100) events.removeLast();
-      unread++;
-      lastAlert = e;
+      // only what shows under "My notifications" counts on the bell or pops up (2.0.11)
+      if (eventNotifies(e)) {
+        unread++;
+        lastAlert = e;
+      }
       notifyListeners();
     } catch (_) {}
   }
