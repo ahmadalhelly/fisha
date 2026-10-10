@@ -102,7 +102,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.4";
+const char* FW_VERSION = "2.15.5";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3018,11 +3018,11 @@ const esp_partition_t* stripFwPart() { return esp_ota_get_next_update_partition(
 
 void otaLog(const String& m) { Serial.println("[strip-ota] " + m); stripOtaLog += m + "\n"; }
 
-bool serveStripFw(uint32_t waitMs) {
+// srv must already be listening before "up:ota" goes out: the strip dials :80 about 0.1 s after ota_ok,
+// and a reset on that first SYN makes it give up (2.14.13-2.15.4 opened the port only afterwards).
+bool serveStripFw(WiFiServer& srv, uint32_t waitMs) {
   const esp_partition_t* part = stripFwPart();
-  if (!part || !stripFwSize) { otaLog("no firmware stored"); return false; }
-  WiFiServer srv(80);
-  srv.begin();
+  if (!part || !stripFwSize) { otaLog("no firmware stored"); srv.end(); return false; }
   bool sent = false;
   uint32_t t0 = millis();
   while (!sent && millis() - t0 < waitMs) {
@@ -3078,18 +3078,20 @@ bool setupOtaSession(String& r) {
   flushArp();
   String me = WiFi.localIP().toString();
   otaLog("joined, my ip " + me);
+  WiFiServer srv(80);
+  srv.begin();
   WiFiClient c;
   bool up = false;
   for (int k = 0; k < 6 && !up; k++) { up = c.connect(IPAddress(192, 168, 1, 1), 30300, 3000); if (!up) delay(1500); esp_task_wdt_reset(); }
-  if (!up) { r = "no answer on 30300"; otaLog(r); return false; }
+  if (!up) { r = "no answer on 30300"; otaLog(r); srv.end(); return false; }
   String reply, cmd = "up:ota:" + me;
   c.print(cmd + "\r\n");
   readSetupLine(c, reply, 12000);
   otaLog(">> " + cmd + "  << " + reply);
   delay(200);
   c.stop();
-  if (reply.indexOf("ota_ok") < 0) { r = "strip_said:" + reply; return false; }
-  if (!serveStripFw(90000)) { r = "not_fetched"; return false; }
+  if (reply.indexOf("ota_ok") < 0) { r = "strip_said:" + reply; srv.end(); return false; }
+  if (!serveStripFw(srv, 90000)) { r = "not_fetched"; return false; }
   otaLog("transfer done; the strip flashes and reboots by itself (keep it powered for 2 minutes)");
   delay(5000);
   return true;
