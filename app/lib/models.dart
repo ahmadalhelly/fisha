@@ -78,6 +78,7 @@ class Strip {
   final double? voltage;
   final int? rssi;
   final int? upS;
+  final String ip;
   final String label;
   final List<Outlet> outlets;
   final int notifyMask; // bit 0-3 outlets, bit 4 strip-level events
@@ -91,6 +92,7 @@ class Strip {
     required this.voltage,
     required this.rssi,
     this.upS,
+    this.ip = '',
     required this.outlets,
     this.label = '',
     this.notifyMask = 0x1F,
@@ -114,6 +116,7 @@ class Strip {
       voltage: (j['voltage'] as num?)?.toDouble(),
       rssi: (j['rssi'] as num?)?.toInt(),
       upS: (j['up_s'] as num?)?.toInt(),
+      ip: _s(j['ip']),
       label: _s(j['label']),
       outlets: outs,
       notifyMask: _i(j['notify'], 0x1F),
@@ -135,6 +138,7 @@ class Strip {
         voltage: voltage,
         rssi: rssi,
         upS: upS,
+        ip: ip,
         label: label ?? this.label,
         outlets: outlets ?? this.outlets,
         notifyMask: notifyMask,

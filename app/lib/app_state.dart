@@ -1458,7 +1458,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> setNotifyMask(Strip s, int mask) async {
     final before = _strips;
-    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, upS: x.upS, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
+    _strips = _strips.map((x) => x.mac == s.mac ? Strip(mac: x.mac, fw: x.fw, online: x.online, voltage: x.voltage, rssi: x.rssi, upS: x.upS, ip: x.ip, outlets: x.outlets, label: x.label, notifyMask: mask, hasSchedule: x.hasSchedule, hasRule: x.hasRule) : x).toList();
     _saveNotifyFilter();
     notifyListeners();
     final r = await api('notify', {'mac': s.mac, 'mask': mask});

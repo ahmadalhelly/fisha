@@ -129,6 +129,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _info(t('voltage'), s.voltage == null ? '—' : '${s.voltage!.toStringAsFixed(1)} V'),
                 _info(Tr.isAr ? 'التيار الكلي' : 'Total current', s.online && s.voltage != null && s.voltage! > 0 ? '${(s.livePower / s.voltage!).toStringAsFixed(2)} A' : '—'),
                 _info(t('rssi'), s.rssi == null ? '—' : '${s.rssi} dBm'),
+                _info('IP', s.ip.isEmpty ? '—' : s.ip),
                 if (state.showMac) _info('MAC', s.mac),
                 Divider(color: C.border, height: 24),
                 ListTile(
