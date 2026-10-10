@@ -1,5 +1,6 @@
 // These declarations must precede Arduino's auto-generated function prototypes.
 struct Strip;
+struct LinkDay;
 void linkDrop(const String& mac);
 void linkUp(const String& mac);
 struct Note;
