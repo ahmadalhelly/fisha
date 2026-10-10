@@ -234,6 +234,8 @@ Preferences cfg;
 bool webRoutesReady = false;
 bool stripListenerReady = false;
 bool wifiWasConnected = false;
+volatile uint8_t wifiLastReason = 0;    // v2.15.3: why the hub last lost the home Wi-Fi (ESP-IDF reason code)
+volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since boot (outside provisioning)
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
 
@@ -3096,8 +3098,6 @@ bool setupOtaSession(String& r) {
 void connectWiFi();
 volatile uint8_t provDiscReason = 0;   // last STA disconnect reason, for join_failed details
 volatile int provStaEvents = 0;        // STA connect/disconnect events seen during a provisioning join
-volatile uint8_t wifiLastReason = 0;    // v2.15.3: why the hub last lost the home Wi-Fi (ESP-IDF reason code)
-volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since boot (outside provisioning)
 
 void provFail(const String& msg) { provState = "error"; provMsg = msg; stateDirty = true; Serial.printf("[prov] error: %s\n", msg.c_str()); }
 
