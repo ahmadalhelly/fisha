@@ -8,6 +8,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'manual_screen.dart' show stripFwDisclaimer;
 
 /// Updates strip firmware through the hub (hub 2.15.8+): upload the .fwr once, pick strips (or all), and the hub
 /// updates them one at a time over their normal connection, checking each one's version when it comes back.
@@ -126,6 +127,8 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
           child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
             if (s.mode != ConnMode.local) ...[emptyCard(t('fw_local_only'), icon: Icons.wifi), const SizedBox(height: 14)],
             if (_loaded && _hub == null) ...[emptyCard(t('sfw_hub_old'), icon: Icons.info_outline), const SizedBox(height: 14)],
+            stripFwDisclaimer(),
+            const SizedBox(height: 14),
             section(t('sfw_file'), [
               Text(t('sfw_how'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
               Row(children: [

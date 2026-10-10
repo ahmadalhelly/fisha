@@ -14,6 +14,8 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
+        (Icons.help_outline, _tr('دليل الاستخدام', 'User guide'),
+            _tr('في الإعدادات ← مساعدة: كل ميزة وطريقة تشغيلها باختصار، مع بحث.', 'In Settings → Help: every feature and how to use it, briefly, with search.')),
         (Icons.swipe, _tr('سحب مفتاح الباور', 'Slide the master switch'),
             _tr('اضغط مطوّل على المفتاح الرئيسي واسحب يمين لتشغيل الكل أو شمال لإيقاف الكل، وارفع صباعك في النص تلغي.', 'Hold the master switch, slide right for all on or left for all off; lift in the middle to cancel.')),
         (Icons.wifi, _tr('كارت الشبكة والاتصال', 'Network & connection card'),

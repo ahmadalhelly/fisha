@@ -11,6 +11,7 @@ import 'backup_screen.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
+import 'manual_screen.dart';
 import 'users_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
@@ -155,6 +156,8 @@ class SettingsScreen extends StatelessWidget {
               ]),
               const SizedBox(height: 18),
               _group(_tr('مساعدة', 'Help'), [
+                _row(context, Icons.help_outline, C.accent, _tr('دليل الاستخدام', 'User guide'), _tr('كل ميزة وتشغيلها', 'Every feature, briefly'),
+                    () => _open(context, const ManualScreen())),
                 _row(context, Icons.menu_book_outlined, C.accent2, _tr('طريقة التوصيل', 'Setup guide'), _tr('من الأول للآخر', 'Start to finish'),
                     () => _open(context, const GuideScreen())),
                 _row(context, Icons.info_outline, C.accent, _tr('عن التطبيق', 'About'), appVersion, () => _open(context, AboutScreen(state: st)), last: true),

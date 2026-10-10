@@ -1742,12 +1742,12 @@ String autoJson(const Autom& r) {
 // Per strip and per day (7 days): seconds the hub was on Wi-Fi, seconds the strip was connected in that time, drops,
 // the longest drop, and the lowest/average RSSI. Drops while the hub itself is off Wi-Fi are not counted: that is the
 // hub's link, not the strip's. Kept in RAM and written to /links every 10 minutes.
-const uint8_t LINK_DAYS = 7, LINK_MAX = 8;
+const uint8_t LINK_NDAYS = 7, LINK_SLOTS = 8;
 struct LinkDay { int32_t day; uint32_t hubS, upS, longS; uint16_t drops, rN; int32_t rSum; int8_t minR; uint8_t pad[3]; };
-struct LinkLog { char mac[13]; uint8_t pad[3]; uint32_t lastDrop; LinkDay d[LINK_DAYS]; };
-struct LinkFile { uint32_t ver; uint32_t n; LinkLog l[LINK_MAX]; };
+struct LinkLog { char mac[13]; uint8_t pad[3]; uint32_t lastDrop; LinkDay d[LINK_NDAYS]; };
+struct LinkFile { uint32_t ver; uint32_t n; LinkLog l[LINK_SLOTS]; };
 LinkFile linkF;
-uint32_t linkDownAt[LINK_MAX];                     // epoch the strip dropped (RAM only, 0 = connected)
+uint32_t linkDownAt[LINK_SLOTS];                     // epoch the strip dropped (RAM only, 0 = connected)
 uint32_t linkTickAt = 0, linkSaveAt = 0;
 uint32_t linkHubBlipAt = 0;                        // the hub's own Wi-Fi last dropped (strips drop with it: not counted)
 bool linkDirty = false;
@@ -1756,12 +1756,12 @@ int linkIdx(const String& mac, bool create) {
   for (uint32_t i = 0; i < linkF.n; i++) if (mac.equalsIgnoreCase(linkF.l[i].mac)) return i;
   if (!create || mac.length() != 12) return -1;
   uint32_t i = linkF.n;
-  if (i >= LINK_MAX) {                             // full: reuse the entry seen least recently
+  if (i >= LINK_SLOTS) {                             // full: reuse the entry seen least recently
     i = 0;
     int32_t best = INT32_MAX;
-    for (uint32_t k = 0; k < LINK_MAX; k++) {
+    for (uint32_t k = 0; k < LINK_SLOTS; k++) {
       int32_t last = 0;
-      for (int d = 0; d < LINK_DAYS; d++) last = max(last, linkF.l[k].d[d].day);
+      for (int d = 0; d < LINK_NDAYS; d++) last = max(last, linkF.l[k].d[d].day);
       if (last < best) { best = last; i = k; }
     }
   } else linkF.n++;
@@ -1774,13 +1774,13 @@ int linkIdx(const String& mac, bool create) {
 LinkDay* linkToday(int i) {
   int32_t today = localDay();
   if (!today) return nullptr;
-  LinkDay& d = linkF.l[i].d[((today % LINK_DAYS) + LINK_DAYS) % LINK_DAYS];
+  LinkDay& d = linkF.l[i].d[((today % LINK_NDAYS) + LINK_NDAYS) % LINK_NDAYS];
   if (d.day != today) { memset(&d, 0, sizeof d); d.day = today; }
   return &d;
 }
 void linkLoad() {
   memset(&linkF, 0, sizeof linkF);
-  if (!fileLoad("/links", &linkF, sizeof linkF) || linkF.ver != 1 || linkF.n > LINK_MAX) { memset(&linkF, 0, sizeof linkF); }
+  if (!fileLoad("/links", &linkF, sizeof linkF) || linkF.ver != 1 || linkF.n > LINK_SLOTS) { memset(&linkF, 0, sizeof linkF); }
   linkF.ver = 1;
   memset(linkDownAt, 0, sizeof linkDownAt);
 }
@@ -1844,9 +1844,9 @@ String linkJson(const String& mac) {
   // newest first; "day" counts days since 1970-01-01 (hub local date)
   int32_t today = localDay();
   bool first = true;
-  for (int back = 0; back < LINK_DAYS && today; back++) {
+  for (int back = 0; back < LINK_NDAYS && today; back++) {
     int32_t want = today - back;
-    const LinkDay& d = L.d[((want % LINK_DAYS) + LINK_DAYS) % LINK_DAYS];
+    const LinkDay& d = L.d[((want % LINK_NDAYS) + LINK_NDAYS) % LINK_NDAYS];
     if (d.day != want) continue;
     if (!first) j += ",";
     first = false;
