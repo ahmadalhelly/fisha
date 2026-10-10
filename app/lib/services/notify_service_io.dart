@@ -242,12 +242,13 @@ class _NotifyHandler extends TaskHandler {
     final fTypes = (_filter?['types'] as num?)?.toInt();
     final types = cfg is Map && cfg['ntypes'] is num ? (cfg['ntypes'] as num).toInt() : (fTypes ?? 0xFFFFFFFF);
     final bit = _types.indexOf(type);
-    if (type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
+    final safety = const {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail'}.contains(type); // always shown (hub 2.15.9)
+    if (!safety && type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
     final strip = mac.isEmpty ? null : _strip(mac);
     final fMasks = _filter?['masks'];
     final savedMask = fMasks is Map ? (fMasks[mac] as num?)?.toInt() : null;
     final mask = strip != null ? (strip['notify'] as num?)?.toInt() ?? savedMask ?? 0x1F : savedMask;
-    if (mask != null && (outlet == 0 ? mask & 0x10 == 0 : mask & (1 << (outlet - 1)) == 0)) return;
+    if (!safety && mask != null && (outlet == 0 ? mask & 0x10 == 0 : mask & (1 << (outlet - 1)) == 0)) return;
     var stripName = '';
     if (strip != null) {
       final label = (strip['label'] ?? '').toString();
@@ -309,6 +310,11 @@ class _NotifyHandler extends TaskHandler {
         'online' => isAr ? 'المشترك رجع' : 'Back online',
         'offline' => isAr ? 'المشترك فصل' : 'Strip offline',
         'voltage' => isAr ? 'فولت غير طبيعي' : 'Unusual voltage',
+        'overvolt' => isAr ? 'فولت عالي: المشترك اتقفل' : 'High voltage: strip turned off',
+        'undervolt' => isAr ? 'فولت واطي: المشترك اتقفل' : 'Low voltage: strip turned off',
+        'overcurrent' => isAr ? 'تيار عالي: اتقفل' : 'Over current: turned off',
+        'overload' => isAr ? 'الحمل عدّى 3500 واط' : 'Load over 3500 W',
+        'trip_fail' => isAr ? 'أمر القفل ماتأكدش' : 'Safety cut not confirmed',
         'test' => 'Fisha ✓',
         _ => t('nt_$type'),
       };
@@ -326,7 +332,7 @@ class _NotifyHandler extends TaskHandler {
 
     _lastAlertAt = DateTime.now().millisecondsSinceEpoch;
     _saveStatus();
-    final urgent = type == 'temp' || type == 'load' || type == 'voltage' || type == 'offline';
+    final urgent = type == 'temp' || type == 'load' || type == 'voltage' || type == 'offline' || safety;
     _notes.show(
       id: _id++,
       title: title,

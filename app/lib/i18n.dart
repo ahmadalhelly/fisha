@@ -546,6 +546,8 @@ const Map<String, List<String>> _s = {
   'aprot_sub': ['لو سحب المشترك كله عدّى {x} أمبير لمدة 3 ثواني، بيقفل ما عدا المخارج المحمية.', 'If the whole strip draws over {x} A for 3 s, it turns off except protected outlets.'],
   'aprot_max': ['أقصى تيار', 'Max current'],
   'ev_overvolt': ['فولت عالي ({x}) — المشترك اتقفل', 'High voltage ({x}) — strip turned off'],
+  'ev_overload': ['الحمل عدّى 3500 واط ({x}) — اتقفلت المخارج الأكبر', 'Load over 3500 W ({x}) — biggest outlets turned off'],
+  'ev_trip_fail': ['أمر القفل للحماية ماتأكدش ({x}) — افحص المشترك', 'Safety cut not confirmed ({x}) — check the strip'],
   'ev_overcurrent': ['تيار عالي ({x}) — المشترك اتقفل', 'Over current ({x}) — strip turned off'],
   // welcome & account
   'wel_title': ['أهلاً بيك', 'Welcome'],

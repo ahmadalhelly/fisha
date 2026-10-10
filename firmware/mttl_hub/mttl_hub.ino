@@ -117,7 +117,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.8";
+const char* FW_VERSION = "2.15.9";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -146,6 +146,7 @@ MrY=
 
 const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
+const float STRIP_MAX_W = 3500;                   // v2.15.9 user rule: 3500 W per strip in total
 const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 10, MAX_EVENTS = 40, MAX_SSE = 4;
 const int      ELOG_DAYS = 90;
 
@@ -185,6 +186,8 @@ struct Strip {
   uint8_t ampX2[4] = {0, 0, 0, 0};               // v2.11 per-outlet current limit in 0.5 A steps (0 = none)
   uint32_t ocoSince[4] = {0, 0, 0, 0};           // per-outlet over-current timer
   uint8_t warnA = 0, warnT = 0;                  // near-limit warning already sent (bit per outlet): current · temperature
+  uint8_t tripMask = 0, tripTries[4] = {0, 0, 0, 0}; // v2.15.9 safety cuts still waiting for the strip to report "off"
+  uint32_t tripAt = 0, tripSeq = 0, olSince = 0; // last safety cut sent (time, infoSeq) · over 3500 W since
   bool dead = false;                             // a write could not go out: dropped on the next pump
   String txq;                                    // v2.15.2: bytes still waiting to go out to the strip (same bytes, same order)
   uint32_t txSince = 0;                          // when txq started waiting
@@ -569,8 +572,8 @@ void sseEvent(const String& data, const String& mac);
 String ntfyTopic;
 uint32_t notifyTypes = 0xFFFFFFFF;
 const char* EV_TYPES[] = {"temp", "load", "auto_off", "automation", "schedule", "missed", "timer", "cycle", "lock", "added", "test",
-                          "button", "remote", "online", "offline", "voltage", "overvolt", "overcurrent", "undervolt", "warn"};
-const int EV_COUNT = 20;
+                          "button", "remote", "online", "offline", "voltage", "overvolt", "overcurrent", "undervolt", "warn", "trip_fail", "overload"};
+const int EV_COUNT = 22;
 Note notes[6];
 uint8_t noteCount = 0;
 volatile bool tlsBusy = false;                    // the EMQX job holds the only spare TLS session
@@ -580,8 +583,11 @@ int typeBit(const String& t) { for (int i = 0; i < EV_COUNT; i++) if (t == EV_TY
 void queueNotify(const String& type, const String& mac, int outlet, const String& msg) {
   if (!ntfyTopic.length()) return;
   int bit = typeBit(type);
-  if (type != "test" && (bit < 0 || !(notifyTypes & (1UL << bit)))) return;
-  if (mac.length()) {
+  // v2.15.9: a safety cut always reaches the phone. These types have no switch in the app, and an old app could save
+  // notifyTypes without their bits, so they were never sent.
+  bool safety = type == "overvolt" || type == "undervolt" || type == "overcurrent" || type == "overload" || type == "trip_fail";
+  if (!safety && type != "test" && (bit < 0 || !(notifyTypes & (1UL << bit)))) return;
+  if (!safety && mac.length()) {
     int idx = stripFor(mac);
     if (idx >= 0) {
       uint8_t m = strips[idx].notifyMask;
@@ -606,7 +612,9 @@ String noteTitle(const Note& n) {
                 : n.type == "remote" ? "Switched from the app" : n.type == "online" ? "Strip back online" : n.type == "offline" ? "Strip offline"
                 : n.type == "voltage" ? "Unusual voltage" : n.type == "overvolt" ? "High voltage - strip turned off"
                 : n.type == "undervolt" ? "Low voltage - strip turned off" : n.type == "warn" ? "Close to the safety limit"
-                : n.type == "overcurrent" ? "Over current - turned off" : "Test notification";
+                : n.type == "overcurrent" ? "Over current - turned off" : n.type == "trip_fail" ? "Safety cut not confirmed - check the strip"
+                : n.type == "overload" ? "Over 3500 W - biggest loads turned off"
+                : "Test notification";
   return who.length() ? String(t) + " | " + who : String(t);
 }
 
@@ -658,7 +666,7 @@ void sendNotes() {
   strlcpy(m.topic, ntfyTopic.c_str(), sizeof m.topic);
   strlcpy(m.title, noteTitle(n).c_str(), sizeof m.title);
   strlcpy(m.body, n.msg.length() ? n.msg.c_str() : "Fisha Hub", sizeof m.body);
-  m.high = n.type == "temp" || n.type == "load" || n.type == "overvolt" || n.type == "undervolt" || n.type == "overcurrent" || n.type == "warn";
+  m.high = n.type == "temp" || n.type == "load" || n.type == "overvolt" || n.type == "undervolt" || n.type == "overcurrent" || n.type == "warn" || n.type == "trip_fail" || n.type == "overload";
   xQueueSend(noteQ, &m, 0);
 }
 
@@ -983,6 +991,7 @@ bool keepSkip(Strip& s, int ch, bool on, bool force) {
 
 void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (on) s.tripMask &= ~(1 << (ch - 1));      // switched back on on purpose: stop chasing the safety cut
     if (keepSkip(s, ch, on, force)) continue;
     noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
@@ -992,6 +1001,36 @@ void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
   stateDirty = true;
 }
 void sendOnOff(Strip& s, int outlet, bool on) { sendOnOffF(s, outlet, on, false); }
+
+// v2.15.9 safety cut: switch the outlet off and keep checking the strip's next reports. If it still says "on", send
+// the off again (up to 4 more times), then raise "trip_fail" so the user knows the cut did not take.
+void protectCut(Strip& s, int k) {
+  sendOnOffF(s, k + 1, false, true);
+  s.tripMask |= 1 << k;
+  s.tripTries[k] = 0;
+  s.tripAt = millis();
+  s.tripSeq = s.infoSeq;
+}
+void tripVerify(Strip& s) {
+  if (!s.tripMask) return;
+  uint32_t now = millis();
+  if (s.infoSeq == s.tripSeq || now - s.tripAt < 1500) return;   // wait for a report made after the last off
+  for (int k = 0; k < 4; k++) {
+    uint8_t bit = 1 << k;
+    if (!(s.tripMask & bit)) continue;
+    if (!s.o[k].on) { s.tripMask &= ~bit; continue; }             // confirmed off
+    if (s.tripTries[k] >= 4) {
+      s.tripMask &= ~bit;
+      addEvent("trip_fail", s.mac, k + 1, String((int)s.o[k].powerW) + " W");
+      continue;
+    }
+    s.tripTries[k]++;
+    Serial.printf("[trip] %s outlet %d still on, off again (%u)\n", s.mac.c_str(), k + 1, s.tripTries[k]);
+    sendOnOffF(s, k + 1, false, true);
+    s.tripAt = now;
+    s.tripSeq = s.infoSeq;
+  }
+}
 
 void pumpStrips();
 void pumpFor(uint32_t ms) { uint32_t t0 = millis(); while (millis() - t0 < ms) { pumpStrips(); delay(5); } }
@@ -1004,6 +1043,7 @@ bool waitForInfo(Strip& s, uint32_t seq, uint32_t ms) {
 // switch and wait for the strip to confirm (used by app commands)
 bool setOutlets(Strip& s, int outlet, bool on) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (on) s.tripMask &= ~(1 << (ch - 1));
     if (keepSkip(s, ch, on, false)) continue;
     noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
@@ -1061,7 +1101,7 @@ void voltCheck(Strip& s) {
     bool over = s.voltage > vMax;
     uint8_t cut = 0;
     for (int k = 0; k < 4; k++)                       // over-voltage cuts protected outlets too
-      if (s.o[k].on && (over || !(s.protMask & (1 << k)))) { sendOnOffF(s, k + 1, false, true); cut |= 1 << k; }
+      if (s.o[k].on && (over || !(s.protMask & (1 << k)))) { protectCut(s, k); cut |= 1 << k; }
     s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
     addEvent(over ? "overvolt" : "undervolt", s.mac, 0, String(s.voltage, 0) + " V");
     stateDirty = true;
@@ -1085,6 +1125,7 @@ void voltCheck(Strip& s) {
 void evalStrip(int i) {
   Strip& s = strips[i];
   uint32_t now = millis();
+  tripVerify(s);
   float total = 0;
   float volts = (!isnan(s.voltage) && s.voltage > 50) ? s.voltage : 220.0f;
   for (int k = 0; k < 4; k++) {
@@ -1093,10 +1134,11 @@ void evalStrip(int i) {
     float oAmps = o.on ? (o.powerW / volts) : 0;
 
     // over-temperature protection & near-limit warning (v2.11)
+    // v2.15.9: 10 °C past the limit cuts on the first reading instead of waiting 30 s
     if (tempProtect && o.on && o.tempC >= tempMax) {
       if (!s.hotSince[k]) s.hotSince[k] = now ? now : 1;
-      else if (now - s.hotSince[k] > 30000) {
-        sendOnOffF(s, k + 1, false, true);
+      if (o.tempC >= tempMax + 10 || now - s.hotSince[k] > 30000) {
+        protectCut(s, k);
         addEvent("temp", s.mac, k + 1, String(o.tempC) + "°C");
         s.hotSince[k] = 0;
       }
@@ -1113,8 +1155,8 @@ void evalStrip(int i) {
     if (oMaxA > 0 && o.on) {
       if (oAmps >= oMaxA) {
         if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
-        else if (now - s.ocoSince[k] > 3000) {
-          sendOnOffF(s, k + 1, false, true);
+        if (oAmps >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // v2.15.9: 25 % over cuts at once
+          protectCut(s, k);
           addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
           s.ocoSince[k] = 0;
         }
@@ -1139,12 +1181,34 @@ void evalStrip(int i) {
   float amps = total / volts;
   if (aProt && amps > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
-    else if (now - s.ocSince > 3000) {
-      for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // v2.15.9: 15 % over cuts at once
+      for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) protectCut(s, k);
       addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
       s.ocSince = 0;
     }
   } else s.ocSince = 0;
+
+  // v2.15.9 strip load limit: one strip never carries more than 3500 W (the stock firmware only warns at 3000 W and
+  // cuts at 16 A). After 3 s over (at once when 15 % over), the biggest unprotected loads go first until the rest
+  // fits; protected outlets are cut only if they alone keep the strip over the limit.
+  if (total > STRIP_MAX_W) {
+    if (!s.olSince) s.olSince = now ? now : 1;
+    if (total > STRIP_MAX_W * 1.15f || now - s.olSince > 3000) {
+      float left = 0;                              // what is still on now (the current cut above may have run)
+      for (int k = 0; k < 4; k++) left += s.o[k].on ? s.o[k].powerW : 0;
+      for (int pass = 0; pass < 2 && left > STRIP_MAX_W; pass++)
+        while (left > STRIP_MAX_W) {
+          int big = -1;
+          for (int k = 0; k < 4; k++)
+            if (s.o[k].on && s.o[k].powerW > 0 && (pass == 1 || !(s.protMask & (1 << k))) && (big < 0 || s.o[k].powerW > s.o[big].powerW)) big = k;
+          if (big < 0) break;
+          left -= s.o[big].powerW;
+          protectCut(s, big);
+        }
+      addEvent("overload", s.mac, 0, String((int)total) + " W");
+      s.olSince = 0;
+    }
+  } else s.olSince = 0;
   if (total > 3300 && now - s.loadEventAt > 300000) {
     s.loadEventAt = now;
     addEvent("load", s.mac, 0, String((int)total) + " W");

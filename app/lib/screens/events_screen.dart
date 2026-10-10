@@ -29,6 +29,8 @@ String eventText(AppState s, HubEvent e) {
     'voltage' => t('ev_voltage', {'x': m}),
     'overvolt' => t('ev_overvolt', {'x': m}),
     'overcurrent' => t('ev_overcurrent', {'x': m}),
+    'overload' => t('ev_overload', {'x': m}),
+    'trip_fail' => t('ev_trip_fail', {'x': m}),
     'test' => t('ev_test'),
     'stall' => t('ev_stall', {'x': m}),
     'save_fail' => t('ev_save_fail', {'x': m}),
@@ -55,7 +57,8 @@ IconData _icon(String type) => switch (type) {
       'offline' => Icons.wifi_off,
       'wifi' => Icons.router_outlined,
       'voltage' || 'overvolt' => Icons.electric_bolt,
-      'overcurrent' => Icons.electric_meter_outlined,
+      'overcurrent' || 'overload' => Icons.electric_meter_outlined,
+      'trip_fail' => Icons.gpp_maybe_outlined,
       'stall' => Icons.hourglass_empty,
       'save_fail' => Icons.sd_card_alert_outlined,
       'strip_fw' => Icons.system_update_alt,
@@ -67,7 +70,7 @@ String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
 /// One colour per kind of event, used for the icon chip.
 Color _tone(String type) => switch (type) {
-      'temp' || 'load' || 'overvolt' || 'undervolt' || 'overcurrent' || 'offline' || 'save_fail' || 'strip_fw_fail' || 'missed' => C.danger,
+      'temp' || 'load' || 'overvolt' || 'undervolt' || 'overcurrent' || 'overload' || 'trip_fail' || 'offline' || 'save_fail' || 'strip_fw_fail' || 'missed' => C.danger,
       'voltage' || 'warn' || 'stall' || 'wifi' || 'skipped' => C.warn,
       'schedule' || 'timer' || 'auto_off' || 'cycle' || 'strip_fw' => C.blue,
       _ => C.accent,

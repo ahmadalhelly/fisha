@@ -1421,7 +1421,7 @@ class AppState extends ChangeNotifier {
 
   /// Whether [e] is one the user gets as a phone notification (type switched on, and that strip/outlet not muted).
   bool eventNotifies(HubEvent e) {
-    if (e.type == 'test') return true;
+    if (e.type == 'test' || safetyTypes.contains(e.type)) return true;
     final bit = notifyBitTypes.indexOf(e.type);
     if (bit < 0 || notifyTypes & (1 << bit) == 0) return false;
     if (e.mac.isEmpty) return true;
@@ -1432,7 +1432,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// The hub's own events that have no switch in notification settings; they go to the system log only (2.0.11).
-  static bool isSystemEvent(String type) => type != 'test' && !notifyBitTypes.contains(type);
+  static bool isSystemEvent(String type) => type != 'test' && !notifyBitTypes.contains(type) && !safetyTypes.contains(type);
+
+  /// Safety cuts (hub 2.15.9+): always sent to the phone, whatever the switches or mutes, so they sit in "My notifications".
+  static const safetyTypes = {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail'};
 
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
 

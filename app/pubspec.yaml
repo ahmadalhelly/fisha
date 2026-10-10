@@ -1,7 +1,7 @@
 name: mttl_hub
 description: Fisha - control LG U+ MTTL-W01 smart power strips through an ESP32 hub (local + cloud). By ahmadalhelly.
 publish_to: 'none'
-version: 2.0.11+24
+version: 2.0.12+25
 
 environment:
   sdk: ^3.4.0
