@@ -6,6 +6,10 @@ class NotifyService {
 
   static Future<void> resume() async {}
 
+  static Future<Map<String, dynamic>?> status() async => null;
+
+  static bool isLive(Map<String, dynamic>? st) => false;
+
   static Future<bool> enable() async => false;
 
   static Future<void> disable() async {}

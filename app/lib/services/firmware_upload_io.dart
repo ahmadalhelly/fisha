@@ -2,14 +2,19 @@ import 'dart:convert';
 import 'dart:io';
 
 /// Uploads a firmware .bin to the hub's /update page at [uri]; [progress] gets 0..1. Returns null on success or an error text.
-Future<String?> uploadFirmwareBytes(Uri uri, List<int> bytes, String password, void Function(double) progress) async {
+Future<String?> uploadFirmwareBytes(Uri uri, List<int> bytes, String password, void Function(double) progress,
+    {Map<String, String>? headers, String fileName = 'firmware.bin'}) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
   try {
     final req = await client.postUrl(uri);
-    req.headers.set(HttpHeaders.authorizationHeader, 'Basic ${base64Encode(utf8.encode('admin:$password'))}');
+    if (headers != null) {
+      headers.forEach(req.headers.set);
+    } else {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Basic ${base64Encode(utf8.encode('admin:$password'))}');
+    }
     final boundary = '----fisha${DateTime.now().millisecondsSinceEpoch}';
     req.headers.contentType = ContentType('multipart', 'form-data', parameters: {'boundary': boundary});
-    final head = utf8.encode('--$boundary\r\nContent-Disposition: form-data; name="f"; filename="firmware.bin"\r\n'
+    final head = utf8.encode('--$boundary\r\nContent-Disposition: form-data; name="f"; filename="$fileName"\r\n'
         'Content-Type: application/octet-stream\r\n\r\n');
     final tail = utf8.encode('\r\n--$boundary--\r\n');
     req.contentLength = head.length + bytes.length + tail.length;

@@ -14,6 +14,7 @@ import 'guide_screen.dart';
 import 'users_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
+import 'strip_firmware_screen.dart';
 import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
@@ -118,6 +119,8 @@ class SettingsScreen extends StatelessWidget {
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
                 if (!kIsWeb)
                   _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
+                if (!kIsWeb && !st.isShared)
+                  _row(context, Icons.electrical_services, C.accent2, t('sfw_title'), '', () => _open(context, StripFirmwareScreen(state: st))),
                 if (!st.isShared)
                   _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
                       () => _reboot(context, st)),

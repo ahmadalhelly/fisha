@@ -365,7 +365,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text('·', style: TextStyle(fontSize: 11, color: C.faint)),
                         const SizedBox(width: 6),
                         Text(
-                          '${(s.totalPower / v).toStringAsFixed(1)}A',
+                          '${(s.totalPower / v).toStringAsFixed(2)}A',
                           textDirection: TextDirection.ltr,
                           style: mono(11.5, color: C.textSoft, weight: FontWeight.w600),
                         ),

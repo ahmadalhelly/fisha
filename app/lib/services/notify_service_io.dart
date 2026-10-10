@@ -39,12 +39,39 @@ class NotifyService {
 
   static Future<bool> isEnabled() async => (await SharedPreferences.getInstance()).getBool(_prefKey) ?? false;
 
-  /// Starts the service if the user turned native notifications on.
+  /// Starts the service if the user turned native notifications on. 2.0.10: also restarts a running service that
+  /// has heard nothing from the hub for 3 minutes (it lost the server and did not get it back by itself).
   static Future<void> resume() async {
     if (!await isEnabled()) return;
     _init();
-    if (!await FlutterForegroundTask.isRunningService) await _start();
+    if (!await FlutterForegroundTask.isRunningService) {
+      await _start();
+      return;
+    }
+    final st = await status();
+    final last = (st?['msg'] as num?)?.toInt() ?? 0;
+    final started = (st?['start'] as num?)?.toInt() ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - last > _staleMs && now - started > _staleMs) await FlutterForegroundTask.restartService();
   }
+
+  static const _staleMs = 180000; // the hub publishes its state at least every 30 s
+
+  /// What the background service last wrote (prefs 'notifyStatus'): {start, msg, alert, conn} in ms since epoch.
+  static Future<Map<String, dynamic>?> status() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final raw = prefs.getString('notifyStatus');
+      return raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// True while the service hears from the hub (a state or event in the last 3 minutes).
+  static bool isLive(Map<String, dynamic>? st) =>
+      st != null && DateTime.now().millisecondsSinceEpoch - ((st['msg'] as num?)?.toInt() ?? 0) < _staleMs;
 
   static Future<bool> enable() async {
     if (await FlutterForegroundTask.checkNotificationPermission() != NotificationPermission.granted) {
@@ -95,6 +122,7 @@ class _NotifyHandler extends TaskHandler {
   final _seen = <String>[]; // recent events, so one held back by the hub and sent on reconnect never shows twice
   DateTime _startedAt = DateTime.now();
   bool _connecting = false;
+  int _lastMsgAt = 0, _lastAlertAt = 0, _connAt = 0, _statusAt = 0; // ms since epoch, for the self-check and the status line
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -105,6 +133,21 @@ class _NotifyHandler extends TaskHandler {
     await _notes.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
     await _loadFilter();
     await _connect();
+    await _saveStatus();
+  }
+
+  /// Written for the app (Notifications screen, and resume() on app open).
+  Future<void> _saveStatus() async {
+    _statusAt = DateTime.now().millisecondsSinceEpoch;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('notifyStatus', jsonEncode({
+        'start': _startedAt.millisecondsSinceEpoch,
+        'msg': _lastMsgAt,
+        'alert': _lastAlertAt,
+        'conn': _client?.connectionStatus?.state == MqttConnectionState.connected,
+      }));
+    } catch (_) {}
   }
 
   Future<void> _loadFilter() async {
@@ -116,8 +159,8 @@ class _NotifyHandler extends TaskHandler {
     } catch (_) {}
   }
 
-  Future<void> _connect() async {
-    if (_connecting || (_client?.connectionStatus?.state == MqttConnectionState.connected)) return;
+  Future<void> _connect({bool force = false}) async {
+    if (_connecting || (!force && _client?.connectionStatus?.state == MqttConnectionState.connected)) return;
     _connecting = true;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -137,9 +180,12 @@ class _NotifyHandler extends TaskHandler {
       c.logging(on: false);
       c.setProtocolV311();
       c.connectionMessage = MqttConnectMessage().withClientIdentifier(id).startClean();
-      _client?.disconnect();
+      final old = _client;
+      old?.autoReconnect = false;
+      old?.disconnect();
       _client = c;
       await c.connect(user, pass);
+      _connAt = DateTime.now().millisecondsSinceEpoch;
       c.updates?.listen((msgs) {
         for (final m in msgs) {
           final p = m.payload;
@@ -157,6 +203,8 @@ class _NotifyHandler extends TaskHandler {
   }
 
   void _onMessage(String topic, String text) {
+    _lastMsgAt = DateTime.now().millisecondsSinceEpoch;
+    if (_lastMsgAt - _statusAt > 30000) _saveStatus();
     try {
       final j = jsonDecode(text) as Map<String, dynamic>;
       if (topic == '$_base/state') {
@@ -276,6 +324,8 @@ class _NotifyHandler extends TaskHandler {
       }
     }
 
+    _lastAlertAt = DateTime.now().millisecondsSinceEpoch;
+    _saveStatus();
     final urgent = type == 'temp' || type == 'load' || type == 'voltage' || type == 'offline';
     _notes.show(
       id: _id++,
@@ -295,7 +345,14 @@ class _NotifyHandler extends TaskHandler {
   @override
   void onRepeatEvent(DateTime timestamp) {
     _loadFilter();
-    _connect();
+    // 2.0.10: "connected" is not enough: after a network change the client could sit there hearing nothing
+    // (notifications came back only when the user switched them off and on). The hub publishes its state at least
+    // every 30 s, so 3 minutes of silence means a dead link: start a fresh connection.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final heard = _lastMsgAt > _connAt ? _lastMsgAt : _connAt;
+    final stale = _connAt > 0 && now - heard > 180000;
+    _connect(force: stale);
+    _saveStatus();
   }
 
   @override

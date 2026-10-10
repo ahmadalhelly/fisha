@@ -47,6 +47,14 @@ struct ApiRes;
            notifications are no longer lost on a Wi-Fi blip or an MQTT reconnect.
   v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
            seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
+  v2.15.8: strips can be updated over their normal hub connection (stock 1.0.66 accepts up:ota there): pick strips
+           (or all) on /stripfw or POST /api/stripfw/start; the hub serves the stored .fwr on :80, one strip at a
+           time, waits for it to come back and checks the version in bootinfo, and stops at the first failure.
+           An uploaded .fwr is checked (16-byte header, load address 0x10006000, length, checksum) and refused if bad.
+           The watchdog is armed at the very start of boot (a hang while booting needed the reset button).
+           A loop step that blocks 5 s or more is logged as a "stall" event (step name + seconds); /api/health adds
+           stall_max_ms / stall_where. Every home Wi-Fi drop is logged even when the hub reconnects between two loop
+           passes (counted from the Wi-Fi driver, not from the loop). A failed NVS save is logged ("save_fail").
   v2.15.7: energy and peak history moved from NVS to files (LittleFS on the unused SPIFFS partition); old data is
            moved over on first boot and its NVS entries freed. NVS was 500/630 full and saves had started to fail.
   v2.15.6: Wi-Fi settings are kept in RAM, not NVS (with NVS full the strip join failed: ESP_ERR_NVS_NOT_ENOUGH_SPACE);
@@ -109,7 +117,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.7";
+const char* FW_VERSION = "2.15.8";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -243,6 +251,9 @@ bool stripListenerReady = false;
 bool wifiWasConnected = false;
 volatile uint8_t wifiLastReason = 0;    // v2.15.3: why the hub last lost the home Wi-Fi (ESP-IDF reason code)
 volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since boot (outside provisioning)
+volatile uint32_t wifiDiscAt = 0;       // v2.15.8: millis() of the last of those disconnects
+uint32_t stallMaxMs = 0;                // v2.15.8: longest single loop step since boot, and which one
+const char* stallWhere = "";
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
 
@@ -273,6 +284,21 @@ bool provOta = false;                  // this provisioning run flashes the stri
 uint32_t stripFwSize = 0;              // bytes of the stored .fwr (0 = none), also in NVS "stripfw"/"size"
 const uint32_t STRIP_FW_MAX = 0x60000; // 384 KB; stock .fwr files are ~320 KB
 String stripOtaLog = "";               // last flash run, shown on /stripfw
+bool stripFwOk = false;                // v2.15.8: the stored file passed stripFwCheck
+String stripFwWhy = "";
+struct SuItem { String mac, from, to, state, msg; };   // state: queued, sending, transfer, rebooting, ok, failed, skipped
+SuItem suList[MAX_STRIPS];
+uint8_t suN = 0, suCur = 0;
+enum SuPhase : uint8_t { SU_IDLE, SU_SEND, SU_GET, SU_XFER, SU_BACK, SU_GAP };
+SuPhase suPhase = SU_IDLE;
+uint32_t suT0 = 0, suOff = 0, suDoneAt = 0, suReqAt = 0;
+WiFiServer suSrv(80);
+WiFiClient suCli;
+String suReq;
+bool suCancel = false;
+uint8_t suBuf[1460];
+uint16_t suBufLen = 0, suBufPos = 0;
+bool suRunning();
 const esp_partition_t* stripFwPart();
 
 // ---------- helpers ----------
@@ -767,7 +793,20 @@ void peakUpdate(int i, float watts) {
   }
 }
 
-void saveScheds() { cfg.putUChar("schN", schedCount); cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED); stateDirty = true; }   // v2.15.2: badges follow at once
+// v2.15.8: a save that NVS refused (full) shows up in the event log instead of vanishing (once a minute per item)
+void saveFailed(const char* what) {
+  static uint32_t lastAt = 0;
+  static String lastWhat;
+  Serial.printf("[nvs] save FAILED: %s\n", what);
+  if (lastWhat == what && millis() - lastAt < 60000) return;
+  lastWhat = what; lastAt = millis();
+  addEvent("save_fail", "", 0, what);
+}
+void saveScheds() {
+  cfg.putUChar("schN", schedCount);
+  if (!cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED)) saveFailed("schedules");
+  stateDirty = true;   // v2.15.2: badges follow at once
+}   // v2.15.2: badges follow at once
 void saveSkips() { cfg.putBytes("schsk", schedSkip, sizeof(schedSkip)); }
 bool schedSkipped(uint32_t id) { for (int i = 0; i < MAX_SCHED; i++) if (id && schedSkip[i] == id) return true; return false; }
 void setSchedSkip(uint32_t id, bool on) {
@@ -776,7 +815,11 @@ void setSchedSkip(uint32_t id, bool on) {
   if (on) for (int i = 0; i < MAX_SCHED; i++) if (!schedSkip[i]) { schedSkip[i] = id; changed = true; break; }
   if (changed) saveSkips();
 }
-void saveAutos() { cfg.putUChar("autN", autoCount); cfg.putBytes("aut", autos, sizeof(Autom) * MAX_AUTO); stateDirty = true; }
+void saveAutos() {
+  cfg.putUChar("autN", autoCount);
+  if (!cfg.putBytes("aut", autos, sizeof(Autom) * MAX_AUTO)) saveFailed("automations");
+  stateDirty = true;
+}
 
 void loadGlobals() {
   tempMax = cfg.getUChar("tmax", 70);
@@ -1686,7 +1729,10 @@ void saveUsers() {
   memset(&nv, 0, sizeof nv);
   nv.magic = USERS_MAGIC; nv.count = userCount;
   for (int i = 0; i < userCount; i++) nv.u[i] = users[i];
-  Preferences up; up.begin("users", false); up.putBytes("list", &nv, sizeof nv); up.end();
+  Preferences up;
+  bool ok = up.begin("users", false) && up.putBytes("list", &nv, sizeof nv) == sizeof nv;
+  up.end();
+  if (!ok) saveFailed("family accounts");
 }
 void loadEmqx() {
   Preferences sp; sp.begin("sec", true);
@@ -2458,7 +2504,8 @@ void handleHealth() {
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
-           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
+           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
+           ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -2566,32 +2613,99 @@ void handleStripFwPage() {
   String h = "<meta name=viewport content='width=device-width,initial-scale=1'><meta charset=utf-8>"
              "<body style='font-family:sans-serif;background:#0d1117;color:#e8edf3;padding:20px'>"
              "<h3>Fisha Hub v" + String(FW_VERSION) + " &mdash; strip firmware</h3>"
-             "<p>Stored .fwr: <b>" + (stripFwSize ? String(stripFwSize) + " bytes" : String("none")) + "</b></p>"
+             "<p>Stored .fwr: <b>" + (stripFwSize ? String(stripFwSize) + " bytes" : String("none")) + "</b>" +
+             (stripFwWhy.length() ? " &mdash; refused: " + stripFwWhy : String("")) + "</p>"
              "<form method=POST action=/stripfw enctype=multipart/form-data><input type=file name=f accept=.fwr,.bin> "
              "<button style='padding:10px 16px'>1) Upload .fwr</button></form><hr>"
              "<form method=POST action=/stripfw/flash>Strip in setup mode (Wi-Fi name): "
              "<input name=ssid placeholder=TONLY_TAP_91778E8 style='padding:8px'> "
              "<button style='padding:10px 16px'>2) Flash</button></form>"
              "<p>State: <b>" + provState + "</b> " + provMsg + "</p><pre style='white-space:pre-wrap'>" + stripOtaLog + "</pre>"
-             + String((provState == "running" || provState == "queued") ? "<script>setTimeout(()=>location.reload(),5000)</script>" : "") +
-             "</body>";
+             + String((provState == "running" || provState == "queued" || suRunning()) ? "<script>setTimeout(()=>location.reload(),5000)</script>" : "");
+  // v2.15.8: connected strips, updated over their normal connection (no button press)
+  h += "<hr><h4>Update connected strips</h4><form method=POST action=/stripfw/live>"
+       "<label><input type=checkbox onclick=\"for(const c of document.querySelectorAll('.sm'))c.checked=this.checked\"> <b>Select all</b></label><br>";
+  for (int i = 0; i < MAX_STRIPS; i++) {
+    const Strip& st = strips[i];
+    if (!st.used || !st.identified) continue;
+    h += "<label><input type=checkbox class=sm name=mac value=" + st.mac + "> " + (st.label.length() ? st.label : String("Strip")) + " &middot; " + st.mac +
+         " &middot; fw " + st.fw + "</label><br>";
+  }
+  h += "<button style='padding:10px 16px;margin-top:8px'" + String(stripFwOk && !suRunning() ? "" : " disabled") + ">Update selected</button></form><pre>";
+  for (uint8_t k = 0; k < suN; k++)
+    h += suList[k].mac + "  " + suList[k].state + (suList[k].from.length() ? "  " + suList[k].from : String("")) +
+         (suList[k].to.length() ? " -> " + suList[k].to : String("")) + (suList[k].msg.length() ? "  " + suList[k].msg : String("")) + "\n";
+  h += "</pre></body>";
   web.send(200, "text/html; charset=utf-8", h);
 }
-void handleStripFwDone() {
-  if (!otaAuth()) return web.requestAuthentication();
-  if (stripFwErr || !stripFwWritten) { stripFwSize = 0; web.send(500, "text/plain", "FAILED (file empty or larger than 384 KB)\n"); return; }
-  stripFwSize = stripFwWritten;
+// v2.15.8: an MTTL-W01 .fwr is a 16-byte plain header (body length, load address 0x10006000) and a body XOR'd
+// with a 16-byte key (the padding rows give it away); the last 4 decoded bytes are the sum of everything before.
+bool stripFwCheck(uint32_t size, String& why) {
+  const esp_partition_t* part = stripFwPart();
+  uint32_t h[4];
+  if (!part || size < 64 * 1024 || esp_partition_read(part, 0, h, 16) != ESP_OK) { why = "file too small"; return false; }
+  if (h[1] != 0x10006000 || h[0] + 20 != size) { why = "not an MTTL-W01 firmware (header)"; return false; }
+  // most common 16-byte row = the XOR key (Misra-Gries, 8 slots)
+  static uint8_t cand[8][16];
+  uint16_t cnt[8] = {0};
+  static uint8_t buf[1024];
+  uint32_t end = size - 4;
+  for (uint32_t off = 16; off + 16 <= end; off += sizeof buf) {
+    uint32_t n = min((uint32_t)sizeof buf, (end - off) & ~15u);
+    if (!n || esp_partition_read(part, off, buf, n) != ESP_OK) break;
+    for (uint32_t r = 0; r < n; r += 16) {
+      int hit = -1, empty = -1;
+      for (int k = 0; k < 8; k++) {
+        if (cnt[k] && !memcmp(cand[k], buf + r, 16)) { hit = k; break; }
+        if (!cnt[k] && empty < 0) empty = k;
+      }
+      if (hit >= 0) cnt[hit]++;
+      else if (empty >= 0) { memcpy(cand[empty], buf + r, 16); cnt[empty] = 1; }
+      else for (int k = 0; k < 8; k++) cnt[k]--;
+    }
+    esp_task_wdt_reset();
+  }
+  int best = 0;
+  for (int k = 1; k < 8; k++) if (cnt[k] > cnt[best]) best = k;
+  const uint8_t* key = cand[best];
+  uint32_t sum = 0;
+  const uint8_t* hb = (const uint8_t*)h;
+  for (int i = 0; i < 16; i++) sum += hb[i];
+  for (uint32_t off = 16; off < end; off += sizeof buf) {
+    uint32_t n = min((uint32_t)sizeof buf, end - off);
+    if (esp_partition_read(part, off, buf, n) != ESP_OK) { why = "flash read failed"; return false; }
+    for (uint32_t i = 0; i < n; i++) sum += buf[i] ^ key[(off + i) & 15];
+    esp_task_wdt_reset();
+  }
+  uint8_t t[4];
+  if (esp_partition_read(part, end, t, 4) != ESP_OK) { why = "flash read failed"; return false; }
+  uint32_t stored = 0;
+  for (int i = 0; i < 4; i++) stored |= (uint32_t)(t[i] ^ key[(end + i) & 15]) << (8 * i);
+  if (stored != sum) { why = "checksum does not match (damaged file)"; return false; }
+  return true;
+}
+// keeps the upload (already written to the spare slot) only if it is a valid strip firmware
+bool stripFwStore(String& why) {
+  if (stripFwErr || !stripFwWritten) { why = "upload failed (file empty or larger than 384 KB)"; stripFwSize = 0; }
+  else if (!stripFwCheck(stripFwWritten, why)) stripFwSize = 0;
+  else stripFwSize = stripFwWritten;
+  stripFwOk = stripFwSize > 0;
+  stripFwWhy = stripFwOk ? "" : why;
   Preferences p;
   p.begin("stripfw", false);
   p.putUInt("size", stripFwSize);
   p.end();
-  Serial.printf("[strip-ota] stored %u bytes\n", stripFwSize);
+  Serial.printf("[strip-ota] stored %u bytes%s\n", stripFwSize, stripFwOk ? "" : (" (refused: " + why + ")").c_str());
+  return stripFwOk;
+}
+void handleStripFwDone() {
+  if (!otaAuth()) return web.requestAuthentication();
+  String why;
+  if (!stripFwStore(why)) { web.send(400, "text/plain", "REFUSED: " + why + "\n"); return; }
   web.sendHeader("Location", "/stripfw");
   web.send(303, "text/plain", "OK " + String(stripFwSize) + " bytes\n");
 }
-void handleStripFwUpload() {
-  if (!otaAuth()) return;
-  HTTPUpload& u = web.upload();
+void stripFwChunk(HTTPUpload& u) {
   const esp_partition_t* part = stripFwPart();
   if (u.status == UPLOAD_FILE_START) {
     stripFwWritten = 0;
@@ -2606,19 +2720,249 @@ void handleStripFwUpload() {
     stripFwErr = true;
   }
 }
+void handleStripFwUpload() {
+  if (!otaAuth()) return;
+  stripFwChunk(web.upload());
+}
 void handleStripFwFlash() {
   if (!otaAuth()) return web.requestAuthentication();
   String ssid = web.arg("ssid");
   ssid.trim();
   if (!stripFwSize) { web.send(400, "text/plain", "upload the .fwr first\n"); return; }
   if (!ssid.startsWith("TONLY_TAP_") && !ssid.startsWith("ONLY_TAP_")) { web.send(400, "text/plain", "ssid must be TONLY_TAP_...\n"); return; }
-  if (provState == "running" || provState == "waiting" || provRequested) { web.send(409, "text/plain", "busy\n"); return; }
+  if (provState == "running" || provState == "waiting" || provRequested || suRunning()) { web.send(409, "text/plain", "busy\n"); return; }
   stripOtaLog = "";
   provOta = true;
   provSsid = ssid;
   requestProvision();
   web.sendHeader("Location", "/stripfw");
   web.send(303, "text/plain", "started: the hub leaves the home Wi-Fi for up to 2 minutes\n");
+}
+
+// ---------- v2.15.8: update strips over their normal hub connection ----------
+// Stock 1.0.66 takes "up:ota:<host>" on the hub connection too (verified 2026-10-10): it answers ota_ok, fetches
+// http://<host>/ota.bin on port 80, flashes and reboots. Same command as the setup-mode flasher, no protocol change.
+// One strip at a time: wait for its GET, stream the stored .fwr without blocking the loop, wait for it to dial
+// back in and compare the fw in its bootinfo. The first failure stops the run.
+bool suRunning() { return suPhase != SU_IDLE; }
+
+void suStop(bool failed, const String& msg) {
+  SuItem& it = suList[suCur];
+  if (failed) {
+    it.state = "failed"; it.msg = msg;
+    addEvent("strip_fw_fail", it.mac, 0, msg);
+    for (uint8_t k = suCur + 1; k < suN; k++) if (suList[k].state == "queued") suList[k].state = "skipped";
+  }
+  if (suCli) suCli.stop();
+  suSrv.end();
+  suPhase = SU_IDLE;
+  stateDirty = true;
+  Serial.printf("[strip-upd] stopped%s %s\n", failed ? " (failed)" : "", msg.c_str());
+}
+
+void suNext() {
+  while (suCur < suN && suList[suCur].state != "queued") suCur++;
+  if (suCur >= suN || suCancel) {
+    for (uint8_t k = 0; k < suN; k++) if (suList[k].state == "queued") suList[k].state = "skipped";
+    suSrv.end();
+    suPhase = SU_IDLE;
+    stateDirty = true;
+    return;
+  }
+  suPhase = SU_SEND;
+}
+
+void suTick() {
+  if (suPhase == SU_IDLE) return;
+  SuItem& it = suList[suCur];
+  int i = findStrip(it.mac);
+  switch (suPhase) {
+    case SU_SEND: {
+      if (i < 0) { suStop(true, "strip offline"); return; }
+      it.from = strips[i].fw;
+      it.state = "sending";
+      suSrv.begin();                   // listening before the command: the strip dials :80 right after ota_ok
+      suSrv.setNoDelay(true);
+      String cmd = "up:ota:" + WiFi.localIP().toString();
+      sendLine(strips[i], cmd);
+      Serial.printf("[strip-upd] %s (fw %s) << %s\n", it.mac.c_str(), it.from.c_str(), cmd.c_str());
+      suT0 = millis();
+      suPhase = SU_GET;
+      stateDirty = true;
+      return;
+    }
+    case SU_GET: {
+      if (!suCli) {
+        suCli = suSrv.accept();
+        if (suCli) { suReq = ""; suReqAt = millis(); }
+      }
+      if (suCli) {
+        while (suCli.available() && suReq.length() < 512) suReq += (char)suCli.read();
+        if (suReq.indexOf("\r\n\r\n") >= 0) {
+          String first = suReq.substring(0, suReq.indexOf('\r'));
+          Serial.printf("[strip-upd] request from %s: %s\n", suCli.remoteIP().toString().c_str(), first.c_str());
+          if (first.startsWith("GET ") && first.indexOf("/ota.bin") > 0) {
+            suCli.setNoDelay(true);
+            suCli.print("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + String(stripFwSize) +
+                        "\r\nConnection: close\r\n\r\n");
+            suOff = 0; suBufLen = suBufPos = 0; suT0 = millis();
+            it.state = "transfer";
+            suPhase = SU_XFER;
+            stateDirty = true;
+            return;
+          }
+          suCli.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+          suCli.stop();
+        } else if (millis() - suReqAt > 5000 || !suCli.connected()) {
+          suCli.stop();
+        }
+      }
+      if (millis() - suT0 > 60000) {
+        String last = i >= 0 ? strips[i].lastLine : String("");
+        suStop(true, "the strip did not ask for the file" + (last.length() ? " (last: " + last + ")" : String("")));
+      }
+      return;
+    }
+    case SU_XFER: {
+      const esp_partition_t* part = stripFwPart();
+      uint32_t t = millis();
+      while (millis() - t < 30) {
+        if (suBufPos >= suBufLen) {
+          if (suOff >= stripFwSize) break;
+          uint32_t n = min((uint32_t)sizeof suBuf, stripFwSize - suOff);
+          if (!part || esp_partition_read(part, suOff, suBuf, n) != ESP_OK) { suStop(true, "flash read failed"); return; }
+          suBufLen = n; suBufPos = 0; suOff += n;
+        }
+        int w = sendSome(suCli, (const char*)suBuf + suBufPos, suBufLen - suBufPos, 0);
+        if (w < 0) { suStop(true, "connection lost at " + String((suOff - suBufLen + suBufPos) * 100 / stripFwSize) + "%"); return; }
+        if (w == 0) break;             // socket full; next loop pass
+        suBufPos += w;
+      }
+      if (suOff >= stripFwSize && suBufPos >= suBufLen) {
+        suDoneAt = millis();
+        it.state = "rebooting";
+        suPhase = SU_BACK;
+        stateDirty = true;
+        Serial.printf("[strip-upd] %s: sent %u bytes in %u s\n", it.mac.c_str(), stripFwSize, (suDoneAt - suT0) / 1000);
+      } else if (millis() - suT0 > 150000) {
+        suStop(true, "transfer too slow");
+      }
+      return;
+    }
+    case SU_BACK: {
+      if (suCli && millis() - suDoneAt > 1500) { suCli.stop(); suSrv.end(); }
+      if (i >= 0 && (int32_t)(strips[i].connectedAt - suDoneAt) > 0 && strips[i].fw.length()) {
+        it.to = strips[i].fw;
+        if (it.to == it.from) { suStop(true, "came back on the same version " + it.from); return; }
+        it.state = "ok";
+        addEvent("strip_fw", it.mac, 0, it.from + " → " + it.to);
+        suT0 = millis();
+        suPhase = SU_GAP;
+        stateDirty = true;
+      } else if (millis() - suDoneAt > 240000) {
+        suStop(true, "the strip did not come back within 4 minutes");
+      }
+      return;
+    }
+    case SU_GAP:
+      if (millis() - suT0 > 3000) { suCur++; suNext(); }
+      return;
+    default:
+      return;
+  }
+}
+
+// starts a run; macs = the strips to update in order. Returns "" or an error.
+String suStart(const String* macs, int n) {
+  if (!stripFwSize || !stripFwOk) return "no valid strip firmware stored";
+  if (suRunning() || provRequested || provState == "running" || provState == "waiting") return "busy";
+  if (n <= 0) return "no strip selected";
+  suN = 0;
+  for (int k = 0; k < n && suN < MAX_STRIPS; k++) {
+    String m = macs[k]; m.trim(); m.toUpperCase();
+    if (findStrip(m) < 0) return "strip " + m + " is offline";
+    bool dup = false;
+    for (uint8_t j = 0; j < suN; j++) dup |= suList[j].mac == m;
+    if (dup) continue;
+    suList[suN] = SuItem();
+    suList[suN].mac = m; suList[suN].state = "queued";
+    suN++;
+  }
+  suCur = 0; suCancel = false;
+  suNext();
+  return "";
+}
+
+String suJson() {
+  String j = "{\"size\":" + String(stripFwSize) + ",\"valid\":" + (stripFwOk ? "true" : "false") + ",\"why\":\"" + jsonEsc(stripFwWhy) +
+             "\",\"running\":" + (suRunning() ? "true" : "false") + ",\"items\":[";
+  for (uint8_t k = 0; k < suN; k++) {
+    const SuItem& it = suList[k];
+    int pct = it.state == "transfer" && stripFwSize ? (int)((uint64_t)suOff * 100 / stripFwSize) : (it.state == "ok" || it.state == "rebooting" ? 100 : 0);
+    if (k) j += ",";
+    j += "{\"mac\":\"" + it.mac + "\",\"from\":\"" + jsonEsc(it.from) + "\",\"to\":\"" + jsonEsc(it.to) + "\",\"state\":\"" + it.state +
+         "\",\"msg\":\"" + jsonEsc(it.msg) + "\",\"pct\":" + String(pct) + "}";
+  }
+  return j + "]}";
+}
+
+bool ownerOnly() {
+  if (!guard()) return false;
+  if (apiSrc == 2) { web.send(403, "application/json", "{\"ok\":false,\"error\":\"forbidden\"}"); return false; }
+  return true;
+}
+void handleSuState() {
+  if (!ownerOnly()) return;
+  web.send(200, "application/json", suJson());
+}
+// body {"macs":["88D039...", ...]}
+void handleSuStart() {
+  if (!ownerOnly()) return;
+  String b = web.arg("plain");
+  String macs[MAX_STRIPS];
+  int n = 0, at = b.indexOf("\"macs\"");
+  int lb = at >= 0 ? b.indexOf('[', at) : -1, rb = lb >= 0 ? b.indexOf(']', lb) : -1;
+  for (int q = lb; q >= 0 && q < rb && n < MAX_STRIPS;) {
+    int a = b.indexOf('"', q + 1);
+    if (a < 0 || a > rb) break;
+    int e = b.indexOf('"', a + 1);
+    if (e < 0 || e > rb) break;
+    macs[n++] = b.substring(a + 1, e);
+    q = e;
+  }
+  String err = suStart(macs, n);
+  if (err.length()) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(err) + "\"}"); return; }
+  web.send(200, "application/json", suJson());
+}
+void handleSuCancel() {
+  if (!ownerOnly()) return;
+  suCancel = true;                     // the strip in progress finishes; the rest are skipped
+  web.send(200, "application/json", suJson());
+}
+bool suUploadAuth = false;
+void handleSuUpload() {
+  HTTPUpload& u = web.upload();
+  if (u.status == UPLOAD_FILE_START) suUploadAuth = authorized() && apiSrc != 2;
+  if (!suUploadAuth || suRunning()) { stripFwErr = true; return; }
+  stripFwChunk(u);
+}
+void handleSuUploadDone() {
+  if (!ownerOnly()) return;
+  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
+  String why;
+  if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  web.send(200, "application/json", suJson());
+}
+// form on /stripfw: mac=...&mac=... (checkboxes)
+void handleSuForm() {
+  if (!otaAuth()) return web.requestAuthentication();
+  String macs[MAX_STRIPS];
+  int n = 0;
+  for (int k = 0; k < web.args() && n < MAX_STRIPS; k++) if (web.argName(k) == "mac") macs[n++] = web.arg(k);
+  String err = suStart(macs, n);
+  if (err.length()) { web.send(400, "text/plain", err + "\n"); return; }
+  web.sendHeader("Location", "/stripfw");
+  web.send(303, "text/plain", "started\n");
 }
 
 // ---------- live push: Server-Sent Events on :8081 ----------
@@ -3303,7 +3647,7 @@ bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
   WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.printf("Connecting to %s", ssid.c_str());
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < ms) { delay(500); Serial.print("."); }
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < ms) { delay(500); Serial.print("."); esp_task_wdt_reset(); }
   Serial.println();
   return WiFi.status() == WL_CONNECTED;
 }
@@ -3459,6 +3803,14 @@ void loadSecrets() {
 
 void setup() {
   Serial.begin(115200);
+  // v2.15.8: armed first thing (it used to be armed only at the end of setup, so a hang while booting
+  // needed the reset button); 90 s covers a first-boot LittleFS format and the Wi-Fi join
+  esp_task_wdt_config_t wc = {};
+  wc.timeout_ms = 90000;
+  wc.idle_core_mask = 0;
+  wc.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&wc) != ESP_OK) esp_task_wdt_init(&wc);
+  esp_task_wdt_add(nullptr);
   delay(300);
   Serial.println("\n=== Fisha Hub v" + String(FW_VERSION) + " — @ahmadalhelly ===");
   loadSecrets();
@@ -3466,6 +3818,7 @@ void setup() {
   loadUsers();
   cfg.begin("mttl", false);
   fsOk = LittleFS.begin(true);                   // v2.15.7: formats the unused SPIFFS partition on first boot
+  esp_task_wdt_reset();
   Serial.printf("[fs] %s\n", fsOk ? "LittleFS ok" : "LittleFS FAILED, history stays in NVS");
   loadGlobals();
   loadKnown();
@@ -3481,11 +3834,12 @@ void setup() {
   for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
                  provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++;
-                 if (!provRequested && provState != "running") { wifiLastReason = info.wifi_sta_disconnected.reason; wifiDiscCount++; }
+                 if (!provRequested && provState != "running") { wifiLastReason = info.wifi_sta_disconnected.reason; wifiDiscCount++; wifiDiscAt = millis(); }
                },
                ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   { Preferences p; p.begin("stripfw", true); stripFwSize = p.getUInt("size", 0); p.end(); }
+  if (stripFwSize) { stripFwOk = stripFwCheck(stripFwSize, stripFwWhy); if (!stripFwOk) Serial.printf("[strip-ota] stored file refused: %s\n", stripFwWhy.c_str()); }
   connectWiFi();
   configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 
@@ -3501,6 +3855,11 @@ void setup() {
   web.on("/stripfw", HTTP_GET, handleStripFwPage);
   web.on("/stripfw", HTTP_POST, handleStripFwDone, handleStripFwUpload);
   web.on("/stripfw/flash", HTTP_POST, handleStripFwFlash);
+  web.on("/stripfw/live", HTTP_POST, handleSuForm);
+  web.on("/api/stripfw", HTTP_GET, handleSuState);
+  web.on("/api/stripfw/start", HTTP_POST, handleSuStart);
+  web.on("/api/stripfw/cancel", HTTP_POST, handleSuCancel);
+  web.on("/api/stripfw/upload", HTTP_POST, handleSuUploadDone, handleSuUpload);
   web.onNotFound(handleOther);
   web.begin();
   webRoutesReady = true;
@@ -3513,20 +3872,28 @@ void setup() {
   Serial.printf("Web UI  : http://%s:%u  · live: http://%s:%u/events\n", WiFi.localIP().toString().c_str(), WEB_PORT,
                 WiFi.localIP().toString().c_str(), SSE_PORT);
   mqttStart();
-  // v2.10: a frozen loop reboots the hub after 90 s instead of hanging forever
-  esp_task_wdt_config_t wc = {};
-  wc.timeout_ms = 90000;
-  wc.idle_core_mask = 0;
-  wc.trigger_panic = true;
-  if (esp_task_wdt_reconfigure(&wc) != ESP_OK) esp_task_wdt_init(&wc);
-  esp_task_wdt_add(nullptr);
+  // v2.10: a frozen loop reboots the hub after 90 s instead of hanging forever (armed at the top of setup since 2.15.8)
+  esp_task_wdt_reset();
   Serial.printf("[hub] last reset: %s\n", resetText().c_str());
 }
 
 uint32_t wifiLostAt = 0;
 
+// v2.15.8: times each loop step; one that blocks 5 s or more is logged as a "stall" event once it returns
+const char* stgName = "boot";
+uint32_t stgAt = 0;
+void stg(const char* next) {
+  uint32_t now = millis(), d = now - stgAt;
+  const char* was = stgName;
+  stgName = next; stgAt = now;
+  if (d > stallMaxMs) { stallMaxMs = d; stallWhere = was; }
+  if (d >= 5000 && strcmp(was, "boot") && strcmp(was, "wifi_down") && strcmp(was, "provision"))
+    addEvent("stall", "", 0, String(was) + " · " + String(d / 1000) + " s");
+}
+
 void loop() {
   esp_task_wdt_reset();
+  stg("loop");
   if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) { Serial.println("[hub] reboot requested"); delay(200); ESP.restart(); }
   if (WiFi.status() != WL_CONNECTED) {
     wifiWasConnected = false;
@@ -3537,37 +3904,59 @@ void loop() {
       WiFi.reconnect();
     }
     if (millis() - wifiLostAt > 600000) ESP.restart();
+    stg("wifi_down");
     delay(100);
     return;
   }
   if (!wifiWasConnected) {
     wifiWasConnected = true;
-    // v2.15.3: every home Wi-Fi loss goes to the event log with its reason code and how long it lasted
-    if (wifiLostAt && !provRequested && provState != "running")
-      addEvent("wifi", "", 0, "reason " + String(wifiLastReason) + " · " + String((millis() - wifiLostAt) / 1000) + " s");
     Serial.println("[wifi] link restored; restarting listeners");
     startStripListener();
   }
   wifiLostAt = 0;
+  // v2.15.3/2.15.8: every home Wi-Fi loss goes to the event log with its reason code and how long it lasted,
+  // counted from the driver so a drop that heals between two loop passes (a stalled loop) is not missed
+  static uint32_t wifiDiscSeen = 0;
+  if (wifiDiscCount != wifiDiscSeen) {
+    uint32_t n = wifiDiscCount - wifiDiscSeen;
+    wifiDiscSeen = wifiDiscCount;
+    if (!provRequested && provState != "running")
+      addEvent("wifi", "", 0, "reason " + String(wifiLastReason) + " · " + String((millis() - wifiDiscAt) / 1000) + " s" +
+                              (n > 1 ? " · x" + String(n) : String("")));
+  }
+  stg("ota");
   ArduinoOTA.handle();
+  stg("web");
   web.handleClient();
+  stg("strips_rx");
   pumpStrips();
+  stg("strips_poll");
   pollStrips();
+  stg("timers");
   tickTimers();
+  stg("schedules");
   tickSchedules();
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified && strips[i].gotInfo) {
     // auto-off timers must fire even between polls
     for (int k = 0; k < 4; k++) if (strips[i].autoOffAt[k] && (int32_t)(millis() - strips[i].autoOffAt[k]) >= 0) { evalStrip(i); break; }
   }
+  stg("sse");
   ssePump();
   serialRaw();
+  stg("energy");
   exCollect();
+  stg("mqtt");
   mqttHealth();
   mqttProcess();
+  stg("notify");
   sendNotes();
+  stg("strip_update");
+  suTick();
+  stg("provision");
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();
   static uint32_t wifiReqAt = 0;
   if (wifiTestReq) { if (!wifiReqAt) wifiReqAt = millis(); else if (millis() - wifiReqAt > 1500) { wifiReqAt = 0; runWifiTest(); } }
+  stg("loop_end");
   if (provState == "waiting" && millis() - provAt > 120000) {
     Serial.printf("[prov] no strip TCP connection accepted on port %u/%u within 120s\n", STRIP_PORT, STRIP_PORT_ALT);
     provFail(stripListenerReady ? "hub_tcp_no_client" : "hub_listener_unavailable");

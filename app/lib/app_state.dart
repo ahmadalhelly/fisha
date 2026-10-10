@@ -1165,7 +1165,10 @@ class AppState extends ChangeNotifier {
   Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id}).then(_mirrorAfter);
 
   CmdResult _mirrorAfter(CmdResult r) {
-    if (r.ok) _mirrorSoon();
+    if (r.ok) {
+      _usersEditedHere = true;   // the hub's list is what the owner wants now, even if it is empty
+      _mirrorSoon();
+    }
     return r;
   }
 
@@ -1412,6 +1415,22 @@ class AppState extends ChangeNotifier {
   }
 
   // ---------- notifications (hub pushes them through ntfy) ----------
+  /// Event type per bit of [notifyTypes], same order as the hub and the background service.
+  static const notifyBitTypes = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added', 'test',
+      'button', 'remote', 'online', 'offline', 'voltage'];
+
+  /// Whether [e] is one the user gets as a phone notification (type switched on, and that strip/outlet not muted).
+  bool eventNotifies(HubEvent e) {
+    if (e.type == 'test') return true;
+    final bit = notifyBitTypes.indexOf(e.type);
+    if (bit < 0 || notifyTypes & (1 << bit) == 0) return false;
+    if (e.mac.isEmpty) return true;
+    final st = _strips.where((x) => x.mac.toUpperCase() == e.mac);
+    if (st.isEmpty) return true;
+    final mask = st.first.notifyMask;
+    return e.outlet == 0 ? mask & 0x10 != 0 : mask & (1 << (e.outlet - 1)) != 0;
+  }
+
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
 
   /// The background notification service filters with the hub's state from the cloud; when that state is missing it
@@ -1475,6 +1494,65 @@ class AppState extends ChangeNotifier {
   Future<String?> uploadFirmware(List<int> bytes, String password, void Function(double) progress) async {
     if (bytes.length < 100000 || bytes.first != 0xE9) return 'bad_file';
     return uploadFirmwareBytes(_localUri('/update'), bytes, password, progress);
+  }
+
+  // ---------- strip firmware (hub 2.15.8+): the hub stores the .fwr and updates the chosen strips one by one ----------
+  /// Quick check of an MTTL-W01 .fwr before sending it: 16-byte header with the body length and load address 0x10006000.
+  /// The hub checks the checksum too.
+  static bool looksLikeStripFw(List<int> b) {
+    if (b.length < 65536) return false;
+    int u32(int o) => b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24;
+    return u32(4) == 0x10006000 && u32(0) + 20 == b.length;
+  }
+
+  Map<String, dynamic>? _hubJson(String body) {
+    try {
+      final j = jsonDecode(body);
+      return j is Map<String, dynamic> ? j : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// {size, valid, why, running, items:[{mac, from, to, state, msg, pct}]}, or null when the hub can't be reached
+  /// (or is older than 2.15.8).
+  Future<Map<String, dynamic>?> stripFwState() async {
+    try {
+      final r = await http.get(_localUri('/api/stripfw'), headers: _localHeaders).timeout(const Duration(seconds: 6));
+      if (r.statusCode != 200) return null;
+      return _hubJson(utf8.decode(r.bodyBytes));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns null on success, else the hub's error text.
+  Future<String?> stripFwStart(List<String> macs) async {
+    try {
+      final r = await http
+          .post(_localUri('/api/stripfw/start'),
+              headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders}, body: jsonEncode({'macs': macs}))
+          .timeout(const Duration(seconds: 9));
+      if (r.statusCode == 200) return null;
+      return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+    } catch (_) {
+      return 'net';
+    }
+  }
+
+  Future<void> stripFwCancel() async {
+    try {
+      await http.post(_localUri('/api/stripfw/cancel'), headers: _localHeaders).timeout(const Duration(seconds: 6));
+    } catch (_) {}
+  }
+
+  /// Uploads a strip .fwr to the hub (kept there until replaced). Returns null on success or an error text.
+  Future<String?> uploadStripFw(List<int> bytes, void Function(double) progress) async {
+    if (!looksLikeStripFw(bytes)) return 'bad_file';
+    final err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
+        headers: _localHeaders, fileName: 'strip.fwr');
+    if (err == null || err == 'net' || err == 'auth') return err;
+    return _hubJson(err)?['error']?.toString() ?? err;
   }
 
   // ---------- schedules / automations ----------
@@ -1700,6 +1778,7 @@ class AppState extends ChangeNotifier {
   // flash). Then the family members, schedules, rules and names come back from this copy by themselves.
   String _hubNvs = '';
   bool _mirrorBusy = false;
+  bool _usersEditedHere = false;
   DateTime? _mirrorAt;
   Timer? _mirrorDebounce;
 
@@ -1729,7 +1808,33 @@ class AppState extends ChangeNotifier {
     _mirrorBusy = true;
     try {
       final nvs = _hubNvs;
-      final users = await _exportUsers();
+      var users = await _exportUsers();
+      // 2.0.10: the family list can vanish from a hub whose storage was not erased (a save refused by a full NVS),
+      // so the storage id stays the same and the copy below used to be overwritten with the empty list. Now an
+      // empty list that this phone did not empty brings the saved members back.
+      final old = _mirror;
+      final oldUsers = old != null && (old['hub_id'] ?? '').toString() == settings.hubId.toUpperCase() && old['users'] is List
+          ? (old['users'] as List).whereType<Map<String, dynamic>>().where((u) => (u['pw'] ?? '').toString().isNotEmpty).toList()
+          : const <Map<String, dynamic>>[];
+      if (users != null && users.isEmpty && oldUsers.isNotEmpty && !_usersEditedHere) {
+        for (final u in oldUsers) {
+          final st = u['strips'];
+          await api('user_restore', {
+            'id': u['id'],
+            'name': u['name'],
+            'role': u['role'],
+            'all': u['all'] == true,
+            'strips': st is List ? st.join(',') : (st ?? '').toString(),
+            'pw': u['pw'],
+          });
+        }
+        users = await _exportUsers();
+        if (users != null && users.isNotEmpty) {
+          lastError = t('users_restored', {'n': users.length});
+          notifyListeners();
+        }
+      }
+      _usersEditedHere = false;
       final b = await exportBackup(parts: {'hub'});
       final hub = b['hub'];
       if (users == null || hub is! Map<String, dynamic> || nvs != _hubNvs) return;

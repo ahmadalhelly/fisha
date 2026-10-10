@@ -68,6 +68,12 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
   @override
   void didChangePlatformBrightness() => setState(() {});
 
+  // 2.0.10: coming back to the app also checks that the notification service is running and hearing the hub
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState st) {
+    if (st == AppLifecycleState.resumed && _booted) NotifyService.resume().catchError((_) {});
+  }
+
   @override
   void didChangeLocales(List<Locale>? locales) => setState(() {});
 

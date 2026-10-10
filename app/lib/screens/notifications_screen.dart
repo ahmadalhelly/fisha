@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -29,11 +30,47 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   AppState get s => widget.state;
   bool _busy = false;
   bool _native = false;
+  Map<String, dynamic>? _svc; // 2.0.10: what the background service last reported
+  Timer? _svcTimer;
 
   @override
   void initState() {
     super.initState();
     NotifyService.isEnabled().then((v) => mounted ? setState(() => _native = v) : null);
+    _loadSvc();
+    _svcTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadSvc());
+  }
+
+  @override
+  void dispose() {
+    _svcTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadSvc() async {
+    final st = await NotifyService.status();
+    if (mounted) setState(() => _svc = st);
+  }
+
+  Widget _svcLine() {
+    final live = NotifyService.isLive(_svc);
+    final alert = (_svc?['alert'] as num?)?.toInt() ?? 0;
+    String when = '';
+    if (alert > 0) {
+      final d = DateTime.fromMillisecondsSinceEpoch(alert);
+      when = '${two(d.day)}/${two(d.month)} ${fmtTime12(d.hour, d.minute)}';
+    }
+    return Row(children: [
+      Icon(live ? Icons.cloud_done_outlined : Icons.cloud_off_outlined, size: 18, color: live ? C.green : C.warn),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          (live ? _tr('الخدمة متصلة بالسيرفر', 'Service connected to the server') : _tr('الخدمة مش سامعة الـ Hub دلوقتي، وبتعيد الاتصال لوحدها', 'Service is not hearing the hub; it reconnects by itself')) +
+              (when.isEmpty ? '' : _tr('  ·  آخر تنبيه $when', '  ·  last alert $when')),
+          style: TextStyle(color: C.muted, fontSize: 12, height: 1.5),
+        ),
+      ),
+    ]);
   }
 
   Future<void> _toggleNative(bool v) async {
@@ -44,6 +81,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('لازم تسمح للتطبيق بالإشعارات من إعدادات الموبايل', 'Allow notifications for Fisha in the phone settings'))));
       }
       setState(() => _native = ok);
+      Future.delayed(const Duration(seconds: 5), _loadSvc);
     } else {
       await NotifyService.disable();
       if (mounted) setState(() => _native = false);
@@ -97,6 +135,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             'No extra app. Fisha keeps a small service running in the background and alerts you even when it is closed or you are away.'),
                         style: TextStyle(color: C.text.withValues(alpha: 0.7), fontSize: 12, height: 1.5)),
                   ),
+                  if (_native) _svcLine(),
                   if (_native)
                     OutlinedButton.icon(
                       onPressed: () async {

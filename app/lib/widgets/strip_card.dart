@@ -267,16 +267,16 @@ class StripCard extends StatelessWidget {
           color: C.card,
           borderRadius: BorderRadius.circular(26),
           border: Border.all(
-            color: online && s.onCount > 0 ? stripTone.withValues(alpha: C.dark ? 0.65 : 0.5) : C.cardEdge,
-            width: online && s.onCount > 0 ? 1.5 : 1.0,
+            // 2.0.10: a quiet edge and a soft drop shadow instead of a neon glow
+            color: online && s.onCount > 0 ? stripTone.withValues(alpha: C.dark ? 0.30 : 0.26) : C.cardEdge,
+            width: 1.0,
           ),
           boxShadow: online && s.onCount > 0
               ? [
                   BoxShadow(
-                    color: stripTone.withValues(alpha: C.dark ? 0.28 : 0.2),
-                    blurRadius: 22,
-                    spreadRadius: 1,
-                    offset: const Offset(0, 4),
+                    color: stripTone.withValues(alpha: C.dark ? 0.07 : 0.06),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
                   ),
                 ]
               : null,
@@ -358,7 +358,7 @@ class StripCard extends StatelessWidget {
                 if (online && s.voltage != null && s.voltage! > 0) ...[
                   const SizedBox(height: 2),
                   Text(
-                    '${(s.livePower / s.voltage!).toStringAsFixed(1)}A',
+                    '${(s.livePower / s.voltage!).toStringAsFixed(2)}A',
                     textDirection: TextDirection.ltr,
                     style: mono(11, color: C.textSoft, weight: FontWeight.w600),
                   ),
@@ -612,8 +612,8 @@ class _SocketPainter extends CustomPainter {
     if (on && !isMaster) {
       // glow
       canvas.drawCircle(c, r - 6, Paint()
-        ..color = ringColor.withValues(alpha: 0.22)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+        ..color = ringColor.withValues(alpha: 0.12)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
       // load arc
       final sweep = 2 * math.pi * math.max(0.12, load);
       canvas.drawArc(

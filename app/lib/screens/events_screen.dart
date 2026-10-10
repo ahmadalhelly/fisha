@@ -30,6 +30,10 @@ String eventText(AppState s, HubEvent e) {
     'overvolt' => t('ev_overvolt', {'x': m}),
     'overcurrent' => t('ev_overcurrent', {'x': m}),
     'test' => t('ev_test'),
+    'stall' => t('ev_stall', {'x': m}),
+    'save_fail' => t('ev_save_fail', {'x': m}),
+    'strip_fw' => t('ev_strip_fw', {'x': m}),
+    'strip_fw_fail' => t('ev_strip_fw_fail', {'x': m}),
     _ => '${e.type} $m',
   };
   return who.isEmpty ? body.trim() : '$who — ${body.trim()}';
@@ -52,6 +56,10 @@ IconData _icon(String type) => switch (type) {
       'wifi' => Icons.router_outlined,
       'voltage' || 'overvolt' => Icons.electric_bolt,
       'overcurrent' => Icons.electric_meter_outlined,
+      'stall' => Icons.hourglass_empty,
+      'save_fail' => Icons.sd_card_alert_outlined,
+      'strip_fw' => Icons.system_update_alt,
+      'strip_fw_fail' => Icons.error_outline,
       _ => Icons.info_outline,
     };
 
@@ -65,6 +73,7 @@ class EventsScreen extends StatefulWidget {
 
 class _EventsScreenState extends State<EventsScreen> {
   AppState get s => widget.state;
+  bool _system = false; // 2.0.10: "My notifications" (what reaches the phone) first; "System log" shows everything
 
   @override
   void initState() {
@@ -78,6 +87,8 @@ class _EventsScreenState extends State<EventsScreen> {
     final d = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
     return '${two(d.day)}/${two(d.month)}  ${fmtTime12(d.hour, d.minute)}';
   }
+
+  List<HubEvent> get _shown => _system ? s.events : s.events.where(s.eventNotifies).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -95,9 +106,19 @@ class _EventsScreenState extends State<EventsScreen> {
             color: C.accent,
             onRefresh: s.loadEvents,
             child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
+              SegmentedButton<bool>(
+                segments: [
+                  ButtonSegment(value: false, label: Text(t('events_mine')), icon: const Icon(Icons.notifications_outlined)),
+                  ButtonSegment(value: true, label: Text(t('events_system')), icon: const Icon(Icons.list_alt)),
+                ],
+                selected: {_system},
+                showSelectedIcon: false,
+                onSelectionChanged: (v) => setState(() => _system = v.first),
+              ),
+              const SizedBox(height: 12),
               if (!s.hubV2) emptyCard(t('err_old_fw')),
-              if (s.hubV2 && s.events.isEmpty) emptyCard(t('events_empty'), icon: Icons.notifications_none),
-              for (final e in s.events)
+              if (s.hubV2 && _shown.isEmpty) emptyCard(t(_system ? 'events_empty' : 'events_mine_empty'), icon: Icons.notifications_none),
+              for (final e in _shown)
                 Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(14),
