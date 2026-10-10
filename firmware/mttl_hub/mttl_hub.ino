@@ -47,6 +47,9 @@ struct ApiRes;
            notifications are no longer lost on a Wi-Fi blip or an MQTT reconnect.
   v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
            seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
+  v2.15.6: Wi-Fi settings are kept in RAM, not NVS (with NVS full the strip join failed: ESP_ERR_NVS_NOT_ENOUGH_SPACE);
+           the strip's setup network is also recognised by its BSSID; /api/health adds nvs_used/nvs_free/nvs_total.
+  v2.15.5: the strip flasher listens on port 80 before sending up:ota (the strip dials it ~0.1 s after ota_ok).
   v2.15.2: a strip is no longer dropped when one send is slow for a moment: unsent bytes wait (same bytes, same
            order, no protocol change) and the strip is dropped only after 3 s stuck; that drop is now logged as an
            "offline" event too ("socket stuck"). Live push (SSE) sends the state without extra copies and without
@@ -71,6 +74,7 @@ struct ApiRes;
 #include "esp_task_wdt.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "nvs.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_netif_net_stack.h"
@@ -102,7 +106,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.5";
+const char* FW_VERSION = "2.15.6";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2402,6 +2406,13 @@ void handleState() {
 }
 
 int sseCount();
+// v2.15.6: how full the settings storage is (a full NVS silently loses saves)
+String nvsStatsJson() {
+  nvs_stats_t st;
+  if (nvs_get_stats(NULL, &st) != ESP_OK) return "";
+  return ",\"nvs_used\":" + String(st.used_entries) + ",\"nvs_free\":" + String(st.free_entries) + ",\"nvs_total\":" + String(st.total_entries);
+}
+
 void handleHealth() {
   int n = 0;
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
@@ -2409,7 +2420,7 @@ void handleHealth() {
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
-           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
+           ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) + nvsStatsJson() +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -3166,6 +3177,7 @@ void runProvision() {
     cfg.sta.pmf_cfg.required = false;
     cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
     esp_err_t eCfg = esp_wifi_set_config(WIFI_IF_STA, &cfg);
     esp_err_t eCon = esp_wifi_connect();
     Serial.printf("[prov] try %d: set_config %s, connect %s\n", attempt + 1, esp_err_to_name(eCfg), esp_err_to_name(eCon));
@@ -3183,7 +3195,8 @@ void runProvision() {
                     (int)WiFi.status(), provDiscReason, provStaEvents, apCh);
       continue;
     }
-    onStrip = strcmp((const char*)rec.ssid, ap.c_str()) == 0;
+    // v2.15.6: the strip is also recognised by its BSSID (its MAC): rec.ssid came back empty although the hub was on it
+    onStrip = strcmp((const char*)rec.ssid, ap.c_str()) == 0 || ((apBssid[0] | apBssid[1] | apBssid[2]) && memcmp(rec.bssid, apBssid, 6) == 0);
     Serial.printf("[prov] join try %d: on %s (%02X:%02X:%02X:%02X:%02X:%02X)%s\n", attempt + 1, (const char*)rec.ssid,
                   rec.bssid[0], rec.bssid[1], rec.bssid[2], rec.bssid[3], rec.bssid[4], rec.bssid[5],
                   onStrip ? "" : " - not the strip, retrying");
@@ -3239,6 +3252,9 @@ void runProvision() {
 void saveWifi(const String& ssid, const String& pass);
 
 bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
+  // v2.15.6: Wi-Fi settings stay in RAM (the hub keeps its own copy in "sec"); with NVS full, writing them failed
+  // (ESP_ERR_NVS_NOT_ENOUGH_SPACE) and the join to a strip's setup network never got its SSID
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
 #if USE_STATIC_IP
