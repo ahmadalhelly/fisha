@@ -9,6 +9,8 @@ struct Sched;
 struct Autom;
 struct HubUser;
 struct ApiRes;
+struct OwnerDev;
+struct PairReq;
 
 /*
   Fisha Hub v2.13.2 — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
@@ -120,7 +122,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.12";
+const char* FW_VERSION = "2.15.13";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -278,6 +280,18 @@ volatile bool mqttRestartReq = false;
 uint8_t apiSrc = 0;                                                // 0 local HTTP · 1 owner MQTT · 2 shared user
 const uint8_t MAX_USERS = 10;
 HubUser users[MAX_USERS];
+// v2.15.13: hub lock. Owner phones hold a secret key; with no owner the hub stays open as before, so older apps keep
+// working until the owner locks it from the app. A new phone asks for access and the owner approves by picking the
+// number shown on that phone (one of 3), so a stranger on the Wi-Fi can't slip in by accident.
+struct OwnerDev { char key[33]; char email[48]; char model[32]; uint32_t ts; };
+const uint8_t MAX_OWNERS = 4, MAX_PAIRS = 3;
+OwnerDev owners[MAX_OWNERS];
+uint8_t ownerCount = 0;
+struct PairReq { uint32_t id = 0, at = 0; uint8_t code = 0, ch[3] = {0, 0, 0}, state = 0; bool owner = false, job = false;
+                 String email, model, result; };   // state: 0 free · 1 waiting for the owner · 2 approved · 3 refused
+PairReq pairs[MAX_PAIRS];
+uint32_t pairJobId = 0, claimLockUntil = 0;
+uint8_t claimFails = 0;
 uint8_t userCount = 0;
 String exUrl, exKey, exSec, exLast;                                // EMQX management API (NVS "sec"), never returned
 
@@ -588,7 +602,7 @@ void queueNotify(const String& type, const String& mac, int outlet, const String
   int bit = typeBit(type);
   // v2.15.9: a safety cut always reaches the phone. These types have no switch in the app, and an old app could save
   // notifyTypes without their bits, so they were never sent.
-  bool safety = type == "overvolt" || type == "undervolt" || type == "overcurrent" || type == "overload" || type == "trip_fail";
+  bool safety = type == "overvolt" || type == "undervolt" || type == "overcurrent" || type == "overload" || type == "trip_fail" || type == "pair";
   if (!safety && type != "test" && (bit < 0 || !(notifyTypes & (1UL << bit)))) return;
   if (!safety && mac.length()) {
     int idx = stripFor(mac);
@@ -617,6 +631,7 @@ String noteTitle(const Note& n) {
                 : n.type == "undervolt" ? "Low voltage - strip turned off" : n.type == "warn" ? "Close to the safety limit"
                 : n.type == "overcurrent" ? "Over current - turned off" : n.type == "trip_fail" ? "Safety cut not confirmed - check the strip"
                 : n.type == "overload" ? "Over 3500 W - biggest loads turned off"
+                : n.type == "pair" ? "A new phone wants access - open Fisha to approve"
                 : "Test notification";
   return who.length() ? String(t) + " | " + who : String(t);
 }
@@ -678,8 +693,11 @@ void sendNotes() {
 const uint8_t EV_OUTBOX = 12;
 String evOutJ[EV_OUTBOX], evOutMac[EV_OUTBOX];
 uint8_t evOutN = 0;
+// v2.15.13: access requests are the owner's business only, not shown to family members
+bool ownerOnlyEvent(const String& j) { return j.indexOf("\"type\":\"pair") >= 0 || j.indexOf("\"type\":\"owner\"") >= 0; }
 void publishEvent(const String& j, const String& mac) {
   mqttPub(tEvent, j, 1, false);
+  if (ownerOnlyEvent(j)) return;
   for (int u = 0; u < userCount; u++)
     if (mac.length() ? userHas(users[u], mac) : users[u].all) mqttPub("mttl/" + hubId + "/u/" + users[u].id + "/event", j, 1, false);
 }
@@ -1709,7 +1727,7 @@ String buildStateJson() {
              ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +
              ",\"user\":\"" + String(MQTT_USER) + "\",\"host\":\"" + mqttHost() + "\"}" +
              ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
-             ",\"reset\":\"" + resetText() + "\"" +
+             ",\"reset\":\"" + resetText() + "\"" + ",\"auth\":" + authJson() +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
@@ -1948,6 +1966,135 @@ String userJson(const HubUser& u) {
   for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
   return j + "]}";
 }
+
+// ---------- v2.15.13 hub lock ----------
+void loadOwners() {
+  Preferences ap; ap.begin("auth", true);
+  size_t n = ap.getBytesLength("owners");
+  ownerCount = 0;
+  if (n && n % sizeof(OwnerDev) == 0 && n <= sizeof owners) { ap.getBytes("owners", owners, n); ownerCount = n / sizeof(OwnerDev); }
+  ap.end();
+}
+void saveOwners() {
+  Preferences ap;
+  bool ok = ap.begin("auth", false);
+  if (ok) ok = ownerCount ? ap.putBytes("owners", owners, ownerCount * sizeof(OwnerDev)) == ownerCount * sizeof(OwnerDev) : ap.remove("owners") || true;
+  ap.end();
+  if (!ok) saveFailed("owner phones");
+  stateDirty = true;
+}
+bool isOwnerKey(const String& k) {
+  if (k.length() < 16) return false;
+  for (int i = 0; i < ownerCount; i++) if (k == owners[i].key) return true;
+  return false;
+}
+int ownerByEmail(const String& e) { for (int i = 0; i < ownerCount; i++) if (e == owners[i].email) return i; return -1; }
+// a phone of this email becomes an owner phone (the same email again replaces its old phone); returns its key
+String addOwner(const String& email, const String& model) {
+  int i = ownerByEmail(email);
+  if (i < 0) {
+    if (ownerCount < MAX_OWNERS) i = ownerCount++;
+    else {                                       // full: the oldest phone gives way
+      i = 0;
+      for (int k = 1; k < ownerCount; k++) if (owners[k].ts < owners[i].ts) i = k;
+    }
+  }
+  String key = randText(32);
+  OwnerDev& o = owners[i];
+  memset(&o, 0, sizeof o);
+  strlcpy(o.key, key.c_str(), sizeof o.key);
+  strlcpy(o.email, email.c_str(), sizeof o.email);
+  strlcpy(o.model, model.c_str(), sizeof o.model);
+  o.ts = timeOk() ? (uint32_t)time(nullptr) : 0;
+  saveOwners();
+  return key;
+}
+String cleanEmail(String e) { e.trim(); e.toLowerCase(); return (e.length() >= 3 && e.length() < 48 && e.indexOf('@') > 0 && e.indexOf('"') < 0) ? e : String(""); }
+String cleanModel(String m) { m.trim(); m.replace("\"", ""); return m.substring(0, 31); }
+void pairsExpire() {
+  for (int i = 0; i < MAX_PAIRS; i++) {
+    PairReq& p = pairs[i];
+    if (!p.state || p.job) continue;
+    if (millis() - p.at > (p.state == 1 ? 300000UL : 600000UL)) { if (p.state == 1) stateDirty = true; p = PairReq(); }
+  }
+}
+int pairFind(uint32_t id) { for (int i = 0; i < MAX_PAIRS; i++) if (pairs[i].state && pairs[i].id == id) return i; return -1; }
+String authJson() {
+  pairsExpire();
+  String j = "{\"claimed\":" + String(ownerCount ? "true" : "false") + ",\"owners\":[";
+  for (int i = 0; i < ownerCount; i++) {
+    if (i) j += ",";
+    j += "{\"email\":\"" + jsonEsc(String(owners[i].email)) + "\",\"model\":\"" + jsonEsc(String(owners[i].model)) + "\",\"ts\":" + String(owners[i].ts) + "}";
+  }
+  j += "],\"pair\":[";
+  bool f = true;
+  for (int i = 0; i < MAX_PAIRS; i++) {
+    const PairReq& p = pairs[i];
+    if (p.state != 1 || p.job) continue;
+    if (!f) j += ",";
+    f = false;
+    j += "{\"id\":" + String(p.id) + ",\"email\":\"" + jsonEsc(p.email) + "\",\"model\":\"" + jsonEsc(p.model) + "\",\"owner\":" +
+         (p.owner ? "true" : "false") + ",\"choices\":[" + String(p.ch[0]) + "," + String(p.ch[1]) + "," + String(p.ch[2]) + "]}";
+  }
+  return j + "]}";
+}
+String inviteCode(const HubUser& u, const String& pw) {
+  return b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(u.id) + "\",\"pw\":\"" + pw +
+                "\",\"n\":\"" + jsonEsc(String(u.name)) + "\",\"r\":" + String(u.role) + ",\"lip\":\"" + WiFi.localIP().toString() + "\"}");
+}
+// the three routes a phone without a key may call
+void authRoute(const String& uri, const String& b) {
+  auto out = [](int code, const String& j) { web.send(code, "application/json", j); };
+  if (uri == "/api/auth/claim") {                 // {"ota","email","model"}: the update password proves the hub is yours
+    if (claimLockUntil && (int32_t)(millis() - claimLockUntil) < 0) return out(429, "{\"ok\":false,\"error\":\"wait\"}");
+    String email = cleanEmail(jsonValue(b, "email"));
+    if (!email.length()) return out(400, "{\"ok\":false,\"error\":\"email\"}");
+    if (jsonValue(b, "ota") != secOta) {
+      if (++claimFails >= 5) { claimFails = 0; claimLockUntil = millis() + 300000UL; if (!claimLockUntil) claimLockUntil = 1; }
+      return out(403, "{\"ok\":false,\"error\":\"wrong_password\"}");
+    }
+    claimFails = 0;
+    String key = addOwner(email, cleanModel(jsonValue(b, "model")));
+    addEvent("owner", "", 0, email);
+    return out(200, "{\"ok\":true,\"data\":{\"key\":\"" + key + "\"}}");
+  }
+  if (uri == "/api/pair/request") {               // {"email","model"} -> {"id","code"}: the code is shown on the new phone
+    if (!ownerCount) return out(409, "{\"ok\":false,\"error\":\"not_claimed\"}");
+    String email = cleanEmail(jsonValue(b, "email"));
+    if (!email.length()) return out(400, "{\"ok\":false,\"error\":\"email\"}");
+    pairsExpire();
+    int slot = -1;
+    for (int i = 0; i < MAX_PAIRS; i++) if (pairs[i].state == 1 && !pairs[i].job && pairs[i].email == email) slot = i;
+    for (int i = 0; slot < 0 && i < MAX_PAIRS; i++) if (!pairs[i].state) slot = i;
+    if (slot < 0) return out(429, "{\"ok\":false,\"error\":\"busy\"}");
+    PairReq& p = pairs[slot];
+    p = PairReq();
+    do { p.id = esp_random() & 0x7FFFFFFF; } while (!p.id);
+    p.code = 10 + esp_random() % 90;
+    uint8_t a, c;
+    do { a = 10 + esp_random() % 90; } while (a == p.code);
+    do { c = 10 + esp_random() % 90; } while (c == p.code || c == a);
+    uint8_t at = esp_random() % 3;
+    p.ch[at] = p.code; p.ch[(at + 1) % 3] = a; p.ch[(at + 2) % 3] = c;
+    p.email = email; p.model = cleanModel(jsonValue(b, "model"));
+    p.owner = ownerByEmail(email) >= 0;
+    p.state = 1; p.at = millis();
+    addEvent("pair", "", 0, email);
+    stateDirty = true;
+    return out(200, "{\"ok\":true,\"data\":{\"id\":" + String(p.id) + ",\"code\":" + String(p.code) + "}}");
+  }
+  if (uri == "/api/pair/poll") {                  // {"id","code"} -> pending | ok (+ key or invite code, once) | refused | expired
+    pairsExpire();
+    int i = pairFind((uint32_t)strtoul(jsonValue(b, "id").c_str(), nullptr, 10));
+    if (i < 0 || jsonValue(b, "code").toInt() != pairs[i].code) return out(200, "{\"ok\":true,\"data\":{\"state\":\"expired\"}}");
+    PairReq& p = pairs[i];
+    if (p.state == 1) return out(200, "{\"ok\":true,\"data\":{\"state\":\"pending\"}}");
+    String d = p.state == 2 ? "{\"state\":\"ok\"," + p.result + "}" : String("{\"state\":\"refused\"}");
+    p = PairReq();
+    return out(200, "{\"ok\":true,\"data\":" + d + "}");
+  }
+  out(404, "{\"ok\":false,\"error\":\"not found\"}");
+}
 String randText(int len) {
   static const char A[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   String s; for (int i = 0; i < len; i++) s += A[esp_random() % (sizeof(A) - 1)];
@@ -2045,11 +2192,13 @@ void exCollect() {
       users[userCount++] = j.u;
       saveUsers();
       publishUserState(j.u);
-      j.data = "{\"code\":\"" + b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(j.u.id) +
-                                     "\",\"pw\":\"" + j.pw + "\",\"n\":\"" + jsonEsc(String(j.u.name)) + "\",\"r\":" + String(j.u.role) +
-                                     ",\"lip\":\"" + WiFi.localIP().toString() + "\"}") +
-               "\",\"user\":" + userJson(j.u) + "}";
+      String code = inviteCode(j.u, j.pw);
+      j.data = "{\"code\":\"" + code + "\",\"user\":" + userJson(j.u) + "}";
+      int pi = pairJobId ? pairFind(pairJobId) : -1;   // v2.15.13: an approved phone gets its invite on its next poll
+      if (pi >= 0) { pairs[pi].result = "\"code\":\"" + code + "\""; pairs[pi].state = 2; pairs[pi].job = false; pairs[pi].at = millis(); }
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) ? j.c2 : j.c1);
+    if (pairJobId) { int pi = pairFind(pairJobId); if (pi >= 0 && pairs[pi].job) { pairs[pi].state = 3; pairs[pi].job = false; pairs[pi].at = millis(); } }
+    pairJobId = 0;
     j.pw = "";
   } else if (j.kind == 2) {
     j.ok = (http2xx(j.c1) || j.c1 == 404) && (http2xx(j.c2) || j.c2 == 404);
@@ -2158,6 +2307,7 @@ bool userList(const HubUser& u, const String& p, ApiRes& r) {
     for (int n = 0; n < evCount; n++) {
       const Ev& e = events[((int)evHead - 1 - n + MAX_EVENTS) % MAX_EVENTS];
       if (e.mac.length() ? !userHas(u, e.mac) : !u.all) continue;
+      if (e.type.startsWith("pair") || e.type == "owner") continue;
       if (!f) j += ","; f = false;
       j += "{\"ts\":" + String(e.ts) + ",\"type\":\"" + e.type + "\",\"mac\":\"" + e.mac + "\",\"outlet\":" + String(e.outlet) +
            ",\"msg\":\"" + jsonEsc(e.msg) + "\"}";
@@ -2379,6 +2529,55 @@ ApiRes api(String path, const String& b) {
     exJob.state = 0;
     exJob.data = "";
     return okRes(d);
+  }
+  if (path == "pair_answer") {                    // v2.15.13 {"id","pick","role"}: role -1 refuses; a wrong pick refuses too
+    if (apiSrc == 2) return errRes("forbidden");
+    pairsExpire();
+    int i = pairFind((uint32_t)strtoul(jsonValue(b, "id").c_str(), nullptr, 10));
+    if (i < 0 || pairs[i].state != 1 || pairs[i].job) return errRes("expired");
+    PairReq& p = pairs[i];
+    int role = jsonValue(b, "role").toInt();
+    stateDirty = true;
+    if (role < 0) { p.state = 3; p.at = millis(); addEvent("pair_no", "", 0, p.email); return okRes(); }
+    if (jsonValue(b, "pick").toInt() != p.code) { p.state = 3; p.at = millis(); addEvent("pair_no", "", 0, p.email); return errRes("wrong_number"); }
+    if (p.owner) {
+      p.result = "\"key\":\"" + addOwner(p.email, p.model) + "\"";
+      p.state = 2; p.at = millis();
+      addEvent("pair_ok", "", 0, p.email);
+      return okRes();
+    }
+    if (userCount >= MAX_USERS) return errRes("max 10 users");
+    HubUser u; memset(&u, 0, sizeof u);
+    String nm = p.email.substring(0, p.email.indexOf('@'));
+    strlcpy(u.name, nm.c_str(), sizeof u.name);
+    u.role = (uint8_t)constrain(role, 0, 2);
+    u.all = 1;
+    do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
+    addEvent("pair_ok", "", 0, p.email);
+    if (emqxReady()) {                           // the same path as an invite, so the phone also works away from home
+      if (exJob.state == 1) return errRes("busy");
+      exJob.u = u; exJob.pw = randText(18); exJob.base = "mttl/" + hubId + "/";
+      if (!exStart(1)) return errRes("busy");
+      p.job = true; pairJobId = p.id;
+      return okRes("{\"job\":true}");
+    }
+    String pw = randText(18);                    // no server set up: a home-only member
+    strlcpy(u.pw, pw.c_str(), sizeof u.pw);
+    users[userCount++] = u;
+    saveUsers();
+    publishUserState(u);
+    p.result = "\"code\":\"" + inviteCode(u, pw) + "\"";
+    p.state = 2; p.at = millis();
+    return okRes();
+  }
+  if (path == "owner_remove") {                   // v2.15.13 {"email"}: takes an owner phone off; with none left the hub is open again
+    if (apiSrc != 0) return errRes("local_only");
+    int i = ownerByEmail(cleanEmail(jsonValue(b, "email")));
+    if (i < 0) return errRes("no such phone");
+    for (int k = i; k < ownerCount - 1; k++) owners[k] = owners[k + 1];
+    ownerCount--;
+    saveOwners();
+    return okRes();
   }
   if (path == "reboot") {                         // owner only, local or remote
     if (apiSrc == 2) return errRes("forbidden");
@@ -2658,7 +2857,13 @@ bool authorized() {
     }
   }
 
-  // 2. Owner check
+  // 2. Owner check. v2.15.13: once the hub is locked only an owner phone's key (or, in a browser, admin + the update
+  // password) gets in; before that it stays open as it always was.
+  if (ownerCount) {
+    if (isOwnerKey(tok)) return true;
+    if (web.authenticate("admin", secOta.c_str())) return true;
+    return strlen(API_TOKEN) && (tok == API_TOKEN || web.authenticate("hub", API_TOKEN));
+  }
   if (!strlen(API_TOKEN)) return true;
   if (tok == API_TOKEN) return true;
   if (web.authenticate("hub", API_TOKEN)) return true;
@@ -2695,7 +2900,7 @@ void handleHealth() {
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
-           ",\"uptime_s\":" + String(millis() / 1000) + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
+           ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
@@ -2715,6 +2920,7 @@ void handleRaw() {
 }
 
 void handleOther() {
+  if (web.method() == HTTP_POST && (web.uri() == "/api/auth/claim" || web.uri().startsWith("/api/pair/"))) return authRoute(web.uri(), web.arg("plain"));
   if (web.method() == HTTP_POST && web.uri().startsWith("/api/")) {
     if (!guard()) return;
     ApiRes r;
@@ -3175,6 +3381,7 @@ void sseSend(const char* ev, const String& data) {
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
     if (!sse[i].c.connected()) { sse[i].c.stop(); sse[i] = SseClient(); continue; }
+    if (!isState && sse[i].userIdx >= 0 && ownerOnlyEvent(data)) continue;
     bool ok;
     if (isState && sse[i].userIdx >= 0 && sse[i].userIdx < userCount) ok = sseWrite(sse[i].c, ev, userStateJson(users[sse[i].userIdx]));
     else ok = sseWrite(sse[i].c, ev, data);
@@ -3230,7 +3437,7 @@ void ssePump() {
             break;
           }
         }
-        bool owner = matchedUser < 0 && (!strlen(API_TOKEN) || qt == API_TOKEN);
+        bool owner = matchedUser < 0 && (ownerCount ? isOwnerKey(qt) || (strlen(API_TOKEN) && qt == API_TOKEN) : (!strlen(API_TOKEN) || qt == API_TOKEN));
         bool ok = owner || matchedUser >= 0;
         if (!ok || !x.req.startsWith("GET /events")) {
           x.c.print("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
@@ -4009,6 +4216,7 @@ void setup() {
   loadSecrets();
   loadEmqx();
   loadUsers();
+  loadOwners();
   cfg.begin("mttl", false);
   fsOk = LittleFS.begin(true);                   // v2.15.7: formats the unused SPIFFS partition on first boot
   esp_task_wdt_reset();

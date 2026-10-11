@@ -14,6 +14,8 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
+        (Icons.phonelink_lock_outlined, _tr('قفل الهاب', 'Hub lock'),
+            _tr('الهاب يتقفل على تليفونك بحساب جوجل، وأي تليفون جديد يطلب دخول وإنت توافق باختيار الرقم اللي ظاهر عنده (Hub 2.15.13).', 'The hub locks to your phone with your Google account; a new phone asks in and you approve by picking the number it shows (Hub 2.15.13).')),
         (Icons.cloud_download_outlined, _tr('مركز التحديثات', 'Update center'),
             _tr('في الإعدادات: آخر نسخة من الهاب والتطبيق من GitHub، وتحديث كل واحد بزرار، وسجل الإصدارات بملاحظاتها.', 'In Settings: the latest hub and app builds from GitHub, one-tap updates, and every release with its notes.')),
         (Icons.stacked_bar_chart, _tr('جراف طاقة جديد', 'New energy chart'),

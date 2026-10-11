@@ -42,6 +42,8 @@ class HubSettings {
   String sharedUser;
   String sharedName;
   int sharedRole;
+  /// 2.0.18: this phone's key from the hub (hub 2.15.13 lock). Empty until the owner locks the hub from this phone.
+  String ownerKey;
 
   HubSettings({
     this.hubId = '80F3DA40F674',
@@ -55,6 +57,7 @@ class HubSettings {
     this.sharedUser = '',
     this.sharedName = '',
     this.sharedRole = 0,
+    this.ownerKey = '',
   });
 
   bool get isShared => sharedUser.isNotEmpty;
@@ -73,6 +76,7 @@ class HubSettings {
         'sharedUser': sharedUser,
         'sharedName': sharedName,
         'sharedRole': sharedRole,
+        'ownerKey': ownerKey,
       };
 
   factory HubSettings.fromJson(Map<String, dynamic> j) {
@@ -89,8 +93,31 @@ class HubSettings {
       sharedUser: (j['sharedUser'] ?? '').toString(),
       sharedName: (j['sharedName'] ?? '').toString(),
       sharedRole: (j['sharedRole'] as num?)?.toInt() ?? 0,
+      ownerKey: (j['ownerKey'] ?? '').toString(),
     );
   }
+}
+
+class OwnerPhone {
+  final String email, model;
+  final int ts;
+  const OwnerPhone(this.email, this.model, this.ts);
+  factory OwnerPhone.fromJson(Map m) => OwnerPhone((m['email'] ?? '').toString(), (m['model'] ?? '').toString(), (m['ts'] as num?)?.toInt() ?? 0);
+}
+
+class PairRequest {
+  final int id;
+  final String email, model;
+  final bool owner;                              // same email as an owner phone: approving makes it an owner phone
+  final List<int> choices;
+  const PairRequest(this.id, this.email, this.model, this.owner, this.choices);
+  factory PairRequest.fromJson(Map m) => PairRequest(
+        (m['id'] as num?)?.toInt() ?? 0,
+        (m['email'] ?? '').toString(),
+        (m['model'] ?? '').toString(),
+        m['owner'] == true,
+        (m['choices'] is List ? (m['choices'] as List) : const []).whereType<num>().map((e) => e.toInt()).toList(),
+      );
 }
 
 class CmdResult {
@@ -129,6 +156,11 @@ class AppState extends ChangeNotifier {
   bool sseLive = false;
   bool hubTimeOk = false;
   String? hubFw;
+  // 2.0.18 hub lock (hub 2.15.13): the hub refused this phone (no key, or a key it no longer knows)
+  bool hubLocked = false;
+  bool? hubClaimed;                              // null: hub older than 2.15.13 or not heard yet
+  List<OwnerPhone> ownerPhones = [];
+  List<PairRequest> pairRequests = [];
   int tempMax = 70;
   // whole-strip protections (hub 2.10+)
   bool vProtect = true, vRestore = true, aProtect = true;
@@ -323,6 +355,12 @@ class AppState extends ChangeNotifier {
         await GoogleSync.I.signOut();
       } catch (_) {}
     }
+    // 2.0.18: signing out leaves nothing behind: no hub key, no family login, no strips on screen
+    _strips = [];
+    timers = [];
+    ownerPhones = [];
+    pairRequests = [];
+    await saveSettings(HubSettings());
     await setAccount('');
   }
 
@@ -384,7 +422,7 @@ class AppState extends ChangeNotifier {
 
   // secrets a backup file must not carry in plain text (the Google copy lives in the app's private Drive folder)
   static const _secretPrefs = {'otaPass'};
-  static const _secretSettings = {'password', 'hubPass'};
+  static const _secretSettings = {'password', 'hubPass', 'ownerKey'};
 
   Future<Map<String, dynamic>> exportBackup({Set<String> parts = const {'app', 'hub'}, bool withSecrets = false}) async {
     final out = <String, dynamic>{
@@ -717,7 +755,8 @@ class AppState extends ChangeNotifier {
           'X-User': settings.sharedUser,
           'X-Token': settings.password,
           'Authorization': 'Basic ${base64Encode(utf8.encode('${settings.sharedUser}:${settings.password}'))}',
-        }
+        } else if (settings.ownerKey.isNotEmpty)
+          'X-Token': settings.ownerKey,
       };
 
   Uri _localUri(String path) {
@@ -732,7 +771,11 @@ class AppState extends ChangeNotifier {
   // heartbeat every 15 s, so a 7 s window alone flipped "Local" off between heartbeats and sent commands via the
   // cloud. The stream drops itself after 25 s of silence (see _runSse), which clears sseLive.
   bool get _localFresh =>
-      sseLive || (_lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7));
+      !_localBad && (sseLive || (_lastLocalOk != null && DateTime.now().difference(_lastLocalOk!) < const Duration(seconds: 7)));
+
+  // 2.0.18: when the hub's local data can't be read, the cloud copy is used for a while instead of an empty screen
+  DateTime? _localBadAt;
+  bool get _localBad => _localBadAt != null && DateTime.now().difference(_localBadAt!) < const Duration(seconds: 15);
 
   Future<void> _pollLocal() async {
     if (!kLocalCapable || _polling || settings.localHost.isEmpty) return;
@@ -741,7 +784,10 @@ class AppState extends ChangeNotifier {
       final r = await http.get(_localUri('/api/state'), headers: _localHeaders).timeout(const Duration(milliseconds: 1800));
       if (r.statusCode == 200) {
         _lastLocalOk = DateTime.now();
+        _setLocked(false);
         _applyState(utf8.decode(r.bodyBytes), fromLocal: true);
+      } else if (r.statusCode == 401) {
+        _setLocked(true);
       }
     } catch (_) {
       // not on the home network — the cloud path takes over
@@ -762,10 +808,12 @@ class AppState extends ChangeNotifier {
       try {
         final sseUri = settings.isShared && settings.sharedUser.isNotEmpty
             ? Uri.parse('http://${settings.localHost}:$ssePort/events?u=${settings.sharedUser}&t=${settings.password}')
-            : Uri.parse('http://${settings.localHost}:$ssePort/events');
+            : settings.ownerKey.isNotEmpty
+                ? Uri.parse('http://${settings.localHost}:$ssePort/events?t=${settings.ownerKey}')
+                : Uri.parse('http://${settings.localHost}:$ssePort/events');
         final req = http.Request('GET', sseUri);
         req.headers['Accept'] = 'text/event-stream';
-        if (settings.isShared) req.headers.addAll(_localHeaders);
+        req.headers.addAll(_localHeaders);
         final resp = await client.send(req).timeout(const Duration(seconds: 4));
         if (resp.statusCode != 200) throw http.ClientException('sse');
         sseLive = true;
@@ -955,6 +1003,13 @@ class AppState extends ChangeNotifier {
         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
       }
       if (j['reset'] != null) hubReset = j['reset'].toString();
+      final au = j['auth'];
+      if (au is Map) {
+        hubClaimed = au['claimed'] == true;
+        final ow = au['owners'], pr = au['pair'];
+        ownerPhones = ow is List ? ow.whereType<Map>().map((m) => OwnerPhone.fromJson(m)).toList() : [];
+        pairRequests = pr is List ? pr.whereType<Map>().map((m) => PairRequest.fromJson(m)).toList() : [];
+      }
       final nvs = (j['nvs'] ?? '').toString();
       if (nvs.isNotEmpty && !settings.isShared) _checkNvs(nvs);
       final cl = j['cloud'];
@@ -1005,9 +1060,15 @@ class AppState extends ChangeNotifier {
       }
       if (!fromLocal) hubOnline = true;
       lastUpdate = DateTime.now();
+      if (fromLocal) _localBadAt = null;
       notifyListeners();
       updateWidgetThrottled();
-    } catch (_) {}
+    } catch (_) {
+      if (fromLocal) {
+        _localBadAt = DateTime.now();
+        _updateMode();
+      }
+    }
   }
 
   List<Strip> get allStrips => List.unmodifiable(_strips);
@@ -1171,6 +1232,108 @@ class AppState extends ChangeNotifier {
     }
     return r;
   }
+
+  // ---------- 2.0.18 hub lock (hub 2.15.13) ----------
+  void _setLocked(bool v) {
+    if (v == hubLocked) return;
+    hubLocked = v;
+    notifyListeners();
+  }
+
+  String get _phoneModel {
+    if (kIsWeb) return 'Web';
+    final os = defaultTargetPlatform == TargetPlatform.iOS ? 'iPhone' : 'Android';
+    return os;
+  }
+
+  Future<Map<String, dynamic>?> _authPost(String path, Map<String, dynamic> body, [Duration timeout = const Duration(seconds: 8)]) async {
+    try {
+      final r = await http
+          .post(Uri.parse('http://${settings.localHost}:${settings.localPort}$path'),
+              headers: {'Content-Type': 'application/json; charset=utf-8'}, body: jsonEncode(body))
+          .timeout(timeout);
+      final j = jsonDecode(utf8.decode(r.bodyBytes));
+      return j is Map<String, dynamic> ? j : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _useOwnerKey(String key) async {
+    final j = settings.toJson()
+      ..['ownerKey'] = key
+      ..['sharedUser'] = ''
+      ..['sharedName'] = ''
+      ..['sharedRole'] = 0;
+    if (settings.isShared) {                     // was a family member before: back to the owner's own connection
+      final d = HubSettings();
+      j['username'] = d.username;
+      j['password'] = '';
+    }
+    hubLocked = false;
+    await saveSettings(HubSettings.fromJson(j));
+  }
+
+  /// Locks the hub to this phone: the hub's update password proves it is yours. Returns an error text, or null.
+  Future<String?> claimHub(String otaPass) async {
+    if (googleEmail.isEmpty) return t('lock_need_google');
+    final j = await _authPost('/api/auth/claim', {'ota': otaPass, 'email': googleEmail, 'model': _phoneModel});
+    if (j == null) return t('lock_no_hub');
+    if (j['ok'] != true) {
+      final e = (j['error'] ?? '').toString();
+      return e == 'wrong_password' ? t('lock_wrong_pass') : e == 'wait' ? t('lock_wait') : t('err_failed');
+    }
+    final key = (j['data'] is Map ? j['data']['key'] : null)?.toString() ?? '';
+    if (key.isEmpty) return t('err_failed');
+    await _useOwnerKey(key);
+    return null;
+  }
+
+  /// Asks the hub for access. Returns (id, code) to show on this phone, or an error key in [error].
+  Future<({int id, int code, String? error})> requestAccess() async {
+    if (googleEmail.isEmpty) return (id: 0, code: 0, error: t('lock_need_google'));
+    final j = await _authPost('/api/pair/request', {'email': googleEmail, 'model': _phoneModel});
+    if (j == null) return (id: 0, code: 0, error: t('lock_no_hub'));
+    final d = j['data'];
+    if (j['ok'] != true || d is! Map) {
+      final e = (j['error'] ?? '').toString();
+      return (id: 0, code: 0, error: e == 'busy' ? t('err_busy') : e == 'not_claimed' ? t('lock_not_claimed') : t('err_failed'));
+    }
+    return (id: (d['id'] as num).toInt(), code: (d['code'] as num).toInt(), error: null);
+  }
+
+  /// One check of a request: pending · ok (this phone is in now) · refused · expired · error.
+  Future<String> pollAccess(int id, int code) async {
+    final j = await _authPost('/api/pair/poll', {'id': id, 'code': code}, const Duration(seconds: 5));
+    final d = j?['data'];
+    if (d is! Map) return 'error';
+    final st = (d['state'] ?? '').toString();
+    if (st != 'ok') return st;
+    final key = (d['key'] ?? '').toString();
+    final code0 = (d['code'] ?? '').toString();
+    if (key.isNotEmpty) {
+      await _useOwnerKey(key);
+    } else if (code0.isNotEmpty && await joinWithCode(code0)) {
+      hubLocked = false;
+    } else {
+      return 'error';
+    }
+    notifyListeners();
+    return 'ok';
+  }
+
+  /// The owner's answer to a phone asking in: [pick] is the number chosen, [role] 0 view · 1 control, -1 refuses.
+  Future<CmdResult> answerPair(int id, int pick, int role) async {
+    final r = await _job('pair_answer', {'id': id, 'pick': pick, 'role': role});
+    pairRequests = pairRequests.where((p) => p.id != id).toList();
+    notifyListeners();
+    if (!r.ok && r.error == 'wrong_number') return CmdResult(false, t('lock_wrong_number'));
+    if (!r.ok && r.error == 'expired') return CmdResult(false, t('lock_expired'));
+    if (r.ok && role >= 0) _mirrorSoon();
+    return r;
+  }
+
+  Future<CmdResult> removeOwnerPhone(String email) => api('owner_remove', {'email': email});
 
   // ---------- joining someone else's hub ----------
   static Map<String, dynamic>? decodeInvite(String code) {
@@ -1435,7 +1598,7 @@ class AppState extends ChangeNotifier {
   static bool isSystemEvent(String type) => type != 'test' && !notifyBitTypes.contains(type) && !safetyTypes.contains(type);
 
   /// Safety cuts (hub 2.15.9+): always sent to the phone, whatever the switches or mutes, so they sit in "My notifications".
-  static const safetyTypes = {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail'};
+  static const safetyTypes = {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail', 'pair'};
 
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
 

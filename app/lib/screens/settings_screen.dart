@@ -17,6 +17,7 @@ import 'notifications_screen.dart';
 import 'rooms_screen.dart';
 import 'strip_firmware_screen.dart';
 import 'update_center_screen.dart';
+import 'lock_screen.dart';
 import '../services/update_service.dart';
 import 'wifi_screen.dart';
 
@@ -132,6 +133,13 @@ class SettingsScreen extends StatelessWidget {
                           dot: n > 0 ? C.danger : null);
                     },
                   ),
+                // 2.0.18: hub lock (owner only)
+                if (!st.isShared)
+                  _row(context, st.hubClaimed == true ? Icons.lock_outline : Icons.lock_open_outlined, st.hubClaimed == false ? C.warn : C.accent,
+                      _tr('قفل الهاب', 'Hub lock'),
+                      st.hubClaimed == true ? _tr('مقفول', 'Locked') : st.hubClaimed == false ? _tr('مفتوح', 'Open') : '—',
+                      () => _open(context, HubLockScreen(state: st)),
+                      dot: st.hubClaimed == false ? C.warn : null),
                 if (!kIsWeb)
                   _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
                 if (!kIsWeb && !st.isShared)

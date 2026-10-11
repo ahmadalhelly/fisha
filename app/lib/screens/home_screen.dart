@@ -20,6 +20,7 @@ import 'rooms_screen.dart';
 import 'schedules_screen.dart' show ScheduleEditor;
 import 'scenes_screen.dart';
 import 'update_center_screen.dart';
+import 'lock_screen.dart';
 import '../services/update_service.dart';
 import 'settings_screen.dart' show appVersion;
 
@@ -42,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     UpdateService.instance.check(); // at most every 6 hours
+    s.addListener(_checkPairs);
     _scroll.addListener(() {
       final c = _scroll.hasClients && _scroll.offset > 230;
       if (c != _compact) setState(() => _compact = c);
@@ -53,12 +55,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    s.removeListener(_checkPairs);
     _tick?.cancel();
     _scroll.dispose();
     super.dispose();
   }
 
   void _push(Widget w) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => w));
+
+  // 2.0.18: a phone asking for access opens the approval sheet once, on whichever screen the owner is
+  final _shownPairs = <int>{};
+  bool _pairOpen = false;
+  void _checkPairs() {
+    if (_pairOpen || !mounted || s.isShared) return;
+    for (final p in s.pairRequests) {
+      if (_shownPairs.add(p.id)) {
+        _pairOpen = true;
+        showPairSheet(context, s, p).whenComplete(() => _pairOpen = false);
+        return;
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
           listenable: s,
           builder: (context, _) {
             final strips = s.strips;
-            final header = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_header(), _updateBanner()]);
+            final header = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_header(), _lockBanner(), _updateBanner()]);
             final pad = EdgeInsets.fromLTRB(18, 12, 18, navInset(context) + 76);
             Widget body;
             if (strips.isEmpty) {
@@ -158,6 +175,34 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ]);
           },
+        ),
+      ),
+    );
+  }
+
+  // 2.0.18: an open hub (2.15.13+, no owner phone yet) is shown until it is locked
+  Widget _lockBanner() {
+    if (s.isShared || s.hubClaimed != false) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Material(
+        color: C.warn.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _push(HubLockScreen(state: s)),
+          child: Container(
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: C.warn.withValues(alpha: .4))),
+            child: Row(children: [
+              Icon(Icons.lock_open_outlined, size: 18, color: C.warn),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(Tr.isAr ? 'الـ Hub مفتوح لأي حد على واي فاي البيت' : 'The hub is open to anyone on the home Wi-Fi',
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+              Text(Tr.isAr ? 'اقفله' : 'Lock it', style: TextStyle(color: C.warn, fontWeight: FontWeight.w700, fontSize: 13)),
+            ]),
+          ),
         ),
       ),
     );

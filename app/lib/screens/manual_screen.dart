@@ -125,6 +125,16 @@ class _ManualScreenState extends State<ManualScreen> {
               how: [(_G.tap, _tr('الجرس في الرئيسية', 'Bell on Home')), (_G.go, _tr('الإعدادات ← الإشعارات', 'Settings → Notifications'))]),
         ]),
         _Sec(_tr('الحساب والتحديثات', 'Account and updates'), [
+          _Item(Icons.phonelink_lock_outlined, _tr('قفل الهاب', 'Hub lock'),
+              _tr('من غير القفل أي حد على واي فاي البيت يقدر يتحكم في مشتركاتك. بعد القفل، أي تليفون جديد لازم توافق عليه.', 'Without the lock anyone on the home Wi-Fi can control your strips. Once locked, every new phone needs your approval.'),
+              how: [(_G.go, _tr('الإعدادات ← قفل الهاب', 'Settings → Hub lock'))],
+              steps: [
+                _tr('سجّل بحساب جوجل، وادخل الإعدادات ← قفل الهاب.', 'Sign in with Google and open Settings → Hub lock.'),
+                _tr('اكتب باسورد تحديث الهاب (OTA) واقفله. ده مرة واحدة بس.', 'Enter the hub update (OTA) password and lock it. Only once.'),
+                _tr('أي تليفون جديد يسجل بجيميل ويدوس "اطلب دخول"، فيظهر عليه رقم.', 'A new phone signs in with Google and taps "Ask for access"; it shows a number.'),
+                _tr('على تليفونك هتظهر رسالة: اختار نفس الرقم وحدد الصلاحية (تحكم أو مشاهدة).', 'On your phone a sheet opens: pick the same number and choose the role (control or view).'),
+                _tr('غيّرت تليفونك؟ سجّل بنفس الجيميل، واسترجع النسخة من Drive أو اختار "أنا صاحب الهاب".', 'New phone? Sign in with the same Google account and restore from Drive, or choose "I own this hub".'),
+              ]),
           _Item(Icons.group_outlined, _tr('مشاركة العائلة', 'Family sharing'),
               _tr('حسابات للعائلة بصلاحية مشاهدة أو تحكم أو إدارة، لمشتركات معيّنة.', 'Family accounts with view, control or admin rights for chosen strips.'),
               how: [(_G.go, _tr('الإعدادات ← مشاركة العائلة', 'Settings → Family sharing'))]),

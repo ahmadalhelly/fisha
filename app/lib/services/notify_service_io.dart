@@ -242,7 +242,7 @@ class _NotifyHandler extends TaskHandler {
     final fTypes = (_filter?['types'] as num?)?.toInt();
     final types = cfg is Map && cfg['ntypes'] is num ? (cfg['ntypes'] as num).toInt() : (fTypes ?? 0xFFFFFFFF);
     final bit = _types.indexOf(type);
-    final safety = const {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail'}.contains(type); // always shown (hub 2.15.9)
+    final safety = const {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail', 'pair'}.contains(type); // always shown (hub 2.15.9)
     if (!safety && type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
     final strip = mac.isEmpty ? null : _strip(mac);
     final fMasks = _filter?['masks'];
@@ -315,6 +315,7 @@ class _NotifyHandler extends TaskHandler {
         'overcurrent' => isAr ? 'تيار عالي: اتقفل' : 'Over current: turned off',
         'overload' => isAr ? 'الحمل عدّى 3500 واط' : 'Load over 3500 W',
         'trip_fail' => isAr ? 'أمر القفل ماتأكدش' : 'Safety cut not confirmed',
+        'pair' => isAr ? 'تليفون جديد طالب يدخل على الـ Hub' : 'A new phone wants access to the hub',
         'test' => 'Fisha ✓',
         _ => t('nt_$type'),
       };

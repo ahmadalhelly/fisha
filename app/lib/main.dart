@@ -11,6 +11,7 @@ import 'screens/energy_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/lock_screen.dart';
 import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
@@ -59,7 +60,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  String _signature() => '${s.themePref.index}-${s.langPref.index}-${s.accountType.isEmpty}';
+  String _signature() => '${s.themePref.index}-${s.langPref.index}-${s.accountType.isEmpty}-${s.hubLocked}';
 
   void _onState() {
     final sig = _signature();
@@ -134,7 +135,9 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
             ? const BootScreen(key: ValueKey('boot'))
             : s.accountType.isEmpty
                 ? WelcomeScreen(key: const ValueKey('welcome'), state: s)
-                : Shell(key: const ValueKey('shell'), state: s),
+                : s.hubLocked
+                    ? AccessScreen(key: const ValueKey('access'), state: s)   // 2.0.18: the hub refuses this phone
+                    : Shell(key: const ValueKey('shell'), state: s),
       ),
     );
   }

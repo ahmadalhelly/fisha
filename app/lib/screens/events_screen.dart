@@ -36,6 +36,10 @@ String eventText(AppState s, HubEvent e) {
     'save_fail' => t('ev_save_fail', {'x': m}),
     'strip_fw' => t('ev_strip_fw', {'x': m}),
     'strip_fw_fail' => t('ev_strip_fw_fail', {'x': m}),
+    'pair' => t('ev_pair', {'x': m}),
+    'pair_ok' => t('ev_pair_ok', {'x': m}),
+    'pair_no' => t('ev_pair_no', {'x': m}),
+    'owner' => t('ev_owner', {'x': m}),
     _ => '${e.type} $m',
   };
   return who.isEmpty ? body.trim() : '$who — ${body.trim()}';
@@ -63,6 +67,7 @@ IconData _icon(String type) => switch (type) {
       'save_fail' => Icons.sd_card_alert_outlined,
       'strip_fw' => Icons.system_update_alt,
       'strip_fw_fail' => Icons.error_outline,
+      'pair' || 'pair_ok' || 'pair_no' || 'owner' => Icons.phonelink_lock_outlined,
       _ => Icons.info_outline,
     };
 
