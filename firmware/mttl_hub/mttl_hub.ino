@@ -122,7 +122,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.13";
+const char* FW_VERSION = "2.15.14";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -290,7 +290,8 @@ uint8_t ownerCount = 0;
 struct PairReq { uint32_t id = 0, at = 0; uint8_t code = 0, ch[3] = {0, 0, 0}, state = 0; bool owner = false, job = false;
                  String email, model, result; };   // state: 0 free · 1 waiting for the owner · 2 approved · 3 refused
 PairReq pairs[MAX_PAIRS];
-uint32_t pairJobId = 0, claimLockUntil = 0;
+uint32_t pairJobId = 0, claimLockUntil = 0, cloudTodoAt = 0;
+String cloudTodoId, cloudTodoPw;                   // v2.15.14: an approved phone's server login, made in the background
 uint8_t claimFails = 0;
 uint8_t userCount = 0;
 String exUrl, exKey, exSec, exLast;                                // EMQX management API (NVS "sec"), never returned
@@ -2042,6 +2043,16 @@ String inviteCode(const HubUser& u, const String& pw) {
   return b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(u.id) + "\",\"pw\":\"" + pw +
                 "\",\"n\":\"" + jsonEsc(String(u.name)) + "\",\"r\":" + String(u.role) + ",\"lip\":\"" + WiFi.localIP().toString() + "\"}");
 }
+// v2.15.14: makes the server login of an approved phone when the server worker is free (every 10 min on failure)
+void cloudTodoPump() {
+  if (!cloudTodoId.length() || exJob.state == 1 || tlsBusy || !emqxReady()) return;
+  if (cloudTodoAt && millis() - cloudTodoAt < 600000UL) return;
+  int i = findUser(cloudTodoId);
+  if (i < 0) { cloudTodoId = ""; cloudTodoPw = ""; return; }
+  exJob.u = users[i]; exJob.pw = cloudTodoPw; exJob.base = "mttl/" + hubId + "/";
+  cloudTodoAt = millis();
+  exStart(4);
+}
 // the three routes a phone without a key may call
 void authRoute(const String& uri, const String& b) {
   auto out = [](int code, const String& j) { web.send(code, "application/json", j); };
@@ -2150,7 +2161,7 @@ static void exTask(void*) {
   bool paused = false;
   if (mqtt) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; }   // two TLS sessions don't fit in RAM
   vTaskDelay(pdMS_TO_TICKS(300));
-  if (j.kind == 1) {
+  if (j.kind == 1 || j.kind == 4) {
     j.c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(j.u.id) + "\",\"password\":\"" + j.pw + "\"}");
     if (http2xx(j.c1)) {
       String rules = "[{\"username\":\"" + String(j.u.id) + "\",\"rules\":["
@@ -2207,6 +2218,11 @@ void exCollect() {
       mqttPub("mttl/" + hubId + "/u/" + String(j.u.id) + "/state", "", 1, true);
       if (i >= 0) { for (int k = i; k < userCount - 1; k++) users[k] = users[k + 1]; userCount--; saveUsers(); }
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) || j.c1 == 404 ? j.c2 : j.c1);
+  } else if (j.kind == 4) {                      // v2.15.14: server login for a phone that is already in
+    j.ok = http2xx(j.c1) && http2xx(j.c2);
+    if (j.ok && cloudTodoId == j.u.id) { cloudTodoId = ""; cloudTodoPw = ""; }
+    else cloudTodoAt = millis();                 // try again later
+    j.pw = "";
   } else {
     j.ok = http2xx(j.c1);
     if (!j.ok) j.err = "emqx " + exCodeText(j.c1);
@@ -2554,15 +2570,11 @@ ApiRes api(String path, const String& b) {
     u.all = 1;
     do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
     addEvent("pair_ok", "", 0, p.email);
-    if (emqxReady()) {                           // the same path as an invite, so the phone also works away from home
-      if (exJob.state == 1) return errRes("busy");
-      exJob.u = u; exJob.pw = randText(18); exJob.base = "mttl/" + hubId + "/";
-      if (!exStart(1)) return errRes("busy");
-      p.job = true; pairJobId = p.id;
-      return okRes("{\"job\":true}");
-    }
-    String pw = randText(18);                    // no server set up: a home-only member
+    // v2.15.14: the phone gets in at once (2.15.13 waited for the server login and answered "busy" when that worker
+    // was taken); its server login for use away from home is made right after, in the background
+    String pw = randText(18);
     strlcpy(u.pw, pw.c_str(), sizeof u.pw);
+    if (emqxReady()) { cloudTodoId = u.id; cloudTodoPw = pw; cloudTodoAt = 0; }
     users[userCount++] = u;
     saveUsers();
     publishUserState(u);
@@ -4351,6 +4363,7 @@ void loop() {
   serialRaw();
   stg("energy");
   exCollect();
+  cloudTodoPump();
   stg("mqtt");
   mqttHealth();
   mqttProcess();
