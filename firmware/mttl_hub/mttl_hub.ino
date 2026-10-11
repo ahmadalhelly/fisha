@@ -122,7 +122,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.15";
+const char* FW_VERSION = "2.15.16";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -266,6 +266,8 @@ const char* stallWhere = "";
 uint32_t subMax = 0, subWorst = 0;
 const char* subWhere = "";
 const char* subWorstWhere = "";
+String webUri;                          // v2.15.16: the request the web step was answering (named in a "web" stall)
+uint32_t webSlow = 0;                   // v2.15.16: answers cut short because the phone stopped reading
 struct SubT {
   const char* n; uint32_t t;
   SubT(const char* n_) : n(n_), t(millis()) {}
@@ -2866,6 +2868,7 @@ String apiJson(const ApiRes& r) {
 int apiUserIdx = -1;
 
 bool authorized() {
+  webUri = web.uri() + " " + web.client().remoteIP().toString();
   apiUserIdx = -1;
   apiSrc = 0;
   String tok = web.header("X-Token");
@@ -2909,13 +2912,19 @@ bool guard() {
   return false;
 }
 
+// v2.15.16: the state goes out without blocking. A phone that stops reading (screen off, app paused) could hold
+// the whole hub inside the web send for seconds, and every strip was then dropped as "socket stuck".
+void webJsonNB(const String& body) {
+  NetworkClient& c = web.client();
+  String h = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + String(body.length()) +
+             "\r\nConnection: close\r\n\r\n";
+  SubT st("web_send");
+  if (!sendStr(c, h, 300) || !sendStr(c, body, 1500)) { webSlow++; c.stop(); }
+}
 void handleState() {
   if (!guard()) return;
-  if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) {
-    web.send(200, "application/json", userStateJson(users[apiUserIdx]));
-  } else {
-    web.send(200, "application/json", buildStateJson());
-  }
+  if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) webJsonNB(userStateJson(users[apiUserIdx]));
+  else webJsonNB(buildStateJson());
 }
 
 int sseCount();
@@ -2934,7 +2943,7 @@ void handleHealth() {
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
-           ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
+           ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -2951,6 +2960,7 @@ void handleRaw() {
 }
 
 void handleOther() {
+  webUri = web.uri() + " " + web.client().remoteIP().toString();
   if (web.method() == HTTP_POST && (web.uri() == "/api/auth/claim" || web.uri().startsWith("/api/pair/"))) return authRoute(web.uri(), web.arg("plain"));
   if (web.method() == HTTP_POST && web.uri().startsWith("/api/")) {
     if (!guard()) return;
@@ -4324,9 +4334,13 @@ void stg(const char* next) {
   if (d > stallMaxMs) { stallMaxMs = d; stallWhere = was; }
   uint32_t sm = subMax; const char* sw = subWhere;
   subMax = 0; subWhere = "";
+  // v2.15.16: time the hub itself stood still is not the strip's fault: a send that was waiting restarts its
+  // "stuck" clock, so one slow step no longer drops every strip at once
+  if (d >= 1000) for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].txSince) strips[i].txSince = now;
   if (d >= 5000 && strcmp(was, "boot") && strcmp(was, "wifi_down") && strcmp(was, "provision"))
     addEvent("stall", "", 0, String(was) + " · " + String(d / 1000) + " s" +
-                             (sm >= 200 ? " · " + String(sw) + " " + String(sm) + " ms" : String(" · other")));
+                             (sm >= 200 ? " · " + String(sw) + " " + String(sm) + " ms" : String(" · other")) +
+                             (!strcmp(was, "web") ? " · " + (webUri.length() ? webUri : String("reading request")) : String("")));
   subMax = 0; subWhere = "";
 }
 
@@ -4368,6 +4382,7 @@ void loop() {
   stg("ota");
   ArduinoOTA.handle();
   stg("web");
+  webUri = "";
   web.handleClient();
   stg("strips_rx");
   pumpStrips();
