@@ -113,7 +113,8 @@ jobs:
             CHANGES-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}.md
           body_path: RELEASE_NOTES.md
 
-      # the public repo fisha-app is where the app's update center looks (this repo is private).
+      # the public repo fisha-app is where the app's update center looks (this repo is private). Published as a draft:
+      # the update center sees it only after the owner presses Publish on github.com/ahmadalhelly/fisha-app/releases.
       # Needs the secret FISHA_APP_TOKEN: a token with Contents read/write on ahmadalhelly/fisha-app.
       - name: Publish to fisha-app (update center)
         if: success() && env.APP_TOKEN != ''
@@ -121,6 +122,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           repository: ahmadalhelly/fisha-app
+          draft: true                 # reaches users only after the owner presses Publish on GitHub
           token: ${{ env.APP_TOKEN }}
           tag_name: app-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
           name: App ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})

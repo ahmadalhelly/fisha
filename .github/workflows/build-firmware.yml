@@ -82,7 +82,8 @@ jobs:
           [ -s RELEASE_NOTES.md ] || echo "Hub firmware ${{ steps.ver.outputs.v }}" > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-      # the public repo fisha-app is where the app's update center looks (this repo is private).
+      # the public repo fisha-app is where the app's update center looks (this repo is private). Published as a draft:
+      # the update center sees it only after the owner presses Publish on github.com/ahmadalhelly/fisha-app/releases.
       # Needs the secret FISHA_APP_TOKEN: a token with Contents read/write on ahmadalhelly/fisha-app.
       - name: Publish to fisha-app (update center)
         if: success() && env.APP_TOKEN != ''
@@ -90,6 +91,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           repository: ahmadalhelly/fisha-app
+          draft: true                 # reaches users only after the owner presses Publish on GitHub
           token: ${{ env.APP_TOKEN }}
           tag_name: hub-${{ steps.ver.outputs.v }}-run-${{ github.run_number }}
           name: Hub ${{ steps.ver.outputs.v }}
