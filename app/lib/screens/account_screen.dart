@@ -66,6 +66,14 @@ class _AccountScreenState extends State<AccountScreen> {
 
   Future<void> _join() => joinWithInviteDialog(context, s);
 
+  String get _syncTitle => Tr.isAr ? 'المزامنة التلقائية' : 'Automatic sync';
+  String _syncLabel(int m) => switch (m) {
+        60 => Tr.isAr ? 'كل ساعة' : 'Hourly',
+        1440 => Tr.isAr ? 'يومي' : 'Daily',
+        10080 => Tr.isAr ? 'أسبوعي' : 'Weekly',
+        _ => Tr.isAr ? 'مع كل تغيير' : 'On every change',
+      };
+
   Future<void> _rename() async {
     final ctrl = TextEditingController(text: s.userName);
     final v = await showDialog<String>(
@@ -157,6 +165,30 @@ class _AccountScreenState extends State<AccountScreen> {
               const SizedBox(height: 14),
               section(t('g_sync'), [
                 Text(s.lastSync == null ? t('g_never') : t('g_last', {'x': _fmt(s.lastSync!)}), style: TextStyle(color: C.textSoft, fontSize: 13)),
+                // 2.0.18: how often the automatic sync runs
+                InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () async {
+                    final v = await pickOne<int>(context, _syncTitle, [for (final m in AppState.syncChoices) MapEntry(m, _syncLabel(m))], s.syncEveryMin);
+                    if (v != null) await s.setSyncEvery(v);
+                    if (mounted) setState(() {});
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(children: [
+                      Icon(Icons.schedule, size: 20, color: C.accent),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(_syncTitle, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
+                      Text(_syncLabel(s.syncEveryMin), style: TextStyle(color: C.accent, fontSize: 13, fontWeight: FontWeight.w600)),
+                      Icon(Icons.chevron_left, size: 20, color: C.muted),
+                    ]),
+                  ),
+                ),
+                Text(
+                    Tr.isAr
+                        ? 'المزامنة بتشمل كل حاجة: الأسماء والأيقونات والغرف والسيناريوهات، والجدولة والأتمتة، والحماية وحدود الأمبير، والعائلة، وسجل الاستهلاك، والإعدادات.'
+                        : 'Sync covers everything: names, icons, rooms and scenes, schedules and automations, protection and amp limits, family, usage history and settings.',
+                    style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
                 primaryButton(t('g_sync_now'), _busy ? null : () => _run(() async => _snack(await s.syncNow() ?? t('g_synced'))), icon: Icons.cloud_upload_outlined),
                 OutlinedButton.icon(
                   onPressed: _busy

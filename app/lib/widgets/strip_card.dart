@@ -743,8 +743,8 @@ class _SocketPainter extends CustomPainter {
     if (on && !isMaster) {
       // glow
       canvas.drawCircle(c, r - 6, Paint()
-        ..color = ringColor.withValues(alpha: 0.12)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+        ..color = ringColor.withValues(alpha: 0.22)   // 2.0.18: back to the clear glow of a switched-on socket
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
       // load arc
       final sweep = 2 * math.pi * math.max(0.12, load);
       canvas.drawArc(

@@ -254,7 +254,19 @@ class AppState extends ChangeNotifier {
   // per-phone keys that must not travel between devices through the Google copy
   static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps', 'notifyFilter'};
 
+  /// 2.0.18: how often the automatic sync uploads (minutes): 0 = whenever something changed (checked every 10 min)
+  int syncEveryMin = 0;
+  static const syncChoices = [0, 60, 1440, 10080];
+  Future<void> setSyncEvery(int m) async {
+    syncEveryMin = m;
+    await _prefs?.setInt('syncEvery', m);
+    notifyListeners();
+  }
+
   Future<Map<String, dynamic>> _syncPayload() async {
+    // 2.0.18: the copy of the hub's data (rules, schedules, names, protection, family) is refreshed first, so the
+    // upload carries everything as it is now, not as it was at the last 15-minute refresh
+    if (!settings.isShared && mode != ConnMode.offline && _hubNvs.isNotEmpty) await _refreshMirror();
     final b = await exportBackup(parts: {'app'}, withSecrets: true);
     final app = b['app'];
     if (app is Map) app.removeWhere((k, _) => _noSyncKeys.contains(k));
@@ -371,6 +383,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> _autoSync() async {
     if (accountType != 'google') return;
+    if (syncEveryMin > 0 && lastSync != null && DateTime.now().difference(lastSync!) < Duration(minutes: syncEveryMin)) return;
     try {
       final b = await _syncPayload();
       final sig = jsonEncode(b['app']);
@@ -402,6 +415,7 @@ class AppState extends ChangeNotifier {
     otaPass = p.getString('otaPass') ?? '';
     accountType = p.getString('accountType') ?? '';
     googleEmail = p.getString('googleEmail') ?? '';
+    syncEveryMin = p.getInt('syncEvery') ?? 0;
     final ls = p.getString('lastSync');
     lastSync = ls == null ? null : DateTime.tryParse(ls);
     userName = p.getString('userName') ?? '';
@@ -492,6 +506,7 @@ class AppState extends ChangeNotifier {
                     'auto_off_min': o.autoOffMin,
                     'keep_on': o.keepOn,
                     'keepOn': o.keepOn,
+                    'amp_limit': o.ampLimit,
                   }
               ],
             }
@@ -499,6 +514,14 @@ class AppState extends ChangeNotifier {
         'config': {
           'temp_max': tempMax,
           'temp_protect': tempProtect,
+          if (hubHasStripProt) ...{
+            'v_protect': vProtect,
+            'v_restore': vRestore,
+            'v_max': vMax,
+            'v_min': vMin,
+            'a_protect': aProtect,
+            'a_max': aMax,
+          },
           'ntfy': ntfyTopic,
           'notifyTypes': notifyTypes,
         },
@@ -602,6 +625,9 @@ class AppState extends ChangeNotifier {
                 final keep = (o['keep_on'] ?? o['keepOn']) == true;
                 await api('keepon', {'mac': mac, 'outlet': n, 'on': keep});
               }
+              if (o['amp_limit'] is num) {
+                await api('amplimit', {'mac': mac, 'outlet': n, 'max_a': (o['amp_limit'] as num).toDouble()});
+              }
               if (o.containsKey('autooff') || o.containsKey('auto_off_min') || o.containsKey('autoOffMin')) {
                 final min = num.tryParse('${o['autooff'] ?? o['auto_off_min'] ?? o['autoOffMin'] ?? 0}')?.toInt() ?? 0;
                 await api('autooff', {'mac': mac, 'outlet': n, 'minutes': min});
@@ -621,6 +647,14 @@ class AppState extends ChangeNotifier {
           if (tempMax != null) 'temp_max': tempMax,
         });
       }
+      // 2.0.18: whole-strip protection (voltage and current limits)
+      final prot = <String, dynamic>{
+        for (final k in ['v_protect', 'v_restore', 'a_protect'])
+          if (cfg[k] is bool) k: cfg[k],
+        for (final k in ['v_max', 'v_min', 'a_max'])
+          if (cfg[k] is num) k: cfg[k],
+      };
+      if (prot.isNotEmpty) await api('config', prot);
       final ntfy = (cfg['ntfy'] ?? cfg['ntfy_topic'])?.toString();
       final nt = cfg['notifyTypes'] ?? cfg['notify_types'] ?? cfg['ntypes'];
       final ntypes = nt == null ? null : num.tryParse('$nt')?.toInt();
@@ -2009,7 +2043,9 @@ class AppState extends ChangeNotifier {
       if (users == null || hub is! Map<String, dynamic> || nvs != _hubNvs) return;
       hub['users'] = users;
       final m = {'nvs': nvs, 'hub_id': settings.hubId.toUpperCase(), 'at': DateTime.now().toIso8601String(), ...hub};
-      await _prefs?.setString('hubMirror', jsonEncode(m));
+      // 2.0.18: rewritten only when something in it changed, so an unchanged hub doesn't trigger a sync upload
+      final same = old != null && jsonEncode({...old}..remove('at')) == jsonEncode({...m}..remove('at'));
+      if (!same) await _prefs?.setString('hubMirror', jsonEncode(m));
       _mirrorAt = DateTime.now();
     } catch (_) {
     } finally {
