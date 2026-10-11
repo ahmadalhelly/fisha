@@ -120,7 +120,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.10";
+const char* FW_VERSION = "2.15.11";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -2759,7 +2759,7 @@ const char APP_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=
 <meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
 <meta name=apple-mobile-web-app-title content=Fisha><meta name=theme-color content="#060B18">
 <title>Fisha</title><style>html,body{margin:0;height:100%;background:#060B18}</style>
-<script>window.FISHA_BASE='https://ahmadalhelly.github.io/fisha-web/';
+<script>window.FISHA_BASE='https://ahmadalhelly.github.io/fisha-app/';
 document.write('<link rel=apple-touch-icon href="'+FISHA_BASE+'icons/Icon-192.png"><link rel=icon href="'+FISHA_BASE+'favicon.png">');</script>
 </head><body><script>var s=document.createElement('script');s.src=FISHA_BASE+'flutter_bootstrap.js';s.async=true;
 s.onerror=function(){document.body.innerHTML='<p dir=rtl style="color:#e8edf3;font-family:sans-serif;padding:24px">Fisha: محتاج إنترنت عشان يحمّل التطبيق أول مرة.</p>'};
