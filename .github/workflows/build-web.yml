@@ -19,8 +19,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    env:
-      APP_TOKEN: ${{ secrets.FISHA_APP_TOKEN || secrets.FISHA_WEB_TOKEN }}
     defaults:
       run:
         working-directory: app
@@ -32,7 +30,7 @@ jobs:
           channel: stable
           cache: true
 
-      # served from the public repo ahmadalhelly/fisha-app (GitHub Pages); this repo stays private
+      # served from the public repo ahmadalhelly/fisha-web (GitHub Pages); this repo stays private
       - name: Build for the web
         run: |
           flutter create --platforms=web --org com.mttlhub --project-name mttl_hub .
@@ -41,7 +39,7 @@ jobs:
           pip install --quiet --break-system-packages pillow || pip install --quiet pillow
           python3 tool/configure_web.py
           flutter pub get
-          flutter build web --release --base-href /fisha-app/ \
+          flutter build web --release --base-href /fisha-web/ \
             --dart-define=APP_VERSION=web-${{ github.run_number }}
           touch build/web/.nojekyll
 
@@ -52,11 +50,13 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-      # optional: a token with write access to fisha-app (secret FISHA_APP_TOKEN) publishes it automatically
-      - name: Publish to fisha-app
-        if: env.APP_TOKEN != ''
+      # optional: a token with write access to fisha-web (secret FISHA_WEB_TOKEN) publishes it automatically
+      - name: Publish to fisha-web
+        env:
+          TOKEN: ${{ secrets.FISHA_WEB_TOKEN }}
+        if: env.TOKEN != ''
         run: |
           cd build/web
           git init -q -b main && git add -A
           git -c user.name=fisha-ci -c user.email=ci@fisha.invalid commit -qm "web ${{ github.run_number }} (${{ github.sha }})"
-          git push -qf "https://x-access-token:${APP_TOKEN}@github.com/ahmadalhelly/fisha-app.git" main
+          git push -qf "https://x-access-token:${TOKEN}@github.com/ahmadalhelly/fisha-web.git" main
