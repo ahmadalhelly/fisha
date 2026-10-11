@@ -122,7 +122,7 @@ String secSsid, secWifi, secMqtt, secOta;
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.14";
+const char* FW_VERSION = "2.15.15";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -262,6 +262,19 @@ volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since
 volatile uint32_t wifiDiscAt = 0;       // v2.15.8: millis() of the last of those disconnects
 uint32_t stallMaxMs = 0;                // v2.15.8: longest single loop step since boot, and which one
 const char* stallWhere = "";
+// v2.15.15: the slowest blocking call inside the current loop step (named in the "stall" event) and since boot (health)
+uint32_t subMax = 0, subWorst = 0;
+const char* subWhere = "";
+const char* subWorstWhere = "";
+struct SubT {
+  const char* n; uint32_t t;
+  SubT(const char* n_) : n(n_), t(millis()) {}
+  ~SubT() {
+    uint32_t d = millis() - t;
+    if (d > subMax) { subMax = d; subWhere = n; }
+    if (d > subWorst) { subWorst = d; subWorstWhere = n; }
+  }
+};
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
 
@@ -525,6 +538,7 @@ bool sendStr(WiFiClient& c, const String& s, uint32_t maxMs) { return sendNB(c, 
 int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   int fd = c.fd();
   if (fd < 0 || !c.connected()) return -1;
+  SubT st("sock_send");
   uint32_t t0 = millis();
   int sent = 0;
   while (len) {
@@ -739,6 +753,7 @@ void saveLocks(Strip& s) {
 bool fsOk = false;
 bool fileSave(const String& path, const void* d, size_t n) {
   if (!fsOk) return false;
+  SubT st("fs_save");
   String tmp = path + ".t";
   File f = LittleFS.open(tmp, "w");
   if (!f) return false;
@@ -981,14 +996,14 @@ void dropStrip(Strip& s, const char* why) {
   if (s.identified && (!strcmp(why, "disconnected") || !strcmp(why, "stale") || !strcmp(why, "socket stuck"))) {
     String mac = s.mac;
     if (offlineMacs.indexOf(mac) < 0) offlineMacs += mac + ",";
-    s.c.stop();
+    { SubT st("sock_close"); s.c.stop(); }
     s = Strip();
     stateDirty = true;
     linkDrop(mac);
     addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send, v2.15.2)
     return;
   }
-  s.c.stop();
+  { SubT st("sock_close"); s.c.stop(); }
   s = Strip();
   stateDirty = true;
 }
@@ -1435,6 +1450,7 @@ void handleLine(int i, const String& line) {
 }
 
 void acceptStrips() {
+  SubT st("accept");
   WiFiClient n = stripServer.accept();
   if (!n) n = stripServerAlt.accept();
   if (!n) return;
@@ -2918,7 +2934,7 @@ void handleHealth() {
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
-           ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
+           ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
@@ -3392,6 +3408,7 @@ bool sseWrite(WiFiClient& c, const char* ev, const String& body) {
   return sendNB(c, head.c_str(), head.length(), 80) && sendNB(c, body.c_str(), body.length(), 80) && sendNB(c, "\n\n", 2, 80);
 }
 void sseSend(const char* ev, const String& data) {
+  SubT st("sse");
   bool isState = !strcmp(ev, "state");
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
@@ -3566,6 +3583,7 @@ void mqttStart() {
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
   if (!mqtt || !mqttUp || !topic.length()) return;
+  SubT st("mqtt_pub");
   esp_mqtt_client_enqueue(mqtt, topic.c_str(), payload.c_str(), payload.length(), qos, retain ? 1 : 0, true);
 }
 
@@ -4304,8 +4322,12 @@ void stg(const char* next) {
   const char* was = stgName;
   stgName = next; stgAt = now;
   if (d > stallMaxMs) { stallMaxMs = d; stallWhere = was; }
+  uint32_t sm = subMax; const char* sw = subWhere;
+  subMax = 0; subWhere = "";
   if (d >= 5000 && strcmp(was, "boot") && strcmp(was, "wifi_down") && strcmp(was, "provision"))
-    addEvent("stall", "", 0, String(was) + " · " + String(d / 1000) + " s");
+    addEvent("stall", "", 0, String(was) + " · " + String(d / 1000) + " s" +
+                             (sm >= 200 ? " · " + String(sw) + " " + String(sm) + " ms" : String(" · other")));
+  subMax = 0; subWhere = "";
 }
 
 void loop() {
