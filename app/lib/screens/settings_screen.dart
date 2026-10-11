@@ -16,6 +16,8 @@ import 'users_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
 import 'strip_firmware_screen.dart';
+import 'update_center_screen.dart';
+import '../services/update_service.dart';
 import 'wifi_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
@@ -118,6 +120,18 @@ class SettingsScreen extends StatelessWidget {
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
+                // 2.0.16: hub and app builds from GitHub, with how many are newer than what runs here
+                if (!kIsWeb)
+                  ListenableBuilder(
+                    listenable: UpdateService.instance,
+                    builder: (context, _) {
+                      final u = UpdateService.instance;
+                      final n = (u.newer('app', appVersion) != null ? 1 : 0) + (!st.isShared && u.newer('hub', st.hubFw) != null ? 1 : 0);
+                      return _row(context, Icons.cloud_download_outlined, C.accent, _tr('مركز التحديثات', 'Update center'),
+                          n == 0 ? _tr('آخر نسخة', 'Up to date') : _tr('$n جديد', '$n new'), () => _open(context, UpdateCenterScreen(state: st)),
+                          dot: n > 0 ? C.danger : null);
+                    },
+                  ),
                 if (!kIsWeb)
                   _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
                 if (!kIsWeb && !st.isShared)

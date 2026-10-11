@@ -14,6 +14,8 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
+        (Icons.cloud_download_outlined, _tr('مركز التحديثات', 'Update center'),
+            _tr('في الإعدادات: آخر نسخة من الهاب والتطبيق من GitHub، وتحديث كل واحد بزرار، وسجل الإصدارات بملاحظاتها.', 'In Settings: the latest hub and app builds from GitHub, one-tap updates, and every release with its notes.')),
         (Icons.stacked_bar_chart, _tr('جراف طاقة جديد', 'New energy chart'),
             _tr('عمود لكل يوم متقسّم بلون كل مشترك أو مخرج، وخط للمتوسط، والتكلفة الإجمالية فوق، وتكلفة كل مشترك ومخرج.', 'One bar per day split by strip or outlet colour, an average line, the total cost on top, and the cost of each strip and outlet.')),
         (Icons.help_outline, _tr('دليل الاستخدام', 'User guide'),

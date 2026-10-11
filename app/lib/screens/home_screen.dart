@@ -19,6 +19,9 @@ import 'outlet_sheet.dart' show roomCycleDialog, roomLoopDialog;
 import 'rooms_screen.dart';
 import 'schedules_screen.dart' show ScheduleEditor;
 import 'scenes_screen.dart';
+import 'update_center_screen.dart';
+import '../services/update_service.dart';
+import 'settings_screen.dart' show appVersion;
 
 class HomeScreen extends StatefulWidget {
   final AppState state;
@@ -38,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    UpdateService.instance.check(); // at most every 6 hours
     _scroll.addListener(() {
       final c = _scroll.hasClients && _scroll.offset > 230;
       if (c != _compact) setState(() => _compact = c);
@@ -83,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
           listenable: s,
           builder: (context, _) {
             final strips = s.strips;
-            final header = _header();
+            final header = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_header(), _updateBanner()]);
             final pad = EdgeInsets.fromLTRB(18, 12, 18, navInset(context) + 76);
             Widget body;
             if (strips.isEmpty) {
@@ -156,6 +160,53 @@ class _HomeScreenState extends State<HomeScreen> {
           },
         ),
       ),
+    );
+  }
+
+  // 2.0.16: a small banner when the hub or the app has a newer build; closing it hides it until the next version
+  Widget _updateBanner() {
+    if (kIsWeb) return const SizedBox.shrink();
+    final u = UpdateService.instance;
+    return ListenableBuilder(
+      listenable: u,
+      builder: (context, _) {
+        final hub = s.isShared ? null : u.newer('hub', s.hubFw);
+        final app = u.newer('app', appVersion);
+        if (hub == null && app == null) return const SizedBox.shrink();
+        final key = '${app?.version ?? ''}|${hub?.version ?? ''}';
+        if (u.dismissed == key) return const SizedBox.shrink();
+        final what = hub != null && app != null
+            ? (Tr.isAr ? 'فيه تحديث للهاب والتطبيق' : 'Hub and app updates available')
+            : hub != null
+                ? (Tr.isAr ? 'فيه تحديث للهاب ${hub.version}' : 'Hub ${hub.version} is available')
+                : (Tr.isAr ? 'فيه تحديث للتطبيق ${app!.version}' : 'App ${app!.version} is available');
+        return Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Material(
+            color: C.accentBg,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _push(UpdateCenterScreen(state: s)),
+              child: Container(
+                padding: const EdgeInsetsDirectional.fromSTEB(12, 6, 4, 6),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: C.accent.withValues(alpha: .35))),
+                child: Row(children: [
+                  Icon(Icons.system_update_alt, size: 18, color: C.accent),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(what, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+                  Text(Tr.isAr ? 'شوف' : 'View', style: TextStyle(color: C.accent, fontWeight: FontWeight.w700, fontSize: 13)),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(Icons.close, size: 18, color: C.muted),
+                    onPressed: () => u.dismiss(key),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 

@@ -25,7 +25,7 @@ if "usesCleartextTraffic" not in s:
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NAME}"', s, count=1)
 # native notifications: foreground service + notification + biometric permissions
 for perm in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED",
-             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", "USE_BIOMETRIC"):
+             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", "USE_BIOMETRIC", "REQUEST_INSTALL_PACKAGES"):
     tag = f'<uses-permission android:name="android.permission.{perm}"/>'
     if tag not in s:
         s = s.replace("<application", tag + "\n    <application", 1)

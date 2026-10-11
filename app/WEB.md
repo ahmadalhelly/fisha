@@ -51,9 +51,9 @@ CI (`.github/workflows/build-web.yml`) runs `flutter create --platforms=web`, co
 
 ## Two ways to open it (hub fw 2.14.2+)
 
-- `https://ahmadalhelly.github.io/fisha-app/`: anywhere, cloud only (an https page can't call the hub's plain-http API).
+- `https://ahmadalhelly.github.io/fisha-web/`: anywhere, cloud only (an https page can't call the hub's plain-http API).
 - `http://<hub ip>:8080/app`: on the home Wi-Fi. The hub serves a tiny launcher that loads the app from the site above
   (`window.FISHA_BASE` in `web_overrides/flutter_bootstrap.js`), so the page's origin is the hub: local REST polling
   works (`kLocalCapable` in app_state.dart) and the cloud too. SSE stays off on the web; the 2 s poll covers it.
-- Built by `.github/workflows/build-web.yml` into the `fisha-app` artifact; with the `FISHA_APP_TOKEN` secret it is
-  pushed to the public `fisha-app` repo (Pages from `main`).
+- Built by `.github/workflows/build-web.yml` into the `fisha-web` artifact; with the `FISHA_WEB_TOKEN` secret it is
+  pushed to the public `fisha-web` repo (Pages from `main`).
