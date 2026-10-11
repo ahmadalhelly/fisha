@@ -149,21 +149,24 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return t;
   }
 
-  // 2.0.15: stable colour per strip (by name order, same as the filter), and 4 tones of it for its outlets
+  // 2.0.17: every series gets its own hue, never tones of one colour (they blur together in a stacked bar).
+  // Strips: hues spread around the wheel. Outlets: the strip's hue plus 90°, 180° and 270° (tetradic).
   static const _palette = [
-    Color(0xFF2EE6B0), Color(0xFF38BDF8), Color(0xFFA78BFA), Color(0xFFFFB547),
-    Color(0xFFFF8A80), Color(0xFFF472B6), Color(0xFF84CC16), Color(0xFF94A3B8),
+    Color(0xFF2EE6B0), // teal
+    Color(0xFFFFB547), // amber
+    Color(0xFF6AA8FF), // blue
+    Color(0xFFF472B6), // pink
+    Color(0xFF9BE564), // lime
+    Color(0xFFA78BFA), // violet
+    Color(0xFFFF7A5C), // coral
+    Color(0xFF4DD9E8), // cyan
   ];
   List<String> get _macOrder => _whIdx.keys.toList()..sort((a, b) => _stripLabel(a).compareTo(_stripLabel(b)));
   Color _stripColor(String mac) => _palette[math.max(0, _macOrder.indexOf(mac)) % _palette.length];
   Color _outletColor(String mac, int n) {
-    final c = _stripColor(mac);
-    return switch (n) {
-      1 => c,
-      2 => Color.lerp(c, Colors.black, .3)!,
-      3 => Color.lerp(c, Colors.white, .42)!,
-      _ => Color.lerp(c, Colors.black, .55)!,
-    };
+    final h = HSLColor.fromColor(_stripColor(mac));
+    // same brightness for all four, so no outlet reads as "the faint one"
+    return h.withHue((h.hue + 90 * (n - 1)) % 360).withSaturation(0.72).withLightness(0.62).toColor();
   }
 
   /// the chart's stacked parts under the current filter: strips (all), outlets (one strip) or one outlet; days oldest first

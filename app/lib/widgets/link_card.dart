@@ -162,7 +162,11 @@ class _LinkCardState extends State<LinkCard> {
       // no record that day (hub off, or before it was tracking): the slot stays, as an outline
       return Container(
         height: maxH * 0.3,
-        decoration: BoxDecoration(border: Border.all(color: C.muted.withValues(alpha: 0.35)), borderRadius: BorderRadius.circular(6)),
+        decoration: BoxDecoration(
+          color: C.surface2,
+          border: Border.all(color: C.muted.withValues(alpha: 0.7)),
+          borderRadius: BorderRadius.circular(6),
+        ),
       );
     }
     final h = maxH * ((d.up - 97) / 3).clamp(0.18, 1.0); // 97–100 % spread out, so small losses show
@@ -176,9 +180,10 @@ class _LinkCardState extends State<LinkCard> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: today ? [color.withValues(alpha: 0.55), color.withValues(alpha: 0.25)] : [color, color.withValues(alpha: 0.55)],
+          colors: [color, Color.lerp(color, Colors.black, 0.22)!],
         ),
-        border: today ? Border.all(color: color.withValues(alpha: 0.7)) : null,
+        // today keeps the full colour and is marked by a ring instead of being faded out
+        border: today ? Border.all(color: Colors.white.withValues(alpha: 0.75), width: 1.4) : null,
         boxShadow: i == _sel ? [BoxShadow(color: C.bg, spreadRadius: 2), BoxShadow(color: C.textSoft, spreadRadius: 3.5)] : null,
       ),
     );
@@ -200,7 +205,7 @@ class _LinkCardState extends State<LinkCard> {
                 final lo = y(d.min!) * c.maxHeight, hi = y(d.avg!) * c.maxHeight;
                 return Stack(children: [
                   Positioned(left: c.maxWidth * 0.3, right: c.maxWidth * 0.3, bottom: lo, height: (hi - lo).clamp(2.0, c.maxHeight),
-                      child: DecoratedBox(decoration: BoxDecoration(color: C.blue.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(4)))),
+                      child: DecoratedBox(decoration: BoxDecoration(color: C.blue.withValues(alpha: 0.85), borderRadius: BorderRadius.circular(4)))),
                   Positioned(left: c.maxWidth * 0.18, right: c.maxWidth * 0.18, bottom: hi - 1, height: 2,
                       child: DecoratedBox(decoration: BoxDecoration(color: C.blue, borderRadius: BorderRadius.circular(1)))),
                 ]);
