@@ -2043,16 +2043,6 @@ String inviteCode(const HubUser& u, const String& pw) {
   return b64url("{\"v\":1,\"h\":\"" + mqttHost() + "\",\"p\":8883,\"hub\":\"" + hubId + "\",\"u\":\"" + String(u.id) + "\",\"pw\":\"" + pw +
                 "\",\"n\":\"" + jsonEsc(String(u.name)) + "\",\"r\":" + String(u.role) + ",\"lip\":\"" + WiFi.localIP().toString() + "\"}");
 }
-// v2.15.14: makes the server login of an approved phone when the server worker is free (every 10 min on failure)
-void cloudTodoPump() {
-  if (!cloudTodoId.length() || exJob.state == 1 || tlsBusy || !emqxReady()) return;
-  if (cloudTodoAt && millis() - cloudTodoAt < 600000UL) return;
-  int i = findUser(cloudTodoId);
-  if (i < 0) { cloudTodoId = ""; cloudTodoPw = ""; return; }
-  exJob.u = users[i]; exJob.pw = cloudTodoPw; exJob.base = "mttl/" + hubId + "/";
-  cloudTodoAt = millis();
-  exStart(4);
-}
 // the three routes a phone without a key may call
 void authRoute(const String& uri, const String& b) {
   auto out = [](int code, const String& j) { web.send(code, "application/json", j); };
@@ -2223,12 +2213,25 @@ void exCollect() {
     if (j.ok && cloudTodoId == j.u.id) { cloudTodoId = ""; cloudTodoPw = ""; }
     else cloudTodoAt = millis();                 // try again later
     j.pw = "";
+    j.state = 0;                                 // background job: nobody reads its result
+    return;
   } else {
     j.ok = http2xx(j.c1);
     if (!j.ok) j.err = "emqx " + exCodeText(j.c1);
   }
   j.state = 3;
   stateDirty = true;
+}
+
+// v2.15.14: makes the server login of an approved phone when the server worker is free (every 10 min on failure)
+void cloudTodoPump() {
+  if (!cloudTodoId.length() || exJob.state == 1 || tlsBusy || !emqxReady()) return;
+  if (cloudTodoAt && millis() - cloudTodoAt < 600000UL) return;
+  int i = findUser(cloudTodoId);
+  if (i < 0) { cloudTodoId = ""; cloudTodoPw = ""; return; }
+  exJob.u = users[i]; exJob.pw = cloudTodoPw; exJob.base = "mttl/" + hubId + "/";
+  cloudTodoAt = millis();
+  exStart(4);
 }
 String resetText() {
   switch (esp_reset_reason()) {
