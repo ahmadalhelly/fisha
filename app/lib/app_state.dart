@@ -49,7 +49,7 @@ class HubSettings {
     this.hubId = '80F3DA40F674',
     this.brokerHost = 't0eb1112.ala.eu-central-1.emqxsl.com',
     this.brokerPort = 8883,
-    this.username = 'stripe_app',
+    this.username = 'fisha_app',
     this.password = '',
     this.localHost = '192.168.1.100',
     this.localPort = 8080,
@@ -752,7 +752,13 @@ class AppState extends ChangeNotifier {
     }
     _passPushedAt = DateTime.now();
     _passPushedValue = p;
-    return api('cloud', {'pass': p});
+    return api('cloud', {'pass': p, 'host': settings.brokerHost, 'user': 'ESP_hub'});
+  }
+
+  /// Owner only: the hub's address on the home network (hub 2.15.20+). The hub restarts to use it.
+  Future<CmdResult> pushHubLocalIp(String ip) async {
+    if (settings.isShared || !_localFresh) return CmdResult(false, t('err_local_only'));
+    return api('cloud', {'lip': ip});
   }
 
   bool get hubSupportsCloudCfg => hubCloudUp != null;

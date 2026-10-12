@@ -40,6 +40,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   }
 
   Future<void> _save() async {
+    final oldLocal = _s.localHost;
     final s = HubSettings(
       hubId: _hub.text.trim().toUpperCase(),
       brokerHost: _host.text.trim(),
@@ -56,6 +57,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     );
     FocusScope.of(context).unfocus();
     await widget.state.saveSettings(s);
+    if (!s.isShared && s.localHost != oldLocal && s.localHost.isNotEmpty) await widget.state.pushHubLocalIp(s.localHost);
     var msg = t('saved');
     if (!kIsWeb && s.hubPass.isNotEmpty && !s.isShared) {
       // give the local link a moment after the restart, then hand the hub its server password
