@@ -74,6 +74,18 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
+// v2.15.20: the owner sets the hub address in the app (cloud settings "lip"; stored in NVS, the hub restarts to use it).
+// If the router does not answer on that address within a minute of boot, the hub goes back to the default address.
+// The hub server user defaults to ESP_hub.
+// v2.15.19: no secrets in the firmware. Update password is random per hub (NVS). Server address and user come from the app
+// (cloud settings). The first owner claim needs no password; later phones pair. The setup Wi-Fi network is open. BETA.
+// v2.15.18: the web library waits (with the whole hub stopped) for a request's line and headers to arrive.
+// Its default allows 10 s, long enough for the strips to give up on the silent hub and drop. 1.5 s is ample
+// for a real request; a body (firmware upload) is not covered by this limit. The library is compiled on its
+// own, so the limit must come from the build: compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500
+#if !defined(WEBSERVER_MAX_HEADER_WAIT) || WEBSERVER_MAX_HEADER_WAIT != 1500
+#warning "build with --build-property compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500 (see build-firmware.yml)"
+#endif
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
@@ -110,19 +122,21 @@ IPAddress SUBNET(255, 255, 255, 0);
 IPAddress DNS1(192, 168, 1, 1);
 const char* API_TOKEN = "";                     // empty = no auth (LAN only)
 const char* HOSTNAME  = "mttl-hub";
-const char* OTA_PASS  = "change-me";
-const char* MQTT_URI  = "mqtts://t0eb1112.ala.eu-central-1.emqxsl.com:8883";
-const char* MQTT_USER = "ESP32_hub";
+const char* OTA_PASS  = "";                     // empty: a random update password is made on first boot (kept in NVS)
+const char* MQTT_URI  = "";                     // empty: the app sends the server address (cloud settings)
+const char* MQTT_USER = "ESP_hub";        // the hub's own server user (not a secret); the app can change it
 const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
 // From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
 // above keeps using the stored ones, so later updates can be installed from the app without editing the code.
-String secSsid, secWifi, secMqtt, secOta;
+String secSsid, secWifi, secMqtt, secOta, secMqttUri, secMqttUser;
+IPAddress secLocalIp;                           // hub address on the home network (set by the owner in the app)
+volatile uint32_t lipCheckAt = 0;               // when to test the saved address (0 = not needed)
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.16";
+const char* FW_VERSION = "2.15.20";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -1744,7 +1758,7 @@ String buildStateJson() {
              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
              "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
              ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +
-             ",\"user\":\"" + String(MQTT_USER) + "\",\"host\":\"" + mqttHost() + "\"}" +
+             ",\"user\":\"" + jsonEsc(secMqttUser) + "\",\"host\":\"" + mqttHost() + "\"}" +
              ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
              ",\"reset\":\"" + resetText() + "\"" + ",\"auth\":" + authJson() +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
@@ -2068,11 +2082,7 @@ void authRoute(const String& uri, const String& b) {
     if (claimLockUntil && (int32_t)(millis() - claimLockUntil) < 0) return out(429, "{\"ok\":false,\"error\":\"wait\"}");
     String email = cleanEmail(jsonValue(b, "email"));
     if (!email.length()) return out(400, "{\"ok\":false,\"error\":\"email\"}");
-    if (jsonValue(b, "ota") != secOta) {
-      if (++claimFails >= 5) { claimFails = 0; claimLockUntil = millis() + 300000UL; if (!claimLockUntil) claimLockUntil = 1; }
-      return out(403, "{\"ok\":false,\"error\":\"wrong_password\"}");
-    }
-    claimFails = 0;
+    if (ownerCount) return out(409, "{\"ok\":false,\"error\":\"claimed\"}");   // later phones are added through pairing
     String key = addOwner(email, cleanModel(jsonValue(b, "model")));
     addEvent("owner", "", 0, email);
     return out(200, "{\"ok\":true,\"data\":{\"key\":\"" + key + "\"}}");
@@ -2129,7 +2139,7 @@ String b64url(const String& in) {
   return r;
 }
 String mqttHost() {
-  String u = MQTT_URI;
+  String u = secMqttUri;
   int s = u.indexOf("://"); if (s >= 0) u = u.substring(s + 3);
   int c = u.indexOf(':'); if (c > 0) u = u.substring(0, c);
   return u;
@@ -2438,9 +2448,36 @@ ApiRes api(String path, const String& b) {
     return okRes();
   }
   // ---- v2.9: cloud password + shared users (owner only) ----
-  if (path == "cloud") {                          // {"pass":"..."} local network only
+  if (path == "cloud") {                          // {"host","user","pass"} local network only
     if (apiSrc != 0) return errRes("local_only");
     bool changed = false;
+    if (jsonHas(b, "host")) {                     // server address (hostname only, port 8883)
+      String h = jsonValue(b, "host");
+      h.trim();
+      bool ok = h.length() >= 4 && h.length() <= 120 && h.indexOf("://") < 0;
+      for (size_t i = 0; ok && i < h.length(); i++) ok = isalnum((unsigned char)h[i]) || h[i] == '.' || h[i] == '-';
+      if (!ok) return errRes("bad server address");
+      String u = "mqtts://" + h + ":8883";
+      if (u != secMqttUri) { changed = true; Preferences sp; sp.begin("sec", false); sp.putString("muri", u); sp.end(); secMqttUri = u; }
+    }
+    if (jsonHas(b, "lip")) {                      // hub address on the home network; the hub restarts to use it
+      String s2 = jsonValue(b, "lip");
+      s2.trim();
+      IPAddress ip;
+      bool ok = ip.fromString(s2) && ip[0] == GATEWAY[0] && ip[1] == GATEWAY[1] && ip[2] == GATEWAY[2] && ip[3] > 1 && ip[3] < 255 && ip != GATEWAY;
+      if (!ok) return errRes("bad hub address (must be on the home network)");
+      if (ip != secLocalIp) {
+        Preferences sp; sp.begin("sec", false); sp.putString("lip", s2); sp.end();
+        secLocalIp = ip;
+        rebootAt = millis() + 1200;
+        if (!rebootAt) rebootAt = 1;
+      }
+    }
+    if (jsonHas(b, "user")) {
+      String u = jsonValue(b, "user");
+      if (!u.length() || u.length() > 64 || u.indexOf('"') >= 0) return errRes("bad server user");
+      if (u != secMqttUser) { changed = true; Preferences sp; sp.begin("sec", false); sp.putString("muser", u); sp.end(); secMqttUser = u; }
+    }
     if (jsonHas(b, "pass")) {
       String np = jsonValue(b, "pass");
       if (!np.length() || np.length() > 64 || np.indexOf('"') >= 0) return errRes("bad password");
@@ -3482,12 +3519,13 @@ void ssePump() {
         bool owner = matchedUser < 0 && (ownerCount ? isOwnerKey(qt) || (strlen(API_TOKEN) && qt == API_TOKEN) : (!strlen(API_TOKEN) || qt == API_TOKEN));
         bool ok = owner || matchedUser >= 0;
         if (!ok || !x.req.startsWith("GET /events")) {
-          x.c.print("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+          sendStr(x.c, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n", 250);
           x.c.stop(); x = SseClient(); continue;
         }
         x.userIdx = matchedUser;
-        x.c.print("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
-                  "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n");
+        // v2.15.17: the SSE answers no longer wait on a phone that stopped reading (they could freeze the hub ~5-10 s)
+        if (!sendStr(x.c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
+                          "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n", 250)) { x.c.stop(); x = SseClient(); continue; }
         String initData = (x.userIdx >= 0 && x.userIdx < userCount) ? userStateJson(users[x.userIdx]) : buildStateJson();
         if (!sseWrite(x.c, "state", initData)) { x.c.stop(); x = SseClient(); continue; }
         x.ready = true;
@@ -3506,8 +3544,8 @@ void ssePump() {
     lastSseBeat = millis();
     for (int i = 0; i < MAX_SSE; i++) {
       if (sse[i].used && sse[i].ready) {
-        sse[i].c.setTimeout(80);
-        if (sse[i].c.write((const uint8_t*)": hb\n\n", 6) != 6) {
+        SubT st("sse_beat");
+        if (!sendNB(sse[i].c, ": hb\n\n", 6, 250)) {
           sse[i].c.stop();
           sse[i] = SseClient();
         }
@@ -3556,6 +3594,7 @@ static void mqttEvent(void*, esp_event_base_t, int32_t id, void* data) {
 }
 
 void mqttStart() {
+  if (!secMqttUri.length()) { Serial.println("MQTT    : no server set yet (the app sends it)"); return; }
   uint8_t m[6];
   WiFi.macAddress(m);
   char id[13];
@@ -3567,9 +3606,9 @@ void mqttStart() {
   if (!mqttQ) mqttQ = xQueueCreate(6, sizeof(MqttCmd));
   esp_mqtt_client_config_t cfgm = {};
 #if ESP_IDF_VERSION_MAJOR >= 5
-  cfgm.broker.address.uri = MQTT_URI;
+  cfgm.broker.address.uri = secMqttUri.c_str();
   cfgm.broker.verification.certificate = MQTT_CA;
-  cfgm.credentials.username = MQTT_USER;
+  cfgm.credentials.username = secMqttUser.c_str();
   cfgm.credentials.client_id = mqttClientId;
   cfgm.credentials.authentication.password = secMqtt.c_str();
   cfgm.session.last_will.topic = tStatus.c_str();
@@ -3581,14 +3620,14 @@ void mqttStart() {
   cfgm.buffer.size = 8192;
   cfgm.buffer.out_size = 8192;
 #else
-  cfgm.uri = MQTT_URI; cfgm.cert_pem = MQTT_CA; cfgm.username = MQTT_USER; cfgm.client_id = mqttClientId; cfgm.password = secMqtt.c_str();
+  cfgm.uri = secMqttUri.c_str(); cfgm.cert_pem = MQTT_CA; cfgm.username = secMqttUser.c_str(); cfgm.client_id = mqttClientId; cfgm.password = secMqtt.c_str();
   cfgm.lwt_topic = tStatus.c_str(); cfgm.lwt_msg = "offline"; cfgm.lwt_qos = 1; cfgm.lwt_retain = 1; cfgm.keepalive = 30;
   cfgm.reconnect_timeout_ms = 5000; cfgm.buffer_size = 8192; cfgm.out_buffer_size = 8192;
 #endif
   mqtt = esp_mqtt_client_init(&cfgm);
   esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, mqttEvent, nullptr);
   esp_mqtt_client_start(mqtt);
-  Serial.printf("MQTT    : %s  hub=%s\n", MQTT_URI, id);
+  Serial.printf("MQTT    : %s  hub=%s\n", secMqttUri.c_str(), id);
 }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
@@ -4083,7 +4122,7 @@ bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
 #if USE_STATIC_IP
-  WiFi.config(LOCAL_IP, GATEWAY, SUBNET, DNS1);
+  WiFi.config(secLocalIp, GATEWAY, SUBNET, DNS1);
 #endif
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
@@ -4119,10 +4158,9 @@ void setupPortal() {
   WiFi.macAddress(m);
   char ap[24];
   snprintf(ap, sizeof ap, "Fisha-Hub-%02X%02X", m[4], m[5]);
-  String apPass = (secOta.length() >= 8 && secOta != "change-me") ? secOta : String("fisha1234");
   WiFi.disconnect();
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(ap, apPass.c_str());
+  WiFi.softAP(ap);                                // open: the firmware has no fixed password
   Serial.printf("[portal] Wi-Fi '%s' failed. Join '%s' and open http://192.168.4.1\n", secSsid.c_str(), ap);
   WebServer portal(80);
   bool saved = false;
@@ -4234,13 +4272,26 @@ void saveWifi(const String& ssid, const String& pass) {
   secWifi = pass;
 }
 
+String randomPass() {                             // 16 characters, no look-alikes
+  const char* abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  String s;
+  for (int i = 0; i < 16; i++) s += abc[esp_random() % 32];
+  return s;
+}
+
 void loadSecrets() {
   Preferences sp;
   sp.begin("sec", false);
   secSsid = pickSecret(sp, "ssid", WIFI_SSID, "YOUR_WIFI_NAME");
   secWifi = pickSecret(sp, "wifi", WIFI_PASS, "YOUR_WIFI_PASSWORD");
   secMqtt = pickSecret(sp, "mqtt", MQTT_PASS, "YOUR_MQTT_PASSWORD");
-  secOta = pickSecret(sp, "ota", OTA_PASS, "change-me");
+  secOta = pickSecret(sp, "ota", OTA_PASS, "");
+  secMqttUri = sp.getString("muri", "");
+  secMqttUser = sp.getString("muser", MQTT_USER);
+  secLocalIp = LOCAL_IP;
+  String lip = sp.getString("lip", "");
+  if (lip.length() && secLocalIp.fromString(lip)) { lipCheckAt = millis() + 60000; if (!lipCheckAt) lipCheckAt = 1; }
+  if (!secOta.length()) { secOta = randomPass(); sp.putString("ota", secOta); }
   sp.end();
 }
 
@@ -4348,6 +4399,23 @@ void loop() {
   esp_task_wdt_reset();
   stg("loop");
   if (rebootAt && (int32_t)(millis() - rebootAt) >= 0) { Serial.println("[hub] reboot requested"); delay(200); ESP.restart(); }
+  if (lipCheckAt && (int32_t)(millis() - lipCheckAt) >= 0) {       // the saved address must reach the router, else back to the default
+    if (WiFi.status() != WL_CONNECTED) lipCheckAt = millis() + 10000;
+    else {
+      lipCheckAt = 0;
+      WiFiClient c;
+      uint32_t t0 = millis();
+      bool up = c.connect(GATEWAY, 80, 3000);
+      c.stop();
+      if (!up && millis() - t0 >= 2500) {                          // silence, not a refusal: the router is not answering
+        Serial.println("[lip] router not reachable on the saved address, back to the default");
+        Preferences sp; sp.begin("sec", false); sp.remove("lip"); sp.end();
+        secLocalIp = LOCAL_IP;
+        rebootAt = millis() + 1000;
+        if (!rebootAt) rebootAt = 1;
+      }
+    }
+  }
   if (WiFi.status() != WL_CONNECTED) {
     wifiWasConnected = false;
     if (!wifiLostAt) wifiLostAt = millis();

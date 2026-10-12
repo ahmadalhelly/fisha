@@ -45,7 +45,7 @@ jobs:
 
       - name: Compile (ESP32 Dev Module, Minimal SPIFFS with OTA)
         run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --output-dir out firmware/mttl_hub
+          arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-property compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500 --output-dir out firmware/mttl_hub
           cp out/mttl_hub.ino.bin fisha-hub-${{ steps.ver.outputs.v }}.bin
           ls -l fisha-hub-*.bin
           sha256sum fisha-hub-*.bin
