@@ -272,7 +272,8 @@ elif os.path.exists(groovy):
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
-# all modules (Java and Kotlin) on JVM 17, so a plugin cannot mix 11 and 1.8 (breaks assembleRelease)
+# all modules (Java and Kotlin) on JVM 17, so a plugin cannot mix 11 and 1.8 (breaks assembleRelease).
+# plugins.withId runs when each Android plugin is applied, so it works even after the app module is evaluated.
 root_kts = os.path.join(APP, "android", "build.gradle.kts")
 root_groovy = os.path.join(APP, "android", "build.gradle")
 if os.path.exists(root_kts):
@@ -280,18 +281,24 @@ if os.path.exists(root_kts):
     if "JVM_17" not in g:
         g += (
             "\nsubprojects {\n"
-            "    afterEvaluate {\n"
-            "        if (hasProperty(\"android\")) {\n"
-            "            extensions.configure<com.android.build.gradle.BaseExtension> {\n"
-            "                compileOptions {\n"
-            "                    sourceCompatibility = JavaVersion.VERSION_17\n"
-            "                    targetCompatibility = JavaVersion.VERSION_17\n"
-            "                }\n"
+            '    plugins.withId("com.android.library") {\n'
+            "        extensions.configure<com.android.build.gradle.BaseExtension> {\n"
+            "            compileOptions {\n"
+            "                sourceCompatibility = JavaVersion.VERSION_17\n"
+            "                targetCompatibility = JavaVersion.VERSION_17\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            '    plugins.withId("com.android.application") {\n'
+            "        extensions.configure<com.android.build.gradle.BaseExtension> {\n"
+            "            compileOptions {\n"
+            "                sourceCompatibility = JavaVersion.VERSION_17\n"
+            "                targetCompatibility = JavaVersion.VERSION_17\n"
             "            }\n"
             "        }\n"
             "    }\n"
             "    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {\n"
-            "        compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }\n"
+            '        kotlinOptions { jvmTarget = "17" }  // JVM_17\n'
             "    }\n"
             "}\n"
         )
@@ -301,14 +308,14 @@ elif os.path.exists(root_groovy):
     if "JavaVersion.VERSION_17" not in g:
         g += (
             "\nsubprojects {\n"
-            "    afterEvaluate { project ->\n"
-            "        if (project.hasProperty('android')) {\n"
-            "            project.android {\n"
-            "                compileOptions {\n"
-            "                    sourceCompatibility JavaVersion.VERSION_17\n"
-            "                    targetCompatibility JavaVersion.VERSION_17\n"
-            "                }\n"
-            "            }\n"
+            "    plugins.withId('com.android.library') {\n"
+            "        project.extensions.configure(com.android.build.gradle.BaseExtension) {\n"
+            "            compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }\n"
+            "        }\n"
+            "    }\n"
+            "    plugins.withId('com.android.application') {\n"
+            "        project.extensions.configure(com.android.build.gradle.BaseExtension) {\n"
+            "            compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }\n"
             "        }\n"
             "    }\n"
             "    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n"
