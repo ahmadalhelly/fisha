@@ -272,6 +272,52 @@ elif os.path.exists(groovy):
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
+# all modules (Java and Kotlin) on JVM 17, so a plugin cannot mix 11 and 1.8 (breaks assembleRelease)
+root_kts = os.path.join(APP, "android", "build.gradle.kts")
+root_groovy = os.path.join(APP, "android", "build.gradle")
+if os.path.exists(root_kts):
+    g = open(root_kts).read()
+    if "JVM_17" not in g:
+        g += (
+            "\nsubprojects {\n"
+            "    afterEvaluate {\n"
+            "        if (hasProperty(\"android\")) {\n"
+            "            extensions.configure<com.android.build.gradle.BaseExtension> {\n"
+            "                compileOptions {\n"
+            "                    sourceCompatibility = JavaVersion.VERSION_17\n"
+            "                    targetCompatibility = JavaVersion.VERSION_17\n"
+            "                }\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {\n"
+            "        compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }\n"
+            "    }\n"
+            "}\n"
+        )
+        open(root_kts, "w").write(g)
+elif os.path.exists(root_groovy):
+    g = open(root_groovy).read()
+    if "JavaVersion.VERSION_17" not in g:
+        g += (
+            "\nsubprojects {\n"
+            "    afterEvaluate { project ->\n"
+            "        if (project.hasProperty('android')) {\n"
+            "            project.android {\n"
+            "                compileOptions {\n"
+            "                    sourceCompatibility JavaVersion.VERSION_17\n"
+            "                    targetCompatibility JavaVersion.VERSION_17\n"
+            "                }\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n"
+            "        kotlinOptions { jvmTarget = '17' }\n"
+            "    }\n"
+            "}\n"
+        )
+        open(root_groovy, "w").write(g)
+
 # store id tied to the app name (namespace / Kotlin package stay com.mttlhub.mttl_hub)
 for gf in (kts, groovy):
     if os.path.exists(gf):
