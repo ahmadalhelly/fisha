@@ -272,58 +272,12 @@ elif os.path.exists(groovy):
     open(groovy, "w").write(g)
 else:
     raise SystemExit("no app build.gradle found")
-# all modules (Java and Kotlin) on JVM 17, so a plugin cannot mix 11 and 1.8 (breaks assembleRelease).
-# plugins.withId runs when each Android plugin is applied, so it works even after the app module is evaluated.
-root_kts = os.path.join(APP, "android", "build.gradle.kts")
-root_groovy = os.path.join(APP, "android", "build.gradle")
-if os.path.exists(root_kts):
-    g = open(root_kts).read()
-    if "JVM_17" not in g:
-        g += (
-            "\nsubprojects {\n"
-            '    plugins.withId("com.android.library") {\n'
-            "        extensions.configure<com.android.build.gradle.BaseExtension> {\n"
-            "            compileOptions {\n"
-            "                sourceCompatibility = JavaVersion.VERSION_17\n"
-            "                targetCompatibility = JavaVersion.VERSION_17\n"
-            "            }\n"
-            "        }\n"
-            "    }\n"
-            '    plugins.withId("com.android.application") {\n'
-            "        extensions.configure<com.android.build.gradle.BaseExtension> {\n"
-            "            compileOptions {\n"
-            "                sourceCompatibility = JavaVersion.VERSION_17\n"
-            "                targetCompatibility = JavaVersion.VERSION_17\n"
-            "            }\n"
-            "        }\n"
-            "    }\n"
-            "    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {\n"
-            '        kotlinOptions { jvmTarget = "17" }  // JVM_17\n'
-            "    }\n"
-            "}\n"
-        )
-        open(root_kts, "w").write(g)
-elif os.path.exists(root_groovy):
-    g = open(root_groovy).read()
-    if "JavaVersion.VERSION_17" not in g:
-        g += (
-            "\nsubprojects {\n"
-            "    plugins.withId('com.android.library') {\n"
-            "        project.extensions.configure(com.android.build.gradle.BaseExtension) {\n"
-            "            compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }\n"
-            "        }\n"
-            "    }\n"
-            "    plugins.withId('com.android.application') {\n"
-            "        project.extensions.configure(com.android.build.gradle.BaseExtension) {\n"
-            "            compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }\n"
-            "        }\n"
-            "    }\n"
-            "    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n"
-            "        kotlinOptions { jvmTarget = '17' }\n"
-            "    }\n"
-            "}\n"
-        )
-        open(root_groovy, "w").write(g)
+# a plugin (file_picker) builds Java 11 with Kotlin 1.8; Kotlin's documented switch turns that check into a warning
+props_path = os.path.join(APP, "android", "gradle.properties")
+pg = open(props_path).read() if os.path.exists(props_path) else ""
+if "kotlin.jvm.target.validation.mode" not in pg:
+    pg = pg.rstrip("\n") + "\nkotlin.jvm.target.validation.mode=warning\n"
+    open(props_path, "w").write(pg)
 
 # store id tied to the app name (namespace / Kotlin package stay com.mttlhub.mttl_hub)
 for gf in (kts, groovy):
