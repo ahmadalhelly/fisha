@@ -279,6 +279,24 @@ if "kotlin.jvm.target.validation.mode" not in pg:
     pg = pg.rstrip("\n") + "\nkotlin.jvm.target.validation.mode=warning\n"
     open(props_path, "w").write(pg)
 
+# plugins built against an older Android SDK (file_picker: 34) fail AAR checks that need 36;
+# raise them in finalizeDsl (the same hook Flutter's Gradle plugin uses), registered before ":app" evaluation
+root_kts = os.path.join(APP, "android", "build.gradle.kts")
+if os.path.exists(root_kts):
+    rk = open(root_kts).read()
+    if "LibraryAndroidComponentsExtension" not in rk:
+        hook = 'subprojects {\n    project.evaluationDependsOn(":app")'
+        sdk = (
+            "subprojects {\n"
+            "    plugins.withId(\"com.android.library\") {\n"
+            "        extensions.configure<com.android.build.api.variant.LibraryAndroidComponentsExtension> {\n"
+            "            finalizeDsl { if ((it.compileSdk ?: 0) < 36) it.compileSdk = 36 }\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
+        rk = rk.replace(hook, sdk + hook, 1) if hook in rk else rk + "\n" + sdk
+        open(root_kts, "w").write(rk)
 # store id tied to the app name (namespace / Kotlin package stay com.mttlhub.mttl_hub)
 for gf in (kts, groovy):
     if os.path.exists(gf):
