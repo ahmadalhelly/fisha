@@ -8,6 +8,7 @@ struct Known;
 struct Sched;
 struct Autom;
 struct HubUser;
+struct ELog; struct PeakLog; struct SseClient; struct PubMark;   // for the Arduino-generated prototypes
 struct ApiRes;
 struct OwnerDev;
 struct PairReq;
@@ -114,6 +115,9 @@ struct PairReq;
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
+#include <memory>
+#include <functional>
+#include <new>
 #include "mqtt_client.h"
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
@@ -165,7 +169,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.37";
+const char* FW_VERSION = "2.15.38";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -195,7 +199,14 @@ MrY=
 const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
 const float STRIP_MAX_W = 3500;                   // v2.15.9 user rule: 3500 W per strip in total
-const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 40, MAX_EVENTS = 40, MAX_SSE = 4;
+// v2.15.38: 10 strips need the hub build with more network sockets (firmware/platformio.ini, CONFIG_LWIP_MAX_SOCKETS=26).
+// The stock Arduino build has 16 sockets: the hub itself uses ~13 at most, so it stays at 6 strips there.
+#if CONFIG_LWIP_MAX_SOCKETS >= 26
+const uint8_t  MAX_STRIPS = 10;
+#else
+const uint8_t  MAX_STRIPS = 6;
+#endif
+const uint8_t  DIAG_EVERY = 3, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 40, MAX_EVENTS = 40, MAX_SSE = 4;
 const uint8_t  OLD_MAX_AUTO = 10;   // v2.15.22 raised MAX_AUTO 10 -> 40; NVS blobs saved before that are this size
 const int      ELOG_DAYS = 90;
 
@@ -217,6 +228,11 @@ struct PeakLog {                                 // per-strip daily highest tota
   uint16_t pk[ELOG_DAYS];
   int32_t dayOf[ELOG_DAYS];
 };
+// v2.15.38: RAM keeps only the running day of each log (the first fields of ELog / PeakLog); the 90-day history stays in
+// its file and is read into a short-lived buffer when it changes (once a day) or the app asks for it. Frees ~2.3 KB
+// of RAM per strip, which 10 strips need.
+struct ElogHead { uint32_t magic = 0; int32_t day = 0; uint32_t base[4] = {0, 0, 0, 0}; };
+struct PeakHead { uint32_t magic = 0; int32_t day = 0; uint16_t today = 0; };
 
 struct Strip {
   WiFiClient c;
@@ -268,14 +284,17 @@ struct ApiRes { bool ok; String err; String data; };
 struct Note { String type, mac, msg; int outlet; };   // queued phone notification (defined early for Arduino auto-prototypes)
 struct NoteMsg { char topic[68]; char title[200]; char body[160]; uint8_t high; };   // handed to the notification task
 // v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
-struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };
+struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[10][13]; char pw[20]; };   // v2.15.38: 10 strips (was 6)
+struct HubUserV1 { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };   // saved before v2.15.38
 // v2.15.26: HubUser.rsv holds extra permissions the owner grants on top of the role (admins have them all)
 const uint8_t P_AUTO = 1, P_PROT = 2, P_SFW = 4, P_WIFI = 8, P_HUBFW = 16, P_EXPORT = 32;
 struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
+struct UsersNVV1 { uint32_t magic; uint8_t count; HubUserV1 u[10]; };
+const uint8_t USER_STRIPS = 10;                    // strips a member can be given one by one (the rest: "all strips")
 
 Strip strips[MAX_STRIPS];
-ELog elogs[MAX_STRIPS];
-PeakLog peaks[MAX_STRIPS];
+ElogHead elogs[MAX_STRIPS];
+PeakHead peaks[MAX_STRIPS];
 uint32_t peakSavedAt[MAX_STRIPS];
 Timer timers[MAX_TIMERS];
 Sched scheds[MAX_SCHED];
@@ -328,6 +347,8 @@ struct SubT {
 };
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
+volatile bool liveDirty = false;               // v2.15.38: only report numbers changed (see ssePump)
+volatile bool mqttHeadDirty = true;            // v2.15.38: something besides numbers changed: the cloud head follows
 
 // MQTT
 struct MqttCmd { char payload[640]; char topic[96]; };
@@ -664,8 +685,12 @@ void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
   Serial.printf("[tx %s] up:connect:%s:****\n", s.mac.c_str(), ssid.c_str());
 }
 
-void mqttPub(const String& topic, const String& payload, int qos, bool retain);
+bool mqttPub(const String& topic, const String& payload, int qos, bool retain);
 bool userHas(const HubUser& u, const String& macIn);
+String userStateHeadJson(const HubUser& u);
+void pubMarksReset();
+void clearUserStrips(const HubUser& u, bool all);
+bool stateStream(const HubUser* u, const std::function<bool(const String&)>& put);
 void mqttLock();
 void mqttUnlock();
 extern uint32_t mqttOutDropped;
@@ -856,8 +881,68 @@ bool loadBlob(const String& key, void* d, size_t n) {
   if (fileSave("/" + key, d, n)) cfg.remove(key.c_str());
   return true;
 }
-void saveElog(int i) { saveBlob("e" + strips[i].mac, &elogs[i], sizeof(ELog)); }
-void savePeak(int i) { saveBlob("k" + strips[i].mac, &peaks[i], sizeof(PeakLog)); peakSavedAt[i] = millis(); }
+// v2.15.38: full log in a temporary buffer (caller hands it to elogPut or deletes it). null = no memory right now, or the
+// file is there but could not be read (never overwritten then). The running day in RAM wins over the file.
+ELog* elogGet(int i) {
+  ELog* el = new (std::nothrow) ELog();
+  if (!el) return nullptr;
+  String key = "e" + strips[i].mac;
+  if (!loadBlob(key, el, sizeof(ELog)) || el->magic != 0xE1E1) {
+    if (fsOk && LittleFS.exists("/" + key)) { delete el; return nullptr; }
+    memset(el, 0, sizeof(ELog));
+    el->magic = 0xE1E1;
+    for (int d = 0; d < ELOG_DAYS; d++) el->dayOf[d] = -1;
+  }
+  const ElogHead& h = elogs[i];
+  if (h.magic == 0xE1E1) { el->day = h.day; memcpy(el->base, h.base, sizeof el->base); }
+  return el;
+}
+void elogPut(int i, ELog* el) {
+  ElogHead& h = elogs[i];
+  h.magic = 0xE1E1; h.day = el->day; memcpy(h.base, el->base, sizeof h.base);
+  saveBlob("e" + strips[i].mac, el, sizeof(ELog));
+  delete el;
+}
+PeakLog* peakGet(int i) {
+  PeakLog* pl = new (std::nothrow) PeakLog();
+  if (!pl) return nullptr;
+  String key = "k" + strips[i].mac;
+  if (!loadBlob(key, pl, sizeof(PeakLog)) || pl->magic != 0xBEA7) {
+    if (fsOk && LittleFS.exists("/" + key)) { delete pl; return nullptr; }
+    memset(pl, 0, sizeof(PeakLog));
+    pl->magic = 0xBEA7;
+    for (int d = 0; d < ELOG_DAYS; d++) pl->dayOf[d] = -1;
+  }
+  const PeakHead& h = peaks[i];
+  if (h.magic == 0xBEA7) { pl->day = h.day; pl->today = h.today; }
+  return pl;
+}
+void peakPut(int i, PeakLog* pl) {
+  PeakHead& h = peaks[i];
+  h.magic = 0xBEA7; h.day = pl->day; h.today = pl->today;
+  saveBlob("k" + strips[i].mac, pl, sizeof(PeakLog));
+  peakSavedAt[i] = millis();
+  delete pl;
+}
+// RAM copy of the running day, read once when the strip comes online (retried on its next report when memory is short)
+bool histHeads(int i) {
+  if (elogs[i].magic != 0xE1E1) {
+    ELog* el = elogGet(i);
+    if (!el) return false;
+    ElogHead& h = elogs[i];
+    h.magic = 0xE1E1; h.day = el->day; memcpy(h.base, el->base, sizeof h.base);
+    delete el;
+  }
+  if (peaks[i].magic != 0xBEA7) {
+    PeakLog* pl = peakGet(i);
+    if (!pl) return false;
+    PeakHead& h = peaks[i];
+    h.magic = 0xBEA7; h.day = pl->day; h.today = pl->today;
+    delete pl;
+    peakSavedAt[i] = millis();
+  }
+  return true;
+}
 
 void loadStripCfg(int i) {
   Strip& s = strips[i];
@@ -873,41 +958,34 @@ void loadStripCfg(int i) {
   else memset(s.autoOffMin, 0, sizeof(s.autoOffMin));
   if (cfg.getBytesLength(("x" + s.mac).c_str()) == sizeof(s.ampX2)) cfg.getBytes(("x" + s.mac).c_str(), s.ampX2, sizeof(s.ampX2));
   else memset(s.ampX2, 0, sizeof(s.ampX2));
-  ELog& el = elogs[i];
-  loadBlob("e" + s.mac, &el, sizeof(ELog));
-  if (el.magic != 0xE1E1) {
-    memset(&el, 0, sizeof(ELog));
-    el.magic = 0xE1E1;
-    for (int d = 0; d < ELOG_DAYS; d++) el.dayOf[d] = -1;
-  }
-  PeakLog& pl = peaks[i];
-  loadBlob("k" + s.mac, &pl, sizeof(PeakLog));
-  if (pl.magic != 0xBEA7) {
-    memset(&pl, 0, sizeof(PeakLog));
-    pl.magic = 0xBEA7;
-    for (int d = 0; d < ELOG_DAYS; d++) pl.dayOf[d] = -1;
-  }
-  peakSavedAt[i] = millis();
+  elogs[i] = ElogHead();                         // slot may have held another strip
+  peaks[i] = PeakHead();
+  histHeads(i);
 }
 
 void peakUpdate(int i, float watts) {
-  if (!timeOk()) return;
-  PeakLog& pl = peaks[i];
+  if (!timeOk() || !histHeads(i)) return;
+  PeakHead& h = peaks[i];
   int32_t today = localDay();
-  if (pl.day != today) {
-    if (pl.day) {
-      int idx = ((pl.day % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
-      pl.pk[idx] = pl.today;
-      pl.dayOf[idx] = pl.day;
+  if (h.day != today) {
+    PeakLog* pl = peakGet(i);
+    if (!pl) return;                               // no memory now: next report tries again
+    if (pl->day) {
+      int idx = ((pl->day % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
+      pl->pk[idx] = pl->today;
+      pl->dayOf[idx] = pl->day;
     }
-    pl.day = today;
-    pl.today = 0;
-    savePeak(i);
+    pl->day = today;
+    pl->today = 0;
+    peakPut(i, pl);
   }
   uint16_t w = (uint16_t)constrain(watts, 0.0f, 65000.0f);
-  if (w > pl.today) {
-    pl.today = w;
-    if (millis() - peakSavedAt[i] > 600000) savePeak(i);   // at most every 10 min
+  if (w > h.today) {
+    h.today = w;
+    if (millis() - peakSavedAt[i] > 600000) {      // at most every 10 min
+      PeakLog* pl = peakGet(i);
+      if (pl) peakPut(i, pl);
+    }
   }
 }
 
@@ -980,7 +1058,7 @@ void loadGlobals() {
 }
 
 // ---------- strips the hub has seen (shown as offline instead of disappearing) ----------
-const int MAX_KNOWN = 12;
+const int MAX_KNOWN = 16;
 Known known[MAX_KNOWN];
 int knownCount = 0;
 
@@ -1182,15 +1260,19 @@ bool setOutlets(Strip& s, int outlet, bool on) {
 
 // ---------- energy ----------
 void energyUpdate(int i) {
-  if (!timeOk()) return;
+  if (!timeOk() || !histHeads(i)) return;
   Strip& s = strips[i];
-  ELog& el = elogs[i];
+  const ElogHead& h = elogs[i];
   int32_t today = localDay();
-  bool changed = false;
+  bool changed = h.day == 0 || today != h.day;
+  for (int k = 0; k < 4; k++) changed |= s.o[k].energyWh < h.base[k];   // counter reset
+  if (!changed) return;
+  ELog* elp = elogGet(i);
+  if (!elp) return;                                // no memory now: next report tries again
+  ELog& el = *elp;
   if (el.day == 0) {
     el.day = today;
     for (int k = 0; k < 4; k++) el.base[k] = s.o[k].energyWh;
-    changed = true;
   } else if (today != el.day) {
     int idx = ((el.day % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
     for (int k = 0; k < 4; k++) {
@@ -1200,11 +1282,10 @@ void energyUpdate(int i) {
     }
     el.dayOf[idx] = el.day;
     el.day = today;
-    changed = true;
   } else {
-    for (int k = 0; k < 4; k++) if (s.o[k].energyWh < el.base[k]) { el.base[k] = s.o[k].energyWh; changed = true; }  // counter reset
+    for (int k = 0; k < 4; k++) if (s.o[k].energyWh < el.base[k]) el.base[k] = s.o[k].energyWh;
   }
-  if (changed) saveElog(i);
+  elogPut(i, elp);
 }
 
 
@@ -1447,7 +1528,7 @@ bool tryParseInfo(int i) {
   energyUpdate(i);
   peakUpdate(i, total);
   evalStrip(i);
-  stateDirty = true;
+  liveDirty = true;                              // v2.15.38: numbers only; anything else that changed sets stateDirty itself
   return true;
 }
 
@@ -1839,7 +1920,8 @@ uint32_t stateDevicesBytes(const HubUser* u) {
   return n;
 }
 
-String buildStateJson() {
+// v2.15.38: everything in the owner's state up to the strips ("devices":[ included)
+String stateHeadJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
              "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
              ",\"uptime_s\":" + String(millis() / 1000) + ",\"nvs\":\"" + nvsId + "\"" +
@@ -1855,23 +1937,41 @@ String buildStateJson() {
              ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
              ",\"reset\":\"" + resetText() + "\"" + ",\"auth\":" + authJson() +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
-  j.reserve(j.length() + stateDevicesBytes(nullptr) + 4);
+  return j;
+}
+// v2.15.38: the state goes out piece by piece (head, then one strip at a time, then "]}") to whatever "put" sends it to.
+// With 10 strips the whole state in one String is ~13 KB, more than the hub often has free in one block; this way the
+// biggest piece is the head or one strip. put returns false to stop (send failed); an empty piece also stops (no memory).
+bool stateStream(const HubUser* u, const std::function<bool(const String&)>& put) {
+  {
+    String h = u ? userStateHeadJson(*u) : stateHeadJson();
+    if (!h.length() || !put(h)) return false;
+  }
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
-    if (!strips[i].used || !strips[i].identified) continue;
-    if (!first) j += ",";
-    j += stripJson(i);
+    if (!strips[i].used || !strips[i].identified || (u && !userHas(*u, strips[i].mac))) continue;
+    if (!first && !put(",")) return false;
+    String d = stripJson(i);
+    if (!d.length() || !put(d)) return false;
     first = false;
   }
   for (int k = 0; k < knownCount; k++) {
-    if (findStrip(known[k].mac) >= 0) continue;
-    if (!first) j += ",";
-    j += offlineStripJson(known[k]);
+    if (findStrip(known[k].mac) >= 0 || (u && !userHas(*u, known[k].mac))) continue;
+    if (!first && !put(",")) return false;
+    String d = offlineStripJson(known[k]);
+    if (!d.length() || !put(d)) return false;
     first = false;
   }
-  j += "]}";        // v2.15.36: was "return j + \"]}\"", a second full copy of the state the heap often couldn't give
+  return put("]}");
+}
+// the whole state in one String (MQTT, cloud "state" requests): reserved once, then filled piece by piece
+String stateJsonFor(const HubUser* u) {
+  String j;
+  j.reserve(700 + stateDevicesBytes(u));
+  if (!stateStream(u, [&](const String& p) { return j.concat(p); })) return String();
   return j;
 }
+String buildStateJson() { return stateJsonFor(nullptr); }
 
 String schedJson(const Sched& c) {
   return "{\"sid\":" + String(c.id) + ",\"mac\":\"" + String(c.mac) + "\",\"outlet\":" + String(c.outlet) + ",\"on\":" + (c.on ? "true" : "false") +
@@ -2014,9 +2114,15 @@ String eventsJson() {
   }
   return j + "]}";
 }
-String energyJson(int i) {
+String energyJson(int i) {                        // "" = not enough memory right now
   const Strip& s = strips[i];
-  const ELog& el = elogs[i];
+  ELog* elp = elogGet(i);
+  if (!elp) return "";
+  PeakLog* plp = peakGet(i);
+  if (!plp) { delete elp; return ""; }
+  std::unique_ptr<ELog> elHold(elp);
+  std::unique_ptr<PeakLog> plHold(plp);
+  const ELog& el = *elp;
   String j = "{\"mac\":\"" + s.mac + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"today\":" +
              String(el.day ? civilFromDays(el.day) : 0) + ",\"today_wh\":[";
   for (int k = 0; k < 4; k++) {
@@ -2024,7 +2130,7 @@ String energyJson(int i) {
     uint32_t c = s.o[k].energyWh;
     j += String(el.day && c >= el.base[k] ? c - el.base[k] : 0);
   }
-  const PeakLog& pl = peaks[i];
+  const PeakLog& pl = *plp;
   j += "],\"today_peak_w\":" + String(pl.day == el.day ? pl.today : 0) + ",\"days\":[";
   bool first = true;
   for (int back = 1; back <= ELOG_DAYS; back++) {
@@ -2048,23 +2154,41 @@ ApiRes okRes();
 ApiRes errRes(const String& e);
 void publishUserState(const HubUser& u);
 const uint32_t USERS_MAGIC = 0x55535231;
+// one buffer for loading and saving the users blob (both run on the main loop only)
+union UsersBuf { UsersNV v2; UsersNVV1 v1; };
+static UsersBuf usersBuf;
+const uint32_t USERS_MAGIC2 = 0x55535232;          // v2.15.38 layout: 10 strips per member
 void loadUsers() {
   Preferences up; up.begin("users", true);
-  static UsersNV nv;
-  memset(&nv, 0, sizeof nv);
-  if (up.getBytesLength("list") == sizeof nv) up.getBytes("list", &nv, sizeof nv);
+  UsersBuf& b = usersBuf;
+  memset(&b, 0, sizeof b);
+  // v2.15.38 saves to "list2" and leaves the old "list" as it was, so going back to an older firmware keeps its members
+  size_t len = up.getBytesLength("list2");
+  if (len == sizeof(UsersNV)) up.getBytes("list2", &b, len);
+  else if ((len = up.getBytesLength("list")) == sizeof(UsersNVV1)) up.getBytes("list", &b, len);
   up.end();
   userCount = 0;
-  if (nv.magic != USERS_MAGIC) return;
-  for (int i = 0; i < nv.count && i < MAX_USERS; i++) if (nv.u[i].id[0]) users[userCount++] = nv.u[i];
+  if (len == sizeof(UsersNV) && b.v2.magic == USERS_MAGIC2) {
+    for (int i = 0; i < b.v2.count && i < MAX_USERS; i++) if (b.v2.u[i].id[0]) users[userCount++] = b.v2.u[i];
+  } else if (len == sizeof(UsersNVV1) && b.v1.magic == USERS_MAGIC) {    // saved by v2.15: same fields, 6 strips
+    for (int i = 0; i < b.v1.count && i < MAX_USERS; i++) {
+      const HubUserV1& o = b.v1.u[i];
+      if (!o.id[0]) continue;
+      HubUser& u = users[userCount++];
+      memset(&u, 0, sizeof u);
+      memcpy(u.id, o.id, sizeof u.id); memcpy(u.name, o.name, sizeof u.name);
+      u.role = o.role; u.all = o.all; u.n = o.n > 6 ? 6 : o.n; u.rsv = o.rsv;
+      memcpy(u.strips, o.strips, sizeof o.strips); memcpy(u.pw, o.pw, sizeof u.pw);
+    }
+  }
 }
 void saveUsers() {
-  static UsersNV nv;
-  memset(&nv, 0, sizeof nv);
-  nv.magic = USERS_MAGIC; nv.count = userCount;
+  UsersNV& nv = usersBuf.v2;
+  memset(&usersBuf, 0, sizeof usersBuf);
+  nv.magic = USERS_MAGIC2; nv.count = userCount;
   for (int i = 0; i < userCount; i++) nv.u[i] = users[i];
   Preferences up;
-  bool ok = up.begin("users", false) && up.putBytes("list", &nv, sizeof nv) == sizeof nv;
+  bool ok = up.begin("users", false) && up.putBytes("list2", &nv, sizeof nv) == sizeof nv;
   up.end();
   if (!ok) saveFailed("family accounts");
 }
@@ -2078,14 +2202,14 @@ int findUser(const String& id) { for (int i = 0; i < userCount; i++) if (id == u
 bool userHas(const HubUser& u, const String& macIn) {
   if (u.all) return true;
   String m = macIn; m.toUpperCase();
-  for (int k = 0; k < u.n && k < 6; k++) if (m == u.strips[k]) return true;
+  for (int k = 0; k < u.n && k < USER_STRIPS; k++) if (m == u.strips[k]) return true;
   return false;
 }
 void parseStrips(HubUser& u, const String& list) {
   u.n = 0; memset(u.strips, 0, sizeof u.strips);
   for (String p : split(list, ',')) {
     p.trim(); p.toUpperCase();
-    if (p.length() == 12 && isHex(p) && u.n < 6) strlcpy(u.strips[u.n++], p.c_str(), 13);
+    if (p.length() == 12 && isHex(p) && u.n < USER_STRIPS) strlcpy(u.strips[u.n++], p.c_str(), 13);
   }
 }
 // v2.15.26: each member's Google email and photo link, kept apart from the users blob so its layout stays the same
@@ -2104,7 +2228,7 @@ String userJson(const HubUser& u) {
   String j = "{\"id\":\"" + String(u.id) + "\",\"name\":\"" + jsonEsc(String(u.name)) + "\",\"role\":" + String(u.role) +
              ",\"perms\":" + String(u.rsv & 0x3F) + ",\"email\":\"" + jsonEsc(profGet(u.id, 'e')) + "\",\"photo\":\"" +
              jsonEsc(profGet(u.id, 'p')) + "\",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
-  for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
+  for (int k = 0; k < u.n && k < USER_STRIPS; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
   return j + "]}";
 }
 
@@ -2332,6 +2456,7 @@ void exCollect() {
       users[userCount++] = j.u;
       saveUsers();
       publishUserState(j.u);
+      pubMarksReset();                           // v2.15.38: the new member gets its strips too
       String code = inviteCode(j.u, j.pw);
       j.data = "{\"code\":\"" + code + "\",\"user\":" + userJson(j.u) + "}";
       int pi = pairJobId ? pairFind(pairJobId) : -1;   // v2.15.13: an approved phone gets its invite on its next poll
@@ -2345,6 +2470,7 @@ void exCollect() {
     if (j.ok) {
       int i = findUser(j.u.id);
       mqttPub("mttl/" + hubId + "/u/" + String(j.u.id) + "/state", "", 1, true);
+      clearUserStrips(j.u, true);
       if (i >= 0) { for (int k = i; k < userCount - 1; k++) users[k] = users[k + 1]; userCount--; saveUsers(); }
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) || j.c1 == 404 ? j.c2 : j.c1);
   } else if (j.kind == 4) {                      // v2.15.14: server login for a phone that is already in
@@ -2424,7 +2550,8 @@ String actionMac(const String& p, const String& b) {
   }
   return jsonValue(b, "mac");
 }
-String userStateJson(const HubUser& u) {
+// v2.15.38: a member's state up to its strips ("devices":[ included); the strips follow through stateStream
+String userStateHeadJson(const HubUser& u) {
   String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
              ",\"lip\":\"" + WiFi.localIP().toString() + "\",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
   bool first = true;
@@ -2441,23 +2568,9 @@ String userStateJson(const HubUser& u) {
          ",\"repeat_s\":" + String(x.periodS) + "}";
   }
   j += "],\"devices\":[";
-  j.reserve(j.length() + stateDevicesBytes(&u) + 4);
-  first = true;
-  for (int i = 0; i < MAX_STRIPS; i++) {
-    if (!strips[i].used || !strips[i].identified || !userHas(u, strips[i].mac)) continue;
-    if (!first) j += ",";
-    j += stripJson(i);
-    first = false;
-  }
-  for (int k = 0; k < knownCount; k++) {
-    if (findStrip(known[k].mac) >= 0 || !userHas(u, known[k].mac)) continue;
-    if (!first) j += ",";
-    j += offlineStripJson(known[k]);
-    first = false;
-  }
-  j += "]}";        // v2.15.36: no second full copy (see buildStateJson)
   return j;
 }
+String userStateJson(const HubUser& u) { return stateJsonFor(&u); }
 // list actions answered per user (filtered to the user's strips)
 bool userList(const HubUser& u, const String& p, ApiRes& r) {
   String j;
@@ -2695,6 +2808,8 @@ ApiRes api(String path, const String& b) {
     users[i] = u;
     saveUsers();
     publishUserState(u);
+    clearUserStrips(u, false);                   // v2.15.38: strips taken away can no longer be read
+    pubMarksReset();                             // and strips given are sent
     return okRes();
   }
   if (path == "users_export") {                   // v2.15.0: family members with their passwords, for the owner's backup
@@ -2730,6 +2845,8 @@ ApiRes api(String path, const String& b) {
     users[i] = u;
     saveUsers();
     publishUserState(u);
+    clearUserStrips(u, false);
+    pubMarksReset();
     stateDirty = true;
     return okRes();
   }
@@ -2739,6 +2856,7 @@ ApiRes api(String path, const String& b) {
     if (i < 0) return errRes("no such user");
     if (!emqxReady()) {                           // nothing on the server to remove
       mqttPub("mttl/" + hubId + "/u/" + String(users[i].id) + "/state", "", 1, true);
+      clearUserStrips(users[i], true);
       for (int j = i; j < userCount - 1; j++) users[j] = users[j + 1];
       userCount--;
       saveUsers();
@@ -2793,6 +2911,7 @@ ApiRes api(String path, const String& b) {
     saveUsers();
     profSet(u.id, 'e', p.email);                  // v2.15.26: the family page shows each member's email
     publishUserState(u);
+    pubMarksReset();
     p.result = "\"code\":\"" + inviteCode(u, pw) + "\"";
     p.state = 2; p.at = millis();
     return okRes();
@@ -3024,15 +3143,21 @@ ApiRes api(String path, const String& b) {
   if (path == "energy") {
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
-    return okRes(energyJson(idx));
+    String ej = energyJson(idx);
+    if (!ej.length()) return errRes("busy, try again");
+    return okRes(ej);
   }
   if (path == "energy_restore") {                // v2.15.27 owner only {"mac","d":"yyyymmdd:w0:w1:w2:w3:peak;..."}: put saved daily history back
     if (apiSrc == 2) return errRes("forbidden");
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
-    ELog& el = elogs[idx];
-    PeakLog& pl = peaks[idx];
-    if (!el.day) return errRes("clock not set");
+    if (!histHeads(idx)) return errRes("busy, try again");
+    if (!elogs[idx].day) return errRes("clock not set");
+    ELog* elp = elogGet(idx);
+    PeakLog* plp = elp ? peakGet(idx) : nullptr;
+    if (!plp) { delete elp; return errRes("busy, try again"); }
+    ELog& el = *elp;
+    PeakLog& pl = *plp;
     String d = jsonValue(b, "d");
     int put = 0, pos = 0;
     while (pos < (int)d.length()) {
@@ -3061,7 +3186,7 @@ ApiRes api(String path, const String& b) {
       pl.dayOf[ix] = z;
       put++;
     }
-    if (put) { saveElog(idx); savePeak(idx); }
+    if (put) { elogPut(idx, elp); peakPut(idx, plp); } else { delete elp; delete plp; }
     return okRes("{\"restored\":" + String(put) + "}");
   }
   if (path == "amplimit") {
@@ -3177,14 +3302,17 @@ void webJsonNB(const String& body) {
   if (!sendStr(c, h, 300) || !sendStr(c, body, 1500)) { webSlow++; c.stop(); }
 }
 void stateBadDiag(uint32_t gotLen);
+// v2.15.38: streamed piece by piece (see stateStream), so no Content-Length: the body ends when the hub closes the link
 void handleState() {
   if (!guard()) return;
-  if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) webJsonNB(userStateJson(users[apiUserIdx]));
-  else {
-    String st = buildStateJson();
-    if (st.length() < 32) stateBadDiag(st.length());   // v2.15.34: the app's poll got an empty state
-    webJsonNB(st);
-  }
+  const HubUser* u = (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) ? &users[apiUserIdx] : nullptr;
+  NetworkClient& c = web.client();
+  SubT st("web_send");
+  uint32_t t0 = millis();                       // 1.5 s for the whole body, as before (not per piece)
+  bool ok = sendStr(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n", 300) &&
+            stateStream(u, [&](const String& p) { uint32_t used = millis() - t0; return used < 1800 && sendStr(c, p, 1800 - used); });
+  if (!ok) webSlow++;
+  c.stop();
 }
 
 int sseCount();
@@ -3731,7 +3859,7 @@ void handleSuForm() {
 struct SseClient { WiFiClient c; bool used = false, ready = false; String req; uint32_t since = 0; int userIdx = -1; };
 SseClient sse[MAX_SSE];
 int sseCount() { int n = 0; for (int i = 0; i < MAX_SSE; i++) n += sse[i].used && sse[i].ready; return n; }
-uint32_t lastSsePush = 0, lastSseBeat = 0;
+uint32_t lastSsePush = 0, lastSseBeat = 0, lastSseFull = 0;
 // v2.15.33 diagnostics (/api/health): live streams opened, closed by the hub because the phone didn't take the data
 // in time (or the send failed), closed by the phone, when the hub last closed one, and the size of the state it sends
 uint32_t sseOpened = 0, sseCut = 0, sseGone = 0, sseCutAt = 0, sseStateLen = 0, sseStateMax = 0;
@@ -3782,19 +3910,91 @@ bool sseWrite(WiFiClient& c, const char* ev, const String& body) {
 }
 void sseSend(const char* ev, const String& data) {
   SubT st("sse");
-  bool isState = !strcmp(ev, "state");
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
     if (!sse[i].c.connected()) { sseGone++; sse[i].c.stop(); sse[i] = SseClient(); continue; }
-    if (!isState && sse[i].userIdx >= 0 && ownerOnlyEvent(data)) continue;
-    bool ok;
-    if (isState && sse[i].userIdx >= 0 && sse[i].userIdx < userCount) ok = sseWrite(sse[i].c, ev, userStateJson(users[sse[i].userIdx]));
-    else ok = sseWrite(sse[i].c, ev, data);
-    if (!ok) {
+    if (sse[i].userIdx >= 0 && ownerOnlyEvent(data)) continue;
+    if (!sseWrite(sse[i].c, ev, data)) {
       sseCutNow();
       sse[i].c.stop();
       sse[i] = SseClient();
     }
+  }
+}
+const HubUser* sseUser(const SseClient& x) { return x.userIdx >= 0 && x.userIdx < userCount ? &users[x.userIdx] : nullptr; }
+// v2.15.38: one "state" event, streamed straight into the phone's socket a piece at a time (see stateStream)
+bool sseWriteState(WiFiClient& c, const HubUser* u) {
+  uint32_t t0 = millis(), len = 0;              // 250 ms for the whole event (the old three pieces had 80 ms each)
+  auto put = [&](const char* p, size_t n) { uint32_t used = millis() - t0; return used < 250 && sendNB(c, p, n, 250 - used); };
+  if (!put("event: state\ndata: ", 19)) return false;
+  bool ok = stateStream(u, [&](const String& p) { len += p.length(); return put(p.c_str(), p.length()); }) && put("\n\n", 2);
+  sseStateLen = len;
+  if (len > sseStateMax) sseStateMax = len;
+  return ok;
+}
+// v2.15.38: between full states the phones get only the numbers that change every report, per online strip (~170 bytes
+// a strip instead of ~1.2 KB): {"ts":..,"d":[{"mac":"..","v":230.1,"r":-60,"up":123,"o":[[on,W,kWh,°C,auto_off_in_s],..]}]}
+// The app merges them into the strips it got with the last "state".
+String liveJson(const HubUser* u) {
+  uint32_t n = 0;
+  for (int i = 0; i < MAX_STRIPS; i++) n += strips[i].used && strips[i].identified && (!u || userHas(*u, strips[i].mac));
+  String j;
+  j.reserve(32 + 200 * n);
+  j += "{\"ts\":";
+  j += (uint32_t)time(nullptr);
+  j += ",\"d\":[";
+  bool first = true;
+  uint32_t now = millis();
+  for (int i = 0; i < MAX_STRIPS; i++) {
+    const Strip& s = strips[i];
+    if (!s.used || !s.identified || (u && !userHas(*u, s.mac))) continue;
+    if (!first) j += ",";
+    first = false;
+    j += "{\"mac\":\"";
+    j += s.mac;
+    j += "\",\"v\":";
+    if (isnan(s.voltage)) j += "null"; else j += String(s.voltage, 1);
+    j += ",\"r\":";
+    if (s.hasRssi) j += s.rssi; else j += "null";
+    j += ",\"up\":";
+    j += (now - s.connectedAt) / 1000;
+    j += ",\"o\":[";
+    for (int k = 0; k < 4; k++) {
+      const Outlet& o = s.o[k];
+      long left = s.autoOffAt[k] ? (long)((int32_t)(s.autoOffAt[k] - now) / 1000) : -1;
+      if (k) j += ",";
+      j += o.on ? "[1," : "[0,";
+      j += String(o.powerW, 2);
+      j += ",";
+      j += String(o.energyWh / 1000.0f, 3);
+      j += ",";
+      j += o.tempC;
+      j += ",";
+      j += left < 0 ? -1L : left;
+      j += "]";
+    }
+    j += "]}";
+  }
+  j += "]}";
+  return j;
+}
+// sends "live" (only numbers) or the full "state" to every phone; a phone that can't take it in time is cut
+void ssePush(bool full) {
+  SubT st("sse");
+  String ownerLive;
+  for (int i = 0; i < MAX_SSE; i++) {
+    SseClient& x = sse[i];
+    if (!x.used || !x.ready) continue;
+    if (!x.c.connected()) { sseGone++; x.c.stop(); x = SseClient(); continue; }
+    const HubUser* u = sseUser(x);
+    bool ok;
+    if (full) ok = sseWriteState(x.c, u);
+    else if (u) { String lv = liveJson(u); ok = lv.length() > 8 && sseWrite(x.c, "live", lv); }
+    else {
+      if (!ownerLive.length()) ownerLive = liveJson(nullptr);
+      ok = ownerLive.length() > 8 && sseWrite(x.c, "live", ownerLive);
+    }
+    if (!ok) { sseCutNow(); x.c.stop(); x = SseClient(); }
   }
 }
 
@@ -3853,8 +4053,7 @@ void ssePump() {
         // v2.15.17: the SSE answers no longer wait on a phone that stopped reading (they could freeze the hub ~5-10 s)
         if (!sendStr(x.c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
                           "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n", 250)) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
-        String initData = (x.userIdx >= 0 && x.userIdx < userCount) ? userStateJson(users[x.userIdx]) : buildStateJson();
-        if (!sseWrite(x.c, "state", initData)) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
+        if (!sseWriteState(x.c, sseUser(x))) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
         x.ready = true;
         sseOpened++;
       } else if (millis() - x.since > 3000) { x.c.stop(); x = SseClient(); continue; }
@@ -3864,18 +4063,18 @@ void ssePump() {
   // v2.15.37: at most one state per second to the phones (was every 250 ms). Each push builds ~4 KB and copies it into
   // every phone's socket; four times a second that used up the hub's memory (2.15.36: ~25 refused requests a second,
   // network buffers among them) and nearly every live stream got cut.
-  if (stateDirty && millis() - lastSsePush > 1000) {
+  // v2.15.38: a strip report only changes numbers, so it sends "live" (~170 bytes a strip); the full state goes out when
+  // anything else changed (names, locks, settings, a strip came or went, ...) and every 15 s as a safety net.
+  if ((stateDirty || liveDirty) && millis() - lastSsePush > 1000) {
+    bool full = stateDirty || millis() - lastSseFull > 15000;
+    if (stateDirty) mqttHeadDirty = true;
     stateDirty = false;
+    liveDirty = false;
     lastSsePush = millis();
+    if (full) lastSseFull = millis();
     bool any = false;
     for (int i = 0; i < MAX_SSE; i++) any |= sse[i].used && sse[i].ready;
-    if (any) {
-      String st = buildStateJson();
-      sseStateLen = st.length();
-      if (sseStateLen > sseStateMax) sseStateMax = sseStateLen;
-      if (sseStateLen < 32) stateBadDiag(sseStateLen);
-      sseSend("state", st);
-    }
+    if (any) ssePush(full);
   }
   if (millis() - lastSseBeat > 15000) {
     lastSseBeat = millis();
@@ -3895,7 +4094,6 @@ void ssePump() {
 // ---------- MQTT cloud relay ----------
 uint32_t lastStatePub = 0;
 String lastRelaySig, lastProvPub;
-float lastPubPower = -1;
 
 static void mqttEvent(void*, esp_event_base_t, int32_t id, void* data) {
   esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
@@ -4009,20 +4207,21 @@ void mqttOutInit() {
 void mqttLock() { if (mqttMx) xSemaphoreTake(mqttMx, portMAX_DELAY); }
 void mqttUnlock() { if (mqttMx) xSemaphoreGive(mqttMx); }
 
-void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
-  if (!mqtt || !mqttUp || !topic.length() || !mqttOutQ) return;
+// true = queued (v2.15.38 reports it, so the per-strip publisher can try a refused copy again later)
+bool mqttPub(const String& topic, const String& payload, int qos, bool retain) {
+  if (!mqtt || !mqttUp || !topic.length() || !mqttOutQ) return false;
   // v2.15.32: a String whose building ran out of memory comes back empty with no buffer (c_str() == nullptr). That is
   // what crashed 2.15.30 (a user state right after connecting). Publishing it as "" would also wipe the retained state
   // on the server, so it is dropped; a real empty message ("") always has a buffer and still goes out.
-  if (!payload.c_str()) { mqttOutDropped++; return; }
+  if (!payload.c_str()) { mqttOutDropped++; return false; }
   SubT st("mqtt_pub");
   int len = payload.length();
   // nothing waiting: always take it, so one big state (many strips) can't be refused forever
-  if (mqttOutBytes && mqttOutBytes + len > (retain ? MQTT_OUT_STATE_BYTES : MQTT_OUT_MAX_BYTES)) { mqttOutDropped++; return; }
+  if (mqttOutBytes && mqttOutBytes + len > (retain ? MQTT_OUT_STATE_BYTES : MQTT_OUT_MAX_BYTES)) { mqttOutDropped++; return false; }
   MqttOut m;
   m.topic = strdup(topic.c_str());
   m.data = (char*)malloc(len + 1);
-  if (!m.topic || !m.data) { free(m.topic); free(m.data); mqttOutDropped++; return; }
+  if (!m.topic || !m.data) { free(m.topic); free(m.data); mqttOutDropped++; return false; }
   if (len) memcpy(m.data, payload.c_str(), len);
   m.data[len] = 0;
   m.len = len; m.qos = qos; m.retain = retain ? 1 : 0;
@@ -4034,7 +4233,9 @@ void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
     mqttOutBytes -= len;
     portEXIT_CRITICAL(&mqttOutMux);
     free(m.topic); free(m.data); mqttOutDropped++;
+    return false;
   }
+  return true;
 }
 
 String relaySignature() {
@@ -4056,8 +4257,156 @@ float totalPower() {
   return p;
 }
 
+// v2.15.38: the cloud state is split. mttl/<hub>/state (members: mttl/<hub>/u/<id>/state) is a small head: everything but
+// the strips, plus "strips":[MACs in order]. Each strip is its own retained message on mttl/<hub>/s/<MAC> (members:
+// mttl/<hub>/u/<id>/s/<MAC>), sent only when that strip changed. With 10 strips the old single state was ~13 KB, more
+// than the hub could build or queue, and it went out whole every 30 s and on every load change: far more EMQX traffic.
+String mqttHead(const HubUser* u) {
+  String h = u ? userStateHeadJson(*u) : stateHeadJson();
+  if (!h.endsWith("\"devices\":[")) return String();
+  h.remove(h.length() - 11);
+  h += "\"strips\":[";
+  bool first = true;
+  for (int i = 0; i < MAX_STRIPS; i++) {
+    if (!strips[i].used || !strips[i].identified || (u && !userHas(*u, strips[i].mac))) continue;
+    if (!first) h += ",";
+    h += "\"" + strips[i].mac + "\"";
+    first = false;
+  }
+  for (int k = 0; k < knownCount; k++) {
+    if (findStrip(known[k].mac) >= 0 || (u && !userHas(*u, known[k].mac))) continue;
+    if (!first) h += ",";
+    h += "\"" + known[k].mac + "\"";
+    first = false;
+  }
+  h += "]}";
+  return h;
+}
 void publishUserState(const HubUser& u) {
-  mqttPub("mttl/" + hubId + "/u/" + u.id + "/state", userStateJson(u), 0, true);
+  String h = mqttHead(&u);
+  if (h.length()) mqttPub("mttl/" + hubId + "/u/" + u.id + "/state", h, 0, true);   // "" would wipe the retained copy
+}
+
+// what must reach the cloud at once for one strip; numbers that drift (W, kWh, °C, V) follow their own pace
+uint32_t sigMix(uint32_t h, const void* p, size_t n) {
+  const uint8_t* b = (const uint8_t*)p;
+  while (n--) h = (h ^ *b++) * 16777619u;
+  return h;
+}
+uint32_t sigStr(uint32_t h, const String& v) { h = sigMix(h, v.c_str(), v.length()); return (h ^ 0x1F) * 16777619u; }
+uint32_t stripSig(const String& mac) {
+  uint32_t h = 2166136261u, flags = 0;
+  for (int k = 0; k <= 4; k++) flags |= (hasSched(mac, k) ? 1u : 0u) << k | (hasRule(mac, k) ? 1u : 0u) << (8 + k);
+  h = sigMix(h, &flags, 4);
+  int i = findStrip(mac);
+  if (i >= 0) {
+    const Strip& s = strips[i];
+    uint32_t bits = 1u << 31 | (s.masterLock ? 1u << 30 : 0) | (uint32_t)s.lockMask << 4 | (uint32_t)s.protMask << 8 |
+                    (uint32_t)s.keepMask << 12 | (uint32_t)s.notifyMask << 16;
+    for (int k = 0; k < 4; k++) bits |= (s.o[k].on ? 1u : 0u) << k | (s.autoOffAt[k] ? 1u : 0u) << (24 + k);
+    h = sigMix(h, &bits, 4);
+    h = sigMix(h, s.ampX2, sizeof s.ampX2);
+    h = sigMix(h, s.autoOffMin, sizeof s.autoOffMin);
+    h = sigStr(h, s.label);
+    for (int k = 0; k < 4; k++) h = sigStr(h, s.olabel[k]);
+    h = sigStr(h, s.fw);
+    h = sigStr(h, s.ip);
+    return h;
+  }
+  for (int k = 0; k < knownCount; k++) {
+    if (known[k].mac != mac) continue;
+    const Known& n = known[k];
+    uint32_t bits = (uint32_t)n.lock | (uint32_t)n.prot << 8 | (uint32_t)n.keep << 16 | (uint32_t)n.notify << 24;
+    h = sigMix(h, &bits, 4);
+    h = sigMix(h, n.amp, sizeof n.amp);
+    h = sigStr(h, n.label);
+    for (int q = 0; q < 4; q++) h = sigStr(h, n.olabel[q]);
+    return h;
+  }
+  return 0;
+}
+// one mark per strip the cloud has: the last thing sent and which copies (bit 0 owner, bit 1+u member u) still wait
+struct PubMark { char mac[13]; uint32_t sig, at; float pw; uint16_t need, wipe; };   // wipe: member copies to clear
+PubMark pubMarks[MAX_KNOWN];
+void pubMarksReset() { for (int m = 0; m < MAX_KNOWN; m++) { pubMarks[m].at = 0; pubMarks[m].sig = 0; } }
+float stripPower(const Strip& s) { float p = 0; for (int k = 0; k < 4; k++) p += s.o[k].on ? s.o[k].powerW : 0; return p; }
+PubMark* pubMark(const String& mac) {
+  PubMark* freeSlot = nullptr;
+  for (int m = 0; m < MAX_KNOWN; m++) {
+    if (!strcmp(pubMarks[m].mac, mac.c_str())) return &pubMarks[m];
+    if (!pubMarks[m].mac[0] && !freeSlot) freeSlot = &pubMarks[m];
+  }
+  if (freeSlot) { *freeSlot = PubMark(); strlcpy(freeSlot->mac, mac.c_str(), sizeof freeSlot->mac); }
+  return freeSlot;
+}
+// sends the strips that changed, a copy at a time while the send queue has room; the rest go on a later pass
+void publishStrips() {
+  if (!mqttUp) return;
+  String base = "mttl/" + hubId + "/";
+  uint32_t now = millis();
+  // strips removed in the app: wipe their retained copies (owner and every member)
+  for (int m = 0; m < MAX_KNOWN; m++) {
+    PubMark& pm = pubMarks[m];
+    if (!pm.mac[0] || macKnown(pm.mac)) continue;
+    bool all = mqttPub(base + "s/" + pm.mac, "", 1, true);
+    for (int u = 0; u < userCount && all; u++) all = mqttPub(base + "u/" + users[u].id + "/s/" + pm.mac, "", 1, true);
+    if (!all) return;                              // queue full: the whole wipe again on a later pass
+    pm = PubMark();
+  }
+  for (int pass = 0; pass < 2; pass++) {          // online strips, then the remembered (offline) ones
+    int count = pass ? knownCount : MAX_STRIPS;
+    for (int x = 0; x < count; x++) {
+      String mac;
+      int si = -1;
+      if (!pass) { if (!strips[x].used || !strips[x].identified) continue; si = x; mac = strips[x].mac; }
+      else { if (findStrip(known[x].mac) >= 0) continue; mac = known[x].mac; }
+      PubMark* pm = pubMark(mac);
+      if (!pm) continue;
+      for (int u = 0; u < userCount && u < 15 && pm->wipe; u++) {   // a member lost this strip: clear its copy
+        uint16_t bit = 1 << (u + 1);
+        if (!(pm->wipe & bit)) continue;
+        if (!userHas(users[u], mac) && !mqttPub(base + "u/" + users[u].id + "/s/" + mac, "", 1, true)) return;
+        pm->wipe &= ~bit;
+      }
+      uint32_t sig = stripSig(mac);
+      float pw = si >= 0 ? stripPower(strips[si]) : 0;
+      bool due = !pm->at || pm->sig != sig ||
+                 (si >= 0 && now - pm->at > 3000 && fabs(pw - pm->pw) > max(2.0f, pm->pw * 0.1f)) ||
+                 (si >= 0 && now - pm->at > 60000);
+      if (due) {
+        pm->need = 1;
+        for (int u = 0; u < userCount && u < 15; u++) if (userHas(users[u], mac)) pm->need |= 1 << (u + 1);
+        pm->sig = sig; pm->at = now ? now : 1; pm->pw = pw;
+      }
+      if (!pm->need) continue;
+      String body = si >= 0 ? stripJson(si) : offlineStripJson(known[x]);
+      if (!body.length()) return;                  // out of memory: later
+      if (pm->need & 1) { if (!mqttPub(base + "s/" + mac, body, 0, true)) return; pm->need &= ~1; }
+      for (int u = 0; u < userCount && u < 15; u++) {
+        uint16_t bit = 1 << (u + 1);
+        if (!(pm->need & bit)) continue;
+        if (!userHas(users[u], mac)) { pm->need &= ~bit; continue; }   // members changed since the mark was set
+        if (!mqttPub(base + "u/" + users[u].id + "/s/" + mac, body, 0, true)) return;
+        pm->need &= ~bit;
+      }
+    }
+  }
+}
+// a member lost strips: their copies are wiped by publishStrips (paced, retried until the queue takes them).
+// all = the member is being removed: wiped at once, as far as the queue takes them (their server login goes too).
+void clearUserStrips(const HubUser& u, bool all) {
+  if (all) {
+    String base = "mttl/" + hubId + "/u/" + u.id + "/s/";
+    for (int k = 0; k < knownCount; k++) mqttPub(base + known[k].mac, "", 1, true);
+    return;
+  }
+  int ui = findUser(u.id);
+  if (ui < 0 || ui >= 15) return;
+  for (int k = 0; k < knownCount; k++) {
+    if (userHas(u, known[k].mac)) continue;
+    PubMark* pm = pubMark(known[k].mac);
+    if (pm) pm->wipe |= 1 << (ui + 1);
+  }
 }
 void mqttRestart() {
   mqttLock();
@@ -4077,11 +4426,13 @@ void mqttHealth() {
   if (e != mqttErr) { mqttErr = e; stateDirty = true; if (e.length()) Serial.printf("[mqtt] down: %s (%d)\n", e.c_str(), (int)mqttErrCode); }
 }
 void publishState() {
-  mqttPub(tState, buildStateJson(), 0, true);
+  String h = mqttHead(nullptr);
+  if (h.length()) mqttPub(tState, h, 0, true);
+  h = String();
   for (int u = 0; u < userCount; u++) publishUserState(users[u]);
+  mqttHeadDirty = false;
   lastStatePub = millis();
   lastRelaySig = relaySignature();
-  lastPubPower = totalPower();
   lastProvPub = provState;
 }
 
@@ -4093,7 +4444,9 @@ void mqttProcess() {
     mqttPub(tStatus, "online", 1, true);
     mqttPub(tInfo, "{\"hub\":\"" + hubId + "\",\"fw\":\"" + FW_VERSION + "\",\"ip\":\"" + WiFi.localIP().toString() +
             "\",\"web_port\":" + String(WEB_PORT) + ",\"sse_port\":" + String(SSE_PORT) + "}", 1, true);
+    pubMarksReset();                              // v2.15.38: every strip again after a reconnect
     publishState();
+    publishStrips();
     flushEventOutbox();
   }
   MqttCmd c;
@@ -4128,10 +4481,14 @@ void mqttProcess() {
     publishState();
   }
   if (!mqttUp) return;
-  float p = totalPower();
-  bool powerMoved = lastPubPower < 0 || fabs(p - lastPubPower) > max(2.0f, lastPubPower * 0.1f);
-  if (relaySignature() != lastRelaySig || provState != lastProvPub ||
-      (powerMoved && millis() - lastStatePub > 3000) || millis() - lastStatePub > 30000)
+  static uint32_t lastStripScan = 0;
+  if (millis() - lastStripScan >= 500) {          // v2.15.38: each strip on its own, when it changed (checked twice a second)
+    lastStripScan = millis();
+    publishStrips();
+  }
+  // the head: when something else changed (seen by the phones' stream), the timers moved, or every 30 s
+  if (relaySignature() != lastRelaySig || provState != lastProvPub || (mqttHeadDirty && millis() - lastStatePub > 2000) ||
+      millis() - lastStatePub > 30000)
     publishState();
 }
 
@@ -4815,7 +5172,7 @@ void setup() {
     for (int i = 0; i < knownCount; i++) { cfg.remove(("m" + known[i].mac).c_str()); refreshKnown(known[i].mac); }
     cfg.putUChar("nver", 2);
   }
-  for (int i = 0; i < MAX_STRIPS; i++) { memset(&elogs[i], 0, sizeof(ELog)); }
+  for (int i = 0; i < MAX_STRIPS; i++) { elogs[i] = ElogHead(); peaks[i] = PeakHead(); }
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
                  provDiscReason = info.wifi_sta_disconnected.reason; provStaEvents++;
                  if (!provRequested && provState != "running") { wifiLastReason = info.wifi_sta_disconnected.reason; wifiDiscCount++; wifiDiscAt = millis(); }
