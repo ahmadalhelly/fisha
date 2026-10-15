@@ -101,6 +101,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
               style: OutlinedButton.styleFrom(foregroundColor: C.accent, side: BorderSide(color: C.tileOnBorder), minimumSize: const Size(0, 48)),
             ),
             if (_bytes != null) Text('${(_bytes!.length / 1024).toStringAsFixed(0)} KB', textDirection: TextDirection.ltr, style: mono(12, color: C.muted)),
+            if (!s.isShared)
             TextField(
               controller: _pass,
               obscureText: _obscure,

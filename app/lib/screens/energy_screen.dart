@@ -1,5 +1,9 @@
 import 'dart:math' as math;
 
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -128,6 +132,38 @@ class _EnergyScreenState extends State<EnergyScreen> {
       d = DateTime(d.year, d.month, d.day - 1);
     }
     return out;
+  }
+
+  // 2.0.22: the selected period as a CSV (Excel opens it): one row per day, strip and outlet, with kWh and cost
+  Future<void> _export() async {
+    final days = _period;
+    if (days.isEmpty) return;
+    final names = {for (final st in s.allStrips) st.mac.toUpperCase(): s.stripName(st)};
+    final b = StringBuffer('\uFEFF${_tr('اليوم', 'Date')},${_tr('المشترك', 'Strip')},${_tr('المخرج', 'Outlet')},kWh,${t('egp')}\r\n');
+    String q(String v) => '"${v.replaceAll('"', '""')}"';
+    var total = 0.0;
+    for (final d in days.reversed) {
+      final date = '${d ~/ 10000}-${((d ~/ 100) % 100).toString().padLeft(2, '0')}-${(d % 100).toString().padLeft(2, '0')}';
+      for (final m in _selMacs) {
+        final wh = _whIdx[m]?[d];
+        if (wh == null) continue;
+        for (var o = 0; o < wh.length; o++) {
+          if (_mac != null && _outlet != 0 && o + 1 != _outlet) continue;
+          final kwh = wh[o] / 1000;
+          total += kwh;
+          b.write('$date,${q(names[m.toUpperCase()] ?? m)},${o + 1},${kwh.toStringAsFixed(3)},${(kwh * s.tariff).toStringAsFixed(2)}\r\n');
+        }
+      }
+    }
+    b.write(',${q(_tr('الإجمالي', 'Total'))},,${total.toStringAsFixed(3)},${(total * s.tariff).toStringAsFixed(2)}\r\n');
+    final bytes = Uint8List.fromList(utf8.encode(b.toString()));
+    try {
+      final res = await FilePicker.platform.saveFile(fileName: 'fisha-energy-${days.last}-${days.first}.csv', bytes: bytes);
+      if (!mounted) return;
+      if (res != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('اتحفظ التقرير', 'Report saved'))));
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('err_failed'))));
+    }
   }
 
   bool _hasDay(int date) => _selMacs.any((m) => _whIdx[m]?.containsKey(date) ?? false);
@@ -320,7 +356,15 @@ class _EnergyScreenState extends State<EnergyScreen> {
             color: C.accent,
             onRefresh: _load,
             child: ListView(padding: EdgeInsets.fromLTRB(18, 20, 18, navInset(context) + 20), children: [
-              Text(t('energy_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
+              Row(children: [
+                Expanded(child: Text(t('energy_title'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700))),
+                if (s.hubV2 && s.can(Perm.export) && _whIdx.isNotEmpty)
+                  IconButton(
+                    tooltip: _tr('تصدير تقرير الاستهلاك', 'Export energy report'),
+                    onPressed: _export,
+                    icon: Icon(Icons.file_download_outlined, color: C.accent),
+                  ),
+              ]),
               const SizedBox(height: 16),
               if (!s.hubV2)
                 emptyCard(t('energy_old_fw'))

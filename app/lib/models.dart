@@ -351,18 +351,30 @@ class Room {
       );
 }
 
+/// Extra permissions the owner can give a member on top of the role (admins and the owner have them all).
+class Perm {
+  static const auto = 1, prot = 2, stripFw = 4, wifi = 8, hubFw = 16, export = 32;
+}
+
 /// A person the owner shared the hub with (hub 2.9+). role 0 view · 1 control · 2 admin.
 class HubUser {
   final String id;
   String name;
   int role;
+  int perms; // extra permissions the owner granted on top of the role, see [Perm] (hub 2.15.26+)
+  final String email; // the member's Google email and photo link (hub 2.15.26+)
+  final String photo;
   bool all;
   List<String> strips;
-  HubUser({required this.id, this.name = '', this.role = 1, this.all = true, List<String>? strips}) : strips = strips ?? [];
+  HubUser({required this.id, this.name = '', this.role = 1, this.perms = 0, this.email = '', this.photo = '', this.all = true, List<String>? strips})
+      : strips = strips ?? [];
   factory HubUser.fromJson(Map<String, dynamic> j) => HubUser(
         id: _s(j['id']),
         name: _s(j['name']),
         role: _i(j['role'], 1),
+        perms: _i(j['perms'], 0),
+        email: _s(j['email']),
+        photo: _s(j['photo']),
         all: j['all'] == true,
         strips: j['strips'] is List ? (j['strips'] as List).map((e) => e.toString().toUpperCase()).toList() : [],
       );

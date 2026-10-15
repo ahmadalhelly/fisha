@@ -55,7 +55,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
         _lastTab = s.tab;
         return Scaffold(
           backgroundColor: C.tabBg,
-          floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
+          floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty && s.canControl
               ? Padding(
                   padding: EdgeInsets.only(bottom: fabLift(context)),
                   child: SizedBox(
@@ -105,8 +105,8 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: C.cardEdge)),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: () => _edit(sc),
-        onLongPress: () => _menu(sc),
+        onTap: s.canControl ? () => _edit(sc) : null,
+        onLongPress: s.canControl ? () => _menu(sc) : null,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(children: [

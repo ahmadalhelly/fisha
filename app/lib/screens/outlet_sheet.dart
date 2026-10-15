@@ -48,6 +48,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                   emptyCard(t('offline_sheet'), icon: Icons.cloud_off),
                   const SizedBox(height: 8),
                 ],
+                if (state.can(Perm.prot))
                 _tile(Icons.edit_outlined, t('rename_strip'), null, () async {
                   final v = await askName(ctx, t('strip_name'), state.stripName(s));
                   if (v != null) state.rename(s, 0, v);
@@ -95,9 +96,13 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                     onSelected: (ico) => state.setStripIcon(s.mac, ico),
                   ),
                 ),
+                if (state.canAdmin)
                 _tile(Icons.meeting_room_outlined, Tr.isAr ? 'الغرفة' : 'Room', state.roomForStrip(s.mac)?.name ?? (Tr.isAr ? 'بدون غرفة' : 'Unassigned'), () => _pickRoomDialog(ctx, state, s.mac)),
+                if (state.canControl)
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
+                if (state.canControl)
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
+                if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
                 _switchTile(
                     Icons.fingerprint,
@@ -106,6 +111,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                     state.requiresBio(s.mac, 0),
                     true,
                     (v) => state.setRequiresBio(s.mac, 0, v)),
+                if (state.canAdmin)
                 _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
                     (v) => state.setNotifyMask(s, v ? s.notifyMask | 0x10 : s.notifyMask & ~0x10)),
                 const SizedBox(height: 8),
@@ -135,6 +141,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _info('IP', s.ip.isEmpty ? '—' : s.ip),
                 if (state.showMac) _info('MAC', s.mac),
                 Divider(color: C.border, height: 24),
+                if (state.isOwner)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Container(
@@ -195,17 +202,20 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   ),
                   Switch(
                     value: o.on,
-                    onChanged: (val) => guardedSwitch(ctx, state, s, o, val),
+                    // view members only look; control members leave protected outlets alone (hub 2.15.26 refuses it too)
+                    onChanged: state.canControl && (!o.protected || state.can(Perm.prot)) ? (val) => guardedSwitch(ctx, state, s, o, val) : null,
                     activeTrackColor: C.accent,
                   ),
                 ]),
                 const SizedBox(height: 10),
                 ..._linkedRules(ctx, state, s.mac, n, o.hasSchedule, o.hasRule),
+                if (state.can(Perm.prot))
                 _tile(Icons.edit_outlined, t('rename'), null, () async {
                   final v = await askName(ctx, t('outlet_name', {'n': n}), state.outletName(s, n));
                   if (v != null) state.rename(s, n, v);
                 }),
                 const SizedBox(height: 8),
+                if (state.can(Perm.prot))
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: cardBox(radius: 16),
@@ -253,6 +263,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   ),
                 ),
                 const SizedBox(height: 8),
+                if (state.can(Perm.prot))
                 _switchTile(Icons.shield_outlined, t('protect'), t('protect_sub'), o.protected, v2,
                     (v) => state.setProtected(s, n, v)),
                 _switchTile(
@@ -262,10 +273,13 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                     state.requiresBio(s.mac, n),
                     true,
                     (v) => state.setRequiresBio(s.mac, n, v)),
+                if (state.can(Perm.prot))
                 _switchTile(Icons.lock_outline, t('child_lock'), t('child_lock_sub'), o.locked, state.hubHasConfig,
                     (v) => state.setLock(s, n, v)),
+                if (state.can(Perm.prot))
                 _switchTile(Icons.push_pin_outlined, t('keep_on'), t('keep_on_sub'), o.keepOn, state.hubHasConfig,
                     (v) => state.setKeepOn(s, n, v)),
+                if (state.can(Perm.prot))
                 _tile(
                     Icons.timer_outlined,
                     t('auto_off'),
@@ -279,11 +293,16 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                                 showSeconds: false, maxHours: 24, minSeconds: 60, hint: t('auto_off_sub'), clearLabel: t('auto_off_none'));
                             if (sec != null) state.setAutoOff(s, n, (sec ~/ 60).clamp(0, 1440));
                           }),
+                if (state.canControl)
                 _tile(Icons.hourglass_bottom, t('countdown'), t('countdown_sub'), !v2 ? null : () => _countdownDialog(ctx, state, s, n)),
+                if (state.canControl)
                 _tile(Icons.all_inclusive, t('loop'), t('loop_sub'), !v2 ? null : () => _loopDialog(ctx, state, s, n)),
+                if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_sub'), !v2 ? null : () => _openRule(ctx, state, s.mac, n)),
+                if (state.canAdmin)
                 _switchTile(Icons.notifications_outlined, t('notify_outlet'), t('notify_outlet_sub'), s.notifyMask & (1 << (n - 1)) != 0, v2,
                     (v) => state.setNotifyMask(s, v ? s.notifyMask | (1 << (n - 1)) : s.notifyMask & ~(1 << (n - 1)))),
+                if (state.canControl)
                 _tile(
                     Icons.restart_alt,
                     t('cycle'),

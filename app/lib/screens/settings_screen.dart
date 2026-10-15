@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import '../models.dart';
 import '../widgets/common.dart';
 import 'about_screen.dart';
 import 'account_screen.dart';
@@ -71,20 +72,11 @@ class SettingsScreen extends StatelessWidget {
             children: [
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 18),
+              // 2.0.22: your account on top (Google photo, name, email, role); below it only what your role allows
+              _profileCard(context, st),
+              const SizedBox(height: 18),
               _group(_tr('الحساب', 'Account'), [
-                _row(
-                  context,
-                  Icons.account_circle_outlined,
-                  C.accent,
-                  t('acc_title'),
-                  st.isShared
-                      ? t('shared_short')
-                      : st.accountType == 'google'
-                          ? (st.googleEmail.isEmpty ? t('acc_google') : st.googleEmail)
-                          : t('acc_local'),
-                  () => _open(context, AccountScreen(state: st)),
-                ),
-                if (!st.isShared)
+                if (st.isOwner)
                   _row(
                     context,
                     Icons.group_outlined,
@@ -100,8 +92,10 @@ class SettingsScreen extends StatelessWidget {
                   _tr('اسمك', 'Your name'),
                   st.userName.isEmpty ? _tr('غير محدد', 'Not set') : st.userName,
                   () => _editName(context, st),
+                  last: !st.canAdmin,
                 ),
-                _row(
+                if (st.canAdmin)
+                  _row(
                   context,
                   Icons.meeting_room_outlined,
                   C.accent2,
@@ -114,7 +108,7 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 18),
               _group(_tr('الـ Hub', 'Hub'), [
                 // Wi-Fi change and firmware upload need the hub's home-network page: not on the web build (WEB.md)
-                if (!kIsWeb)
+                if (!kIsWeb && st.can(Perm.wifi))
                   _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
                     () => _open(context, WifiScreen(state: st))),
                 _row(context, Icons.link, C.accent, _tr('الاتصال', 'Connection'), conn, () => _open(context, ConnectionScreen(state: st)),
@@ -127,28 +121,28 @@ class SettingsScreen extends StatelessWidget {
                     listenable: UpdateService.instance,
                     builder: (context, _) {
                       final u = UpdateService.instance;
-                      final n = (u.newer('app', appVersion) != null ? 1 : 0) + (!st.isShared && u.newer('hub', st.hubFw) != null ? 1 : 0);
+                      final n = (u.newer('app', appVersion) != null ? 1 : 0) + (st.can(Perm.hubFw) && u.newer('hub', st.hubFw) != null ? 1 : 0);
                       return _row(context, Icons.cloud_download_outlined, C.accent, _tr('مركز التحديثات', 'Update center'),
                           n == 0 ? _tr('آخر نسخة', 'Up to date') : _tr('$n جديد', '$n new'), () => _open(context, UpdateCenterScreen(state: st)),
                           dot: n > 0 ? C.danger : null);
                     },
                   ),
                 // 2.0.18: hub lock (owner only)
-                if (!st.isShared)
+                if (st.isOwner)
                   _row(context, st.hubClaimed == true ? Icons.lock_outline : Icons.lock_open_outlined, st.hubClaimed == false ? C.warn : C.accent,
                       _tr('قفل الهاب', 'Hub lock'),
                       st.hubClaimed == true ? _tr('مقفول', 'Locked') : st.hubClaimed == false ? _tr('مفتوح', 'Open') : '—',
                       () => _open(context, HubLockScreen(state: st)),
                       dot: st.hubClaimed == false ? C.warn : null),
-                if (!kIsWeb)
+                if (!kIsWeb && st.can(Perm.hubFw))
                   _row(context, Icons.system_update_alt, C.accent, t('fw_title'), 'v${st.hubFw ?? '—'}', () => _open(context, FirmwareScreen(state: st))),
-                if (!kIsWeb && !st.isShared)
+                if (!kIsWeb && st.can(Perm.stripFw))
                   _row(context, Icons.electrical_services, C.accent2, t('sfw_title'), '', () => _open(context, StripFirmwareScreen(state: st))),
-                if (!st.isShared)
+                if (st.canAdmin)
                   _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
                       () => _reboot(context, st)),
-                _row(context, Icons.settings_backup_restore, C.accent2, t('sync_title'), '', () => _open(context, SyncScreen(state: st)),
-                    last: true),
+                if (st.canAdmin)
+                  _row(context, Icons.settings_backup_restore, C.accent2, t('sync_title'), '', () => _open(context, SyncScreen(state: st))),
               ]),
               const SizedBox(height: 18),
               _group(t('sec_look'), [
@@ -207,6 +201,33 @@ class SettingsScreen extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _profileCard(BuildContext context, AppState st) {
+    final name = st.userName.isNotEmpty ? st.userName : (st.isShared ? st.settings.sharedName : '');
+    final sub = st.googleEmail.isNotEmpty ? st.googleEmail : (st.isShared ? t('shared_short') : t('acc_local'));
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: () => _open(context, AccountScreen(state: st)),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: cardBox(radius: 20),
+        child: Row(children: [
+          Avatar(photo: st.googlePhoto, name: name.isEmpty ? sub : name, size: 50, ring: roleColor(st.myRole)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name.isEmpty ? t('acc_title') : name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(sub, textDirection: st.googleEmail.isNotEmpty ? TextDirection.ltr : null, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: C.muted, fontSize: 12)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          roleChip(st.myRole),
+        ]),
       ),
     );
   }

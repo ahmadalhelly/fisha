@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../i18n.dart';
+import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../services/apk_install.dart';
@@ -74,7 +75,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       return;
     }
     var pass = s.otaPass;
-    if (pass.isEmpty) {
+    if (pass.isEmpty && !s.isShared) {
       final p = await _askPass();
       if (p == null) return;
       pass = p;
@@ -156,7 +157,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       );
 
   bool _pending(String kind) {
-    if (kind == 'strip') return s.strips.any((x) => x.online && x.fw.isNotEmpty && x.fw != UpdateService.latestStripFw);
+    if (kind == 'strip') return s.strips.any((x) => x.online && x.fw.isNotEmpty && !x.fw.endsWith(UpdateService.latestStripFw));
     final cur = _current(kind);
     return u.newer(kind, cur) != null;
   }
@@ -267,6 +268,27 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     );
   }
 
+  bool _stripFetching = false;
+  Future<void> _fetchLatestStrip() async {
+    setState(() {
+      _stripFetching = true;
+      _status['strip'] = _tr('الـ Hub بيجيب الملف…', 'The hub is downloading…');
+    });
+    final err = await s.fetchStripFwByUrl(UpdateService.latestStripUrl);
+    if (!mounted) return;
+    setState(() {
+      _stripFetching = false;
+      if (err == null) {
+        _status.remove('strip');
+      } else {
+        _status['strip'] = err == 'net'
+            ? _tr('مقدرتش أوصل للـ Hub.', 'Could not reach the hub.')
+            : _tr('الـ Hub ماقدرش يجيب الملف: $err', 'The hub could not get the file: $err');
+      }
+    });
+    if (err == null) Navigator.of(context).push(MaterialPageRoute(builder: (_) => StripFirmwareScreen(state: s)));
+  }
+
   Widget _stripBody() {
     final online = [for (final x in s.strips) if (x.online) x];
     if (online.isEmpty) return Text(_tr('مفيش مشتركات متصلة', 'No strips connected'), style: TextStyle(color: C.muted, fontSize: 12.5));
@@ -276,9 +298,25 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Row(children: [
             Expanded(child: Text(x.label.isNotEmpty ? x.label : x.mac, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
-            Text(x.fw.isEmpty ? '—' : x.fw, textDirection: TextDirection.ltr, style: mono(12, color: x.fw != UpdateService.latestStripFw ? C.warn : C.muted)),
+            Text(x.fw.isEmpty ? '—' : x.fw, textDirection: TextDirection.ltr, style: mono(12, color: !x.fw.endsWith(UpdateService.latestStripFw) ? C.warn : C.muted)),
           ]),
         ),
+      const SizedBox(height: 8),
+      // the hub downloads our latest strip build itself; the file never passes through the phone
+      FilledButton.icon(
+        onPressed: s.mode == ConnMode.local && !_stripFetching ? _fetchLatestStrip : null,
+        icon: _stripFetching
+            ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: C.onAccent))
+            : const Icon(Icons.cloud_download_outlined, size: 18),
+        label: Text(_tr('الـ Hub يجيب F${UpdateService.latestStripFw} ويحدّث', 'Hub gets F${UpdateService.latestStripFw} and updates')),
+        style: FilledButton.styleFrom(
+            backgroundColor: C.accent, foregroundColor: C.onAccent, minimumSize: const Size(0, 44),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      ),
+      if (_status['strip'] != null) ...[
+        const SizedBox(height: 6),
+        Text(_status['strip']!, style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.5)),
+      ],
       const SizedBox(height: 8),
       OutlinedButton.icon(
         onPressed: s.mode == ConnMode.local ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => StripFirmwareScreen(state: s))) : null,
@@ -288,8 +326,8 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       ),
       const SizedBox(height: 6),
       Text(
-        _tr('هتختار ملف فيرموير المشترك، والهاب هو اللي بيفلشه على المشتركات.',
-            'Pick the strip firmware file; the hub flashes it onto the strips.'),
+        _tr('الزرار الأول بيخلي الـ Hub يجيب آخر نسخة بنفسه، وبعدها تختار المشتركات. التاني لو معاك ملف.',
+            'The first button has the hub fetch the latest build itself, then you pick strips. The second is for a file you have.'),
         style: TextStyle(color: C.muted, fontSize: 11, height: 1.5),
       ),
     ]);
@@ -300,7 +338,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     return ListenableBuilder(
       listenable: Listenable.merge([u, s]),
       builder: (context, _) {
-        final kinds = ['app', 'hub', 'strip'];
+        final kinds = ['app', if (s.can(Perm.hubFw)) 'hub', if (s.can(Perm.stripFw)) 'strip'];
         final okCount = kinds.where((k) => !_pending(k)).length;
         return Scaffold(
           backgroundColor: C.bg,
@@ -325,8 +363,8 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                 _hero(okCount, kinds.length),
                 const SizedBox(height: 16),
                 _row('app', _tr('التطبيق', 'App')),
-                _row('hub', 'Hub'),
-                _row('strip', _tr('المشتركات', 'Strips')),
+                if (s.can(Perm.hubFw)) _row('hub', 'Hub'),
+                if (s.can(Perm.stripFw)) _row('strip', _tr('المشتركات', 'Strips')),
                 const SizedBox(height: 4),
                 Text(
                   u.error == 'rate'

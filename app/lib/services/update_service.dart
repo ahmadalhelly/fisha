@@ -61,6 +61,8 @@ class UpdateService extends ChangeNotifier {
   /// 2.0.20: the latest strip firmware we publish. Strip builds aren't on CI yet, so this is kept in sync by hand
   /// with the newest .fwr we've shipped (see the strip-firmware notes).
   static const latestStripFw = '1.0.82';
+  /// Where the hub downloads it from (public release on fisha-app; works once the owner publishes that release).
+  static const latestStripUrl = 'https://github.com/ahmadalhelly/fisha-app/releases/download/strip-F1.0.82/comMTTL-W01_F1.0.82.fwr';
 
   /// the newer release for [kind] than [current], or null when up to date or unknown
   Release? newer(String kind, String? current) {

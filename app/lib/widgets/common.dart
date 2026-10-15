@@ -752,3 +752,47 @@ class _FocusFlashState extends State<FocusFlash> with SingleTickerProviderStateM
         },
       );
 }
+
+/// Role colours used on chips and avatar rings: 0 view · 1 control · 2 admin · 3 owner.
+Color roleColor(int r) => switch (r) { 0 => C.blue, 1 => C.warn, 2 => const Color(0xFFA78BFA), _ => C.accent };
+String roleName(int r) => switch (r) {
+      0 => Tr.isAr ? 'مشاهدة' : 'View',
+      1 => Tr.isAr ? 'تشغيل وتحكم' : 'Control',
+      2 => Tr.isAr ? 'إدارة كاملة' : 'Full admin',
+      _ => Tr.isAr ? 'المالك' : 'Owner',
+    };
+
+Widget roleChip(int r) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(color: roleColor(r).withValues(alpha: 0.14), borderRadius: BorderRadius.circular(99)),
+      child: Text(roleName(r), style: TextStyle(color: roleColor(r), fontSize: 11, fontWeight: FontWeight.w700)),
+    );
+
+/// A person's Google photo in a ring of their role colour; falls back to their initial when there is no photo.
+class Avatar extends StatelessWidget {
+  final String photo, name;
+  final double size;
+  final Color? ring;
+  const Avatar({super.key, required this.photo, required this.name, this.size = 42, this.ring});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.trim().isEmpty ? '?' : name.trim().characters.first.toUpperCase();
+    final fallback = Container(
+      color: C.surface2,
+      alignment: Alignment.center,
+      child: Text(initial, style: TextStyle(color: ring ?? C.accent, fontWeight: FontWeight.w700, fontSize: size * 0.4)),
+    );
+    return Container(
+      width: size,
+      height: size,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: ring ?? C.accent, width: 2)),
+      child: ClipOval(
+        child: photo.startsWith('https://')
+            ? Image.network(photo, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback)
+            : fallback,
+      ),
+    );
+  }
+}

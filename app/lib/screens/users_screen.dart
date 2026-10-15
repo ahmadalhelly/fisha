@@ -98,6 +98,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final name = TextEditingController(text: initial?.name ?? '');
     var role = initial?.role ?? 1;
     var all = initial?.all ?? true;
+    var perms = initial?.perms ?? 0;
     final picked = <String>{...?initial?.strips};
     final res = await showDialog<HubUser>(
       context: context,
@@ -114,6 +115,21 @@ class _UsersScreenState extends State<UsersScreen> {
               Segmented<int>(value: role, items: {0: t('role_0'), 1: t('role_1'), 2: t('role_2')}, onChanged: (v) => setLocal(() => role = v)),
               const SizedBox(height: 6),
               Text(t('role_${role}_sub'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+              // hub 2.15.26: what this person may do on top of the role (admins already have all of it)
+              if (role < 2) ...[
+                const SizedBox(height: 12),
+                Text(t('perm_title'), style: TextStyle(color: C.muted, fontSize: 13)),
+                for (final p in [Perm.auto, Perm.prot, Perm.stripFw, Perm.wifi, Perm.hubFw, Perm.export])
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    activeColor: C.accent,
+                    checkColor: C.onAccent,
+                    value: perms & p != 0,
+                    title: Text(t('perm_$p')),
+                    onChanged: (v) => setLocal(() => perms = v == true ? perms | p : perms & ~p),
+                  ),
+              ],
               const SizedBox(height: 12),
               Text(t('user_scope'), style: TextStyle(color: C.muted, fontSize: 13)),
               const SizedBox(height: 6),
@@ -134,7 +150,7 @@ class _UsersScreenState extends State<UsersScreen> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
             TextButton(
-              onPressed: () => Navigator.pop(ctx, HubUser(id: initial?.id ?? '', name: name.text.trim(), role: role, all: all, strips: picked.toList())),
+              onPressed: () => Navigator.pop(ctx, HubUser(id: initial?.id ?? '', name: name.text.trim(), role: role, perms: role < 2 ? perms : 0, email: initial?.email ?? '', photo: initial?.photo ?? '', all: all, strips: picked.toList())),
               child: Text(t('save')),
             ),
           ],
@@ -154,7 +170,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final u = await _editor();
     if (u == null) return;
     setState(() => _busy = true);
-    final r = await s.inviteUser(u.name, u.role, u.all, u.strips);
+    final r = await s.inviteUser(u.name, u.role, u.all, u.strips, perms: u.perms);
     if (!mounted) return;
     setState(() => _busy = false);
     if (!r.ok) {
@@ -225,6 +241,62 @@ class _UsersScreenState extends State<UsersScreen> {
     return names.isEmpty ? '${u.strips.length}' : names.join('، ');
   }
 
+  // 2.0.22 (family page "ب"): one expanded card per member: Google photo, name, email, role, strips and extra permissions
+  Widget _memberCard(HubUser u) {
+    final extras = [for (final p in [Perm.auto, Perm.prot, Perm.stripFw, Perm.wifi, Perm.hubFw, Perm.export]) if (u.perms & p != 0) t('perm_$p')];
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: cardBox(radius: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Avatar(photo: u.photo, name: u.name, size: 48, ring: roleColor(u.role)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(u.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              u.email.isEmpty
+                  ? Text(t('member_no_email'), style: TextStyle(color: C.faint, fontSize: 12))
+                  : SelectableText(u.email, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 12)),
+            ]),
+          ),
+          roleChip(u.role),
+        ]),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: C.surface2.withValues(alpha: 0.6), borderRadius: BorderRadius.circular(12)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Icon(Icons.power_outlined, size: 15, color: C.muted),
+              const SizedBox(width: 6),
+              Expanded(child: Text(_scopeText(u), style: TextStyle(color: C.textSoft, fontSize: 12.5))),
+            ]),
+            const SizedBox(height: 6),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.verified_user_outlined, size: 15, color: C.muted),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(u.role >= 2 ? t('perm_all') : extras.isEmpty ? t('perm_none') : extras.join(' · '),
+                    style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.4)),
+              ),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 6),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          TextButton.icon(
+              onPressed: _busy ? null : () => _edit(u), icon: const Icon(Icons.edit_outlined, size: 18), label: Text(t('user_edit'))),
+          TextButton.icon(
+              onPressed: _busy ? null : () => _revoke(u),
+              style: TextButton.styleFrom(foregroundColor: C.danger),
+              icon: const Icon(Icons.person_remove_outlined, size: 18),
+              label: Text(t('user_revoke'))),
+        ]),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final users = _users;
@@ -265,29 +337,7 @@ class _UsersScreenState extends State<UsersScreen> {
             if (users != null && users.isEmpty) emptyCard(t('users_empty'), icon: Icons.group_outlined),
             if (users != null)
               for (final u in users) ...[
-                Container(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-                  decoration: cardBox(radius: 18),
-                  child: Row(children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(color: C.accentBg, shape: BoxShape.circle),
-                      child: Text(u.name.isEmpty ? '?' : u.name.characters.first, style: TextStyle(color: C.accent, fontWeight: FontWeight.w700)),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(u.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 2),
-                        Text('${t('role_${u.role}')} · ${_scopeText(u)}', style: TextStyle(color: C.textSoft, fontSize: 12)),
-                      ]),
-                    ),
-                    IconButton(icon: Icon(Icons.edit_outlined, color: C.muted), onPressed: _busy ? null : () => _edit(u)),
-                    IconButton(icon: Icon(Icons.person_remove_outlined, color: C.danger), onPressed: _busy ? null : () => _revoke(u)),
-                  ]),
-                ),
+                _memberCard(u),
                 const SizedBox(height: 10),
               ],
           ]),

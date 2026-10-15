@@ -152,6 +152,8 @@ class AppState extends ChangeNotifier {
   // account: '' (not chosen yet) | local | google
   String accountType = '';
   String googleEmail = '';
+  String googlePhoto = ''; // Google account photo link, shown wherever this person's name is
+  int sharedPerms = 0; // a member's extra permissions, from the hub's "me"
   DateTime? lastSync;
   bool sseLive = false;
   bool hubTimeOk = false;
@@ -318,6 +320,8 @@ class AppState extends ChangeNotifier {
       final e = await GoogleSync.I.signIn();
       if (e == null) return t('g_cancelled');
       await setAccount('google', email: e);
+      googlePhoto = GoogleSync.I.photoUrl ?? '';
+      await _prefs?.setString('googlePhoto', googlePhoto);
       if (userName.isEmpty) {
         final dn = GoogleSync.I.displayName;
         await setUserName(dn != null && dn.trim().isNotEmpty ? dn : e.split('@').first);
@@ -436,6 +440,7 @@ class AppState extends ChangeNotifier {
     otaPass = p.getString('otaPass') ?? '';
     accountType = p.getString('accountType') ?? '';
     googleEmail = p.getString('googleEmail') ?? '';
+    googlePhoto = p.getString('googlePhoto') ?? '';
     syncEveryMin = p.getInt('syncEvery') ?? 0;
     syncPaused = p.getBool('syncPaused') ?? false;
     syncKeepVersions = (p.getInt('syncKeep') ?? 5).clamp(1, 10);
@@ -603,6 +608,7 @@ class AppState extends ChangeNotifier {
             'id': raw['id'],
             'name': raw['name'],
             'role': raw['role'],
+            'perms': raw['perms'] ?? 0,
             'all': raw['all'] == true,
             'strips': st is List ? st.join(',') : (st ?? '').toString(),
             'pw': raw['pw'],
@@ -1066,6 +1072,13 @@ class AppState extends ChangeNotifier {
         wifiTestSsid = (cfg['wifi_test_ssid'] ?? wifiTestSsid).toString();
       }
       if (j['reset'] != null) hubReset = j['reset'].toString();
+      final me = j['me'];
+      if (me is Map && settings.isShared) {
+        sharedPerms = (me['perms'] as num?)?.toInt() ?? 0;
+        final r = (me['role'] as num?)?.toInt();
+        if (r != null && r != settings.sharedRole) settings.sharedRole = r;
+        _syncProfile(me);
+      }
       final au = j['auth'];
       if (au is Map) {
         hubClaimed = au['claimed'] == true;
@@ -1280,11 +1293,11 @@ class AppState extends ChangeNotifier {
   Future<CmdResult> setEmqx(String url, String key, String secret) => _job('emqx_config', {'url': url, 'key': key, 'secret': secret});
 
   /// Returns the invite code in [CmdResult.data]['code'].
-  Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips) =>
-      _job('user_invite', {'name': name, 'role': role, 'all': all, 'strips': strips.join(',')}).then(_mirrorAfter);
+  Future<CmdResult> inviteUser(String name, int role, bool all, List<String> strips, {int perms = 0}) =>
+      _job('user_invite', {'name': name, 'role': role, 'perms': perms, 'all': all, 'strips': strips.join(',')}).then(_mirrorAfter);
 
   Future<CmdResult> updateUser(HubUser u) =>
-      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'all': u.all, 'strips': u.strips.join(',')}).then(_mirrorAfter);
+      api('user_update', {'id': u.id, 'name': u.name, 'role': u.role, 'perms': u.perms, 'all': u.all, 'strips': u.strips.join(',')}).then(_mirrorAfter);
 
   Future<CmdResult> revokeUser(String id) => _job('user_revoke', {'id': id}).then(_mirrorAfter);
 
@@ -1437,6 +1450,24 @@ class AppState extends ChangeNotifier {
   bool get isShared => settings.isShared;
   bool get canControl => !settings.isShared || settings.sharedRole >= 1;
   bool get canAdmin => !settings.isShared || settings.sharedRole >= 2;
+  bool get isOwner => !settings.isShared;
+  /// One of [Perm]: the owner and admins have them all, other members only what the owner granted.
+  bool can(int perm) => canAdmin || (sharedPerms & perm) != 0;
+  /// 0 view · 1 control · 2 admin · 3 owner
+  int get myRole => settings.isShared ? settings.sharedRole : 3;
+
+  bool _profileSending = false;
+  // a member's phone tells the hub its Google email and photo, so the owner's family page shows them
+  Future<void> _syncProfile(Map me) async {
+    if (_profileSending || googleEmail.isEmpty) return;
+    if ((me['email'] ?? '') == googleEmail && (me['photo'] ?? '') == googlePhoto) return;
+    _profileSending = true;
+    try {
+      await api('profile', {'email': googleEmail, 'photo': googlePhoto});
+    } finally {
+      _profileSending = false;
+    }
+  }
 
   // ---------- account ----------
   Future<void> setAccount(String type, {String email = ''}) async {
@@ -1481,10 +1512,22 @@ class AppState extends ChangeNotifier {
     }
     // A master "all on/off" (outlet 0) leaves child-locked outlets alone — same as the hub (lockSkip, 2.15.23).
     // Without this the UI showed the locked outlet flip, then flip back once the real state came back unchanged.
+    if (!canControl) {
+      lastError = Tr.isAr ? 'صلاحيتك مشاهدة بس' : 'You can view only';
+      notifyListeners();
+      return;
+    }
     final targets = outlet != 0
         ? [outlet]
         : [for (final o in strip?.outlets ?? const <Outlet>[]) if (!o.locked) o.n];
     if (targets.isEmpty) return;
+    // 2.0.22: a control member's "all on/off" skips overload-protected outlets one by one (the hub refuses them)
+    if (outlet == 0 && !can(Perm.prot) && (strip?.outlets.any((o) => o.protected) ?? false)) {
+      for (final o in strip!.outlets) {
+        if (!o.locked && !o.protected && o.on != on) await setOutlet(mac, o.n, on);
+      }
+      return;
+    }
     final p = _pending.putIfAbsent(mac, () => {});
     if (targets.any(p.containsKey)) {
       lastError = t('err_busy');                   // a previous command for this outlet is still on its way
@@ -1735,7 +1778,8 @@ class AppState extends ChangeNotifier {
   /// Uploads a firmware .bin to the hub's /update page; [progress] gets 0..1. Returns null on success or an error text.
   Future<String?> uploadFirmware(List<int> bytes, String password, void Function(double) progress) async {
     if (bytes.length < 100000 || bytes.first != 0xE9) return 'bad_file';
-    return uploadFirmwareBytes(_localUri('/update'), bytes, password, progress);
+    // hub 2.15.26: a member allowed to update the hub uses the phone's key instead of the update password
+    return uploadFirmwareBytes(_localUri('/update'), bytes, password, progress, headers: settings.isShared ? _localHeaders : null);
   }
 
   // ---------- strip firmware (hub 2.15.8+): the hub stores the .fwr and updates the chosen strips one by one ----------
@@ -2080,6 +2124,7 @@ class AppState extends ChangeNotifier {
             'id': u['id'],
             'name': u['name'],
             'role': u['role'],
+            'perms': u['perms'] ?? 0,
             'all': u['all'] == true,
             'strips': st is List ? st.join(',') : (st ?? '').toString(),
             'pw': u['pw'],

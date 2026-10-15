@@ -14,6 +14,14 @@ import 'wifi_arcs.dart';
 
 /// Switch an outlet, asking first if it needs biometric or is protected and being turned off.
 Future<void> guardedSwitch(BuildContext context, AppState state, Strip s, Outlet o, bool on) async {
+  // 2.0.22: view members only look; control members leave overload-protected outlets alone
+  if (!state.canControl || (o.protected && !state.can(Perm.prot))) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(!state.canControl
+            ? (Tr.isAr ? 'صلاحيتك مشاهدة بس' : 'You can view only')
+            : (Tr.isAr ? 'المخرج ده محمي، المالك بس اللي يغيّره' : 'This outlet is protected; only the owner can switch it'))));
+    return;
+  }
   if (!s.online) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('strip_offline_cmd'))));
     return;

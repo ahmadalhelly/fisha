@@ -61,7 +61,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             surfaceTintColor: Colors.transparent,
             title: Text(t('auto_title'), style: const TextStyle(fontWeight: FontWeight.w700)),
           ),
-          floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty
+          floatingActionButton: s.hubV2 && s.allStrips.isNotEmpty && s.can(Perm.auto)
               ? FloatingActionButton.extended(
                   onPressed: () => _edit(),
                   backgroundColor: C.accent,
@@ -297,8 +297,8 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
   Widget _ruleRow(Automation a) => Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _edit(a),
-          onLongPress: () => _ruleMenu(a),
+          onTap: s.can(Perm.auto) ? () => _edit(a) : null,
+          onLongPress: s.can(Perm.auto) ? () => _ruleMenu(a) : null,
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(children: [

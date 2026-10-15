@@ -40,6 +40,7 @@ class GoogleSync {
 
   String? get email => _acc?.email;
   String? get displayName => _acc?.displayName;
+  String? get photoUrl => _acc?.photoUrl;
   bool get signedIn => _acc != null;
 
   /// Interactive sign-in. Returns the e-mail, or null if the user cancelled; throws [GoogleSyncError] on a real failure.

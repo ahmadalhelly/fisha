@@ -14,6 +14,18 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
+        (Icons.admin_panel_settings_outlined, _tr('صلاحيات العيلة', 'Family permissions'),
+            _tr('كل فرد بيشوف اللي من صلاحيته بس: مشاهدة، تشغيل وتحكم، أو إدارة كاملة، والمالك يقدر يدي صلاحيات زيادة لأي حد.', 'Everyone sees only what their role allows: view, control or full admin, and the owner can grant extra permissions.')),
+        (Icons.account_circle_outlined, _tr('صورة حساب جوجل', 'Google account photo'),
+            _tr('صورتك واسمك وإيميلك فوق الإعدادات، وصفحة العيلة بتعرض صورة وإيميل كل فرد.', 'Your photo, name and email at the top of Settings; the family page shows each member\'s photo and email.')),
+        (Icons.wifi_tethering, _tr('نقل الشبكة أوتوماتيك', 'Automatic network move'),
+            _tr('لما تغيّر الواي فاي من التطبيق، الـ Hub بيبعت الشبكة الجديدة للمشتركات وينقلوا معاه.', 'When you change the Wi-Fi in the app, the hub hands the new network to the strips and they move with it.')),
+        (Icons.cloud_download_outlined, _tr('تحديث المشتركات من مركز التحديثات', 'Strip updates in the update center'),
+            _tr('الـ Hub بيجيب آخر فيرموير للمشتركات بنفسه من غير ما الملف يعدّي على موبايلك.', 'The hub fetches the latest strip firmware itself; the file never passes through your phone.')),
+        (Icons.file_download_outlined, _tr('تصدير تقارير الاستهلاك', 'Export energy reports'),
+            _tr('من صفحة الطاقة: ملف بالاستهلاك والتكلفة لكل يوم ومشترك ومخرج.', 'From the energy page: a file with use and cost per day, strip and outlet.')),
+        (Icons.lock_outline, _tr('قفل الأطفال مع زرار المشترك', 'Child lock with the strip button'),
+            _tr('زرار المشترك الرئيسي بيشغّل المخارج الحرة حتى لو فيه مخرج مقفول.', 'The strip\'s master button switches the free outlets even with one outlet locked.')),
         (Icons.phonelink_lock_outlined, _tr('قفل الهاب', 'Hub lock'),
             _tr('الهاب يتقفل على تليفونك بحساب جوجل، وأي تليفون جديد يطلب دخول وإنت توافق باختيار الرقم اللي ظاهر عنده (Hub 2.15.13).', 'The hub locks to your phone with your Google account; a new phone asks in and you approve by picking the number it shows (Hub 2.15.13).')),
         (Icons.cloud_download_outlined, _tr('مركز التحديثات', 'Update center'),
