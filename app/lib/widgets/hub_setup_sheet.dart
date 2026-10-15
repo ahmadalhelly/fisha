@@ -33,6 +33,8 @@ class HubSetupWatcher {
     if (!HubSetup.supported || _t != null) return;
     Future<void> tick() async {
       if (_open || !context.mounted || s.settings.isShared) return;
+      // 2.0.25: already talking to a hub: nothing to offer (a hub that lost its Wi-Fi leaves the app offline, so it still shows)
+      if (s.mode != ConnMode.offline && s.settings.hubId.isNotEmpty) return;
       if (!await HubSetup.permission()) return;
       final l = await HubSetup.scanHubs();
       final fresh = l.where((x) => !_offered.contains(x)).toList();
@@ -72,11 +74,20 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
   String? _hub;
   final _home = TextEditingController(), _pw = TextEditingController(), _ip = TextEditingController(), _ota = TextEditingController();
   bool _homeKnown = false;
+  bool _showPw = false, _showOta = false;
+  // 2.0.25: opened from Settings while this phone is already linked to a working hub
+  late bool _linked;
+  // the hub found nearby is this phone's own hub (its Wi-Fi changed): Fisha-Hub-XXXX = last 4 of its MAC
+  bool get _mine {
+    final id = s.settings.hubId.toUpperCase();
+    return _hub != null && id.length >= 4 && _hub!.toUpperCase().endsWith(id.substring(id.length - 4));
+  }
 
   @override
   void initState() {
     super.initState();
     _hub = widget.hubSsid;
+    _linked = widget.hubSsid == null && s.mode != ConnMode.offline && s.settings.hubId.isNotEmpty;
     _ip.text = s.settings.localHost.isNotEmpty ? s.settings.localHost : '192.168.1.100';
   }
 
@@ -90,6 +101,7 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
   }
 
   Future<void> _expand() async {
+    _linked = false;
     await HubSetup.permission(ask: true);
     final ssid = await HubSetup.currentSsid();
     if (!mounted) return;
@@ -242,14 +254,28 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
                   curve: Curves.easeOutCubic,
                   width: ring,
                   height: ring,
-                  child: _Ring(pct: _pct, full: _full, done: _done),
+                  child: _Ring(pct: _pct, full: _full, done: _done || _linked),
                 ),
                 const SizedBox(height: 14),
-                Text(_full ? _say : _x('لقينا Fisha Hub جنبك', 'Fisha Hub found nearby'),
+                Text(
+                    _full
+                        ? _say
+                        : _linked
+                            ? _x('إنت مربوط بالهاب فعلاً', 'You are already linked to your hub')
+                            : _mine
+                                ? _x('الهاب بتاعك مستني شبكة', 'Your hub is waiting for a network')
+                                : _x('لقينا Fisha Hub جنبك', 'Fisha Hub found nearby'),
                     textAlign: TextAlign.center, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
                 Text(
-                    _full ? _sub : _x('الهاب الجديد مستني يتجهّز، وأنت هتبقى المالك.', 'Your new hub is waiting to be set up. You will be its owner.'),
+                    _full
+                        ? _sub
+                        : _linked
+                            ? _x('الهاب ${s.settings.hubId.toUpperCase()} شغال على ${s.settings.localHost}${s.mode == ConnMode.cloud ? ' (من برا البيت)' : ''}.',
+                                'Hub ${s.settings.hubId.toUpperCase()} is running at ${s.settings.localHost}${s.mode == ConnMode.cloud ? ' (away from home)' : ''}.')
+                            : _mine
+                                ? _x('شكله فقد الواي فاي (اتغيّر الراوتر أو الباسورد؟). ادّيله الشبكة تاني.', 'It lost its Wi-Fi (new router or password?). Give it the network again.')
+                                : _x('الهاب الجديد مستني يتجهّز، وأنت هتبقى المالك.', 'Your new hub is waiting to be set up. You will be its owner.'),
                     textAlign: TextAlign.center,
                     style: TextStyle(color: C.muted, fontSize: 13)),
                 const SizedBox(height: 10),
@@ -263,6 +289,11 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
                       ),
                   ]),
                 Expanded(child: _full && !_busy && !_done ? _form() : const SizedBox()),
+                if (_linked)
+                  TextButton(
+                    onPressed: _expand,
+                    child: Text(_x('تجهيز هاب تاني أو تغيير شبكة الهاب', 'Set up another hub, or change its Wi-Fi'), style: TextStyle(color: C.muted, fontSize: 12.5)),
+                  ),
                 if (_err != null) ...[
                   Text(_err!, textAlign: TextAlign.center, style: TextStyle(color: C.danger, fontSize: 12.5, height: 1.5)),
                   const SizedBox(height: 10),
@@ -271,7 +302,9 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
                   width: double.infinity,
                   child: _done
                       ? primaryButton(_x('تمام', 'Done'), () => Navigator.pop(context), icon: Icons.check)
-                      : !_full
+                      : _linked
+                          ? primaryButton(_x('تمام', 'OK'), () => Navigator.pop(context), icon: Icons.check)
+                          : !_full
                           ? primaryButton(_x('جهّزه', 'Set it up'), _expand, icon: Icons.bolt)
                           : primaryButton(_busy ? _x('بيوصّل…', 'Connecting…') : _x('وصّل الهاب', 'Connect the hub'), _busy ? null : _go, icon: Icons.wifi),
                 ),
@@ -292,6 +325,12 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
       ),
     );
   }
+
+  Widget _eye(bool shown, VoidCallback onTap) => IconButton(
+        onPressed: onTap,
+        tooltip: shown ? _x('إخفاء', 'Hide') : _x('إظهار', 'Show'),
+        icon: Icon(shown ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: C.muted, size: 20),
+      );
 
   Widget _form() => SingleChildScrollView(
         padding: const EdgeInsets.only(top: 6),
@@ -315,9 +354,11 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
           const SizedBox(height: 10),
           TextField(
             controller: _pw,
-            obscureText: true,
+            obscureText: !_showPw,
             textDirection: TextDirection.ltr,
-            decoration: InputDecoration(labelText: _x('باسورد ${_home.text.isEmpty ? 'الواي فاي' : _home.text}', 'Password for ${_home.text.isEmpty ? 'the Wi-Fi' : _home.text}')),
+            decoration: InputDecoration(
+                suffixIcon: _eye(_showPw, () => setState(() => _showPw = !_showPw)),
+                labelText: _x('باسورد ${_home.text.isEmpty ? 'الواي فاي' : _home.text}', 'Password for ${_home.text.isEmpty ? 'the Wi-Fi' : _home.text}')),
           ),
           const SizedBox(height: 6),
           InkWell(
@@ -341,9 +382,10 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
             const SizedBox(height: 10),
             TextField(
                 controller: _ota,
-                obscureText: true,
+                obscureText: !_showOta,
                 textDirection: TextDirection.ltr,
                 decoration: InputDecoration(
+                    suffixIcon: _eye(_showOta, () => setState(() => _showOta = !_showOta)),
                     labelText: _x('باسورد الهاب للطوارئ', 'Hub emergency password'),
                     helperText: _x('سيبه فاضي = fisha- وبعده MAC الهاب', 'Empty = fisha- followed by the hub MAC'))),
           ],

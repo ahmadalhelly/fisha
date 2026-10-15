@@ -4,6 +4,9 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.29
+- Strip-level child lock now locks every button on the strip (master + all 4 outlets), not only the master button. The per-outlet locks stay saved and come back when the strip lock is turned off. Reason: with the strip locked, a child could still switch the outlets from their own buttons.
+
 ### 2.15.28
 - Setup from inside the app: while the hub is in setup mode (Wi-Fi `Fisha-Hub-…`, 192.168.4.1) it now answers `GET /api/setup/info` and `POST /api/setup` (Wi-Fi name + password, LAN IP, owner Gmail, optional own update password). Reason: the customer finishes setup in the app without leaving it; the old 192.168.4.1 page still works.
 - First owner can claim only during the first 10 minutes after the hub powers on (`claim_window`). Reason: a hub left unclaimed can't be taken over later by anyone on the network; power-cycling the hub opens the window again.

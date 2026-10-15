@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.28";
+const char* FW_VERSION = "2.15.29";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -651,7 +651,9 @@ void sendLine(Strip& s, const String& line) {
 // v2.15.27: F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
 void sendChildLock(Strip& s) {
   if (s.fw.indexOf("F1.0.82") < 0) return;
-  sendLine(s, "up:childlock:" + String(((s.lockMask & 0x0F) << 1) | (s.masterLock ? 1 : 0)));
+  // v2.15.29: the strip-level lock locks EVERY button on the strip (master + 4 outlets); the per-outlet locks stay saved
+  // and come back when it is turned off
+  sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));
 }
 void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
   if (s.dead || !s.c.connected()) return;

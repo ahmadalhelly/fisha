@@ -114,9 +114,9 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 if (state.can(Perm.prot))
                 _switchTile(
                     Icons.lock_outline,
-                    Tr.isAr ? 'قفل الأطفال للمفتاح الفيزيائي' : 'Child lock for the physical button',
+                    Tr.isAr ? 'قفل الأطفال للمشترك كله' : 'Child lock for the whole strip',
                     s.fw.contains('F1.0.82')
-                        ? (Tr.isAr ? 'يمنع زرار المشترك نفسه من تشغيل أو إيقاف أي حاجة' : 'The strip\'s own master button stops working')
+                        ? (Tr.isAr ? 'كل زراير المشترك نفسه (الرئيسي والمخارج) متشتغلش، والتطبيق شغال عادي' : 'Every button on the strip (master and outlets) stops working; the app still works')
                         : (Tr.isAr ? 'محتاج فيرموير المشترك F1.0.82 (حدّثه من مركز التحديثات)' : 'Needs strip firmware F1.0.82 (update it in the Update Center)'),
                     s.masterLock,
                     state.hubV2 && s.online && s.fw.contains('F1.0.82'),

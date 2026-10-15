@@ -589,19 +589,29 @@ class _MasterSocketState extends State<_MasterSocket> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
         child: Column(children: [
-          if (state.requiresBio(s.mac, 0))
+          // protections set on the whole strip show on the master, like the outlets show theirs
+          if (state.requiresBio(s.mac, 0) || s.masterLock)
             SizedBox(
               height: 14,
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Tooltip(
-                    message: Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected',
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                      child: Icon(Icons.fingerprint, size: 12, color: C.accent),
+                  if (state.requiresBio(s.mac, 0))
+                    Tooltip(
+                      message: Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected',
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                        child: Icon(Icons.fingerprint, size: 12, color: C.accent),
+                      ),
                     ),
-                  ),
+                  if (s.masterLock)
+                    Tooltip(
+                      message: Tr.isAr ? 'قفل الأطفال على المشترك كله' : 'Child lock on the whole strip',
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                        child: Icon(Icons.lock, size: 12, color: C.muted),
+                      ),
+                    ),
                 ]),
               ),
             ),
@@ -794,7 +804,10 @@ class _SocketPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: innerOn
-              ? [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg]
+              ? (isMaster
+                  // 2.0.25: the master's face was too solid a green and swallowed the power icon
+                  ? [ringColor.withValues(alpha: dark ? 0.16 : 0.12), dark ? C.surface2 : C.surface]
+                  : [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg])
               : (dark ? [C.surface2, C.tile] : [C.surface, C.miniOff]),
         ).createShader(Rect.fromCircle(center: c, radius: face)),
     );
@@ -816,7 +829,7 @@ class _SocketPainter extends CustomPainter {
     final holeColor = innerOn ? Color.lerp(ringColor, const Color(0xFF000000), 0.6)! : (dark ? const Color(0xFF05080E) : C.faint);
     
     if (isMaster) {
-      final iconColor = mixed ? C.accent : holeColor;
+      final iconColor = mixed || innerOn ? (innerOn ? ringColor : C.accent) : holeColor;
       final iconStr = String.fromCharCode(Icons.power_settings_new.codePoint);
       final tp = TextPainter(
         text: TextSpan(text: iconStr, style: TextStyle(fontFamily: Icons.power_settings_new.fontFamily, fontSize: face * 0.9, color: iconColor)),

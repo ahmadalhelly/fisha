@@ -570,7 +570,7 @@ class AppState extends ChangeNotifier {
   Future<Map<String, String>> _exportEnergy() async {
     final out = <String, String>{};
     for (final s in allStrips) {
-      if (!s.online) continue;
+      // 2.0.25: the history lives on the hub, so an offline strip's days are exported too
       final r = await api('energy', {'mac': s.mac});
       final days = r.data?['days'];
       if (!r.ok || days is! List) continue;
@@ -2253,6 +2253,16 @@ class AppState extends ChangeNotifier {
       final hub = b['hub'];
       if (users == null || hub is! Map<String, dynamic> || nvs != _hubNvs) return;
       hub['users'] = users;
+      // 2.0.25: a strip the hub couldn't answer for right now keeps the energy history saved in the last copy,
+      // so one offline strip doesn't wipe its stats out of the Google copy
+      final oldEn = old != null && (old['hub_id'] ?? '').toString() == settings.hubId.toUpperCase() ? old['energy'] : null;
+      if (oldEn is Map) {
+        final en = Map<String, dynamic>.from(hub['energy'] as Map? ?? {});
+        for (final e in oldEn.entries) {
+          en.putIfAbsent(e.key.toString(), () => e.value);
+        }
+        hub['energy'] = en;
+      }
       final m = {'nvs': nvs, 'hub_id': settings.hubId.toUpperCase(), 'at': DateTime.now().toIso8601String(), ...hub};
       // 2.0.18: rewritten only when something in it changed, so an unchanged hub doesn't trigger a sync upload
       final same = old != null && jsonEncode({...old}..remove('at')) == jsonEncode({...m}..remove('at'));
