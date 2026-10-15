@@ -58,6 +58,24 @@ class UpdateService extends ChangeNotifier {
     return best;
   }
 
+  /// The release right before [latest] for the same kind — used to show "current + previous" only, never
+  /// the full history.
+  Release? previous(String kind) {
+    final l = latest(kind);
+    if (l == null) return null;
+    Release? best;
+    for (final r in releases) {
+      if (r.kind != kind || identical(r, l)) continue;
+      if (compareVersions(r.version, l.version) == 0 && r.build == l.build) continue;
+      if (best == null || compareVersions(r.version, best.version) > 0 || (compareVersions(r.version, best.version) == 0 && r.build > best.build)) best = r;
+    }
+    return best;
+  }
+
+  /// 2.0.20: the latest strip firmware we publish. Strip builds aren't on CI yet, so this is kept in sync by hand
+  /// with the newest .fwr we've shipped (see the strip-firmware notes).
+  static const latestStripFw = '1.0.82';
+
   /// the newer release for [kind] than [current], or null when up to date or unknown
   Release? newer(String kind, String? current) {
     final l = latest(kind);

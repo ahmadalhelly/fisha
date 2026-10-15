@@ -7,7 +7,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart';
-import 'backup_screen.dart';
+import 'sync_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -154,8 +154,8 @@ class _RoomsScreenState extends State<RoomsScreen> {
             actions: [
               IconButton(
                 icon: const Icon(Icons.settings_backup_restore),
-                tooltip: t('backup_title'),
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BackupScreen(state: s))),
+                tooltip: t('sync_title'),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SyncScreen(state: s))),
               ),
             ],
           ),

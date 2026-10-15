@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -8,11 +10,14 @@ import '../widgets/common.dart';
 import '../services/apk_install.dart';
 import '../services/update_service.dart';
 import 'settings_screen.dart' show appVersion;
+import 'strip_firmware_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-/// Update center: the hub and the app, each with its update button, then every release with its notes.
-/// Builds come from the public repo ahmadalhelly/fisha-app (CI copies each build there).
+/// Update center (2.0.20): one ring for the overall state, then the app, the hub, and the strips, each
+/// expandable in place. The changelog shown per item is the current and previous version only — a short,
+/// user-facing summary, never the raw commit log.
+/// Builds come from the public repo ahmadalhelly/fisha-app (CI copies every app and hub build there).
 class UpdateCenterScreen extends StatefulWidget {
   final AppState state;
   const UpdateCenterScreen({super.key, required this.state});
@@ -23,7 +28,7 @@ class UpdateCenterScreen extends StatefulWidget {
 class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
   AppState get s => widget.state;
   UpdateService get u => UpdateService.instance;
-  String _filter = 'all';
+  final _open = <String, bool>{};
   final Map<String, double?> _progress = {}; // kind -> 0..1 while downloading / uploading
   final Map<String, String> _status = {}; // kind -> line under the button
 
@@ -34,15 +39,6 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
   }
 
   String? _current(String kind) => kind == 'app' ? appVersion : s.hubFw;
-
-  String _ago(DateTime t) {
-    final m = DateTime.now().difference(t).inMinutes;
-    if (m < 1) return _tr('دلوقتي', 'just now');
-    if (m < 60) return _tr('من $m دقيقة', '$m min ago');
-    final h = m ~/ 60;
-    if (h < 24) return _tr('من $h ساعة', '$h h ago');
-    return _tr('من ${h ~/ 24} يوم', '${h ~/ 24} d ago');
-  }
 
   String _when(DateTime t) => '${t.day}/${t.month} · ${fmtTime12(t.hour, t.minute)}';
 
@@ -139,150 +135,162 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     });
   }
 
-  Widget _mini(String kind) {
+  /// A short, generic line per release — current and previous only, never the raw commit log.
+  String _genericNote(Release r, bool isCurrent) {
+    final tag = isCurrent ? _tr('(الحالي)', '(current)') : _tr('(السابق)', '(previous)');
+    final first = r.lines.isNotEmpty ? r.lines.first : _tr('تحسينات عامة وإصلاحات', 'General improvements and fixes');
+    return '${r.version} $tag — $first';
+  }
+
+  Widget _kindIcon(String kind, {double size = 20}) => Icon(
+        switch (kind) { 'hub' => Icons.router_outlined, 'strip' => Icons.power_outlined, _ => Icons.phone_android },
+        size: size,
+        color: C.accent,
+      );
+
+  bool _pending(String kind) {
+    if (kind == 'strip') return s.strips.any((x) => x.online && x.fw.isNotEmpty && x.fw != UpdateService.latestStripFw);
     final cur = _current(kind);
-    final up = u.newer(kind, cur);
+    return u.newer(kind, cur) != null;
+  }
+
+  Widget _row(String kind, String name) {
+    final isOpen = _open[kind] ?? false;
+    final pend = _pending(kind);
     final busy = _progress.containsKey(kind);
-    final isHub = kind == 'hub';
-    final blocked = isHub && s.isShared;
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: cardBox(radius: 18),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Container(
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(9)),
-              child: Icon(isHub ? Icons.router_outlined : Icons.phone_android, size: 17, color: C.accent),
-            ),
-            const SizedBox(width: 8),
-            Expanded(child: Text(isHub ? 'Hub' : _tr('التطبيق', 'App'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          ]),
-          const SizedBox(height: 8),
-          Text(cur == null || cur.isEmpty ? '—' : cur, textDirection: TextDirection.ltr, textAlign: TextAlign.end, style: mono(15, weight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          if (busy) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(value: _progress[kind], minHeight: 5, color: C.accent, backgroundColor: C.surface2),
-            ),
-          ] else
-            SizedBox(
-              height: 36,
-              child: FilledButton(
-                onPressed: up == null || blocked ? null : () => isHub ? _updateHub(up) : _updateApp(up),
-                style: FilledButton.styleFrom(
-                  backgroundColor: C.accent,
-                  foregroundColor: C.onAccent,
-                  disabledBackgroundColor: C.surface2,
-                  disabledForegroundColor: C.faint,
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                child: FittedBox(
-                  child: Text(up == null ? _tr('آخر نسخة', 'Up to date') : _tr('حدّث لـ ${up.version}', 'Update to ${up.version}'),
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
-                ),
-              ),
-            ),
-          if (_status[kind] != null) ...[
-            const SizedBox(height: 6),
-            Text(_status[kind]!, style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.5)),
-          ],
-        ]),
-      ),
-    );
-  }
-
-  Widget _chip(String key, String label) {
-    final sel = _filter == key;
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 6),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: sel,
-        showCheckmark: false,
-        selectedColor: C.accentBg,
-        backgroundColor: C.surface2,
-        labelStyle: TextStyle(color: sel ? C.text : C.textSoft, fontWeight: FontWeight.w600, fontSize: 12.5),
-        side: BorderSide(color: sel ? C.tileOnBorder : C.border),
-        onSelected: (_) => setState(() => _filter = key),
-      ),
-    );
-  }
-
-  Widget _release(Release r, bool last) {
-    final cur = _current(r.kind);
-    final isCur = cur != null && compareVersions(r.version, cur) == 0;
-    final isNew = cur != null && cur != 'dev' && compareVersions(r.version, cur) > 0 && identical(u.latest(r.kind), r);
-    final dot = isNew ? C.accent : C.surface2;
-    final tagColor = r.kind == 'hub' ? C.accent : C.blue;
-    return IntrinsicHeight(
-      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        SizedBox(
-          width: 18,
-          child: Column(children: [
-            const SizedBox(height: 3),
-            Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                color: dot,
-                shape: BoxShape.circle,
-                border: Border.all(color: isNew || isCur ? C.accent : C.border, width: 2),
-              ),
-            ),
-            if (!last) Expanded(child: Container(width: 2, color: C.border)),
-          ]),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
+    final latest = u.latest(kind);
+    final prev = u.previous(kind);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: cardBox(radius: 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => setState(() => _open[kind] = !isOpen),
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-                  decoration: BoxDecoration(color: tagColor.withValues(alpha: .14), borderRadius: BorderRadius.circular(6)),
-                  child: Text(r.kind == 'hub' ? 'Hub' : 'App', style: TextStyle(color: tagColor, fontSize: 10.5, fontWeight: FontWeight.w700)),
-                ),
-                Text(r.version, textDirection: TextDirection.ltr, style: mono(13.5, weight: FontWeight.w600)),
-                if (isNew) _pill(_tr('جديد', 'New'), C.accent),
-                if (isCur) _pill(_tr('اللي عندك', 'Installed'), C.muted),
-              ]),
-              const SizedBox(height: 2),
-              Text(_when(r.published), style: TextStyle(color: C.muted, fontSize: 11)),
-              const SizedBox(height: 4),
-              for (final l in r.lines.take(8))
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Padding(padding: const EdgeInsets.only(top: 7), child: Container(width: 4, height: 4, decoration: BoxDecoration(color: C.faint, shape: BoxShape.circle))),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(l, style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6))),
-                  ]),
-                ),
+            padding: const EdgeInsets.all(13),
+            child: Row(children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(color: C.accentBg, borderRadius: BorderRadius.circular(11)),
+                child: Center(child: _kindIcon(kind)),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5)),
+                  Text(
+                    kind == 'strip'
+                        ? (pend
+                            ? _tr('في مشتركات محتاجة تحديث', 'Some strips need an update')
+                            : _tr('كل المشتركات محدّثة', 'All strips are up to date'))
+                        : ((_current(kind)?.isEmpty ?? true) ? '—' : _current(kind)!),
+                    textDirection: kind == 'strip' ? null : TextDirection.ltr,
+                    style: TextStyle(color: C.muted, fontSize: 11.5),
+                  ),
+                ]),
+              ),
+              _statusChip(busy, pend),
+              const SizedBox(width: 4),
+              Icon(isOpen ? Icons.expand_less : Icons.expand_more, color: C.muted),
             ]),
           ),
         ),
+        if (isOpen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(13, 0, 13, 13),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Divider(height: 18),
+              if (kind == 'strip')
+                _stripBody()
+              else ...[
+                if (busy)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(value: _progress[kind], minHeight: 5, color: C.accent, backgroundColor: C.surface2),
+                  )
+                else
+                  SizedBox(
+                    height: 42,
+                    child: FilledButton(
+                      onPressed: latest == null || !pend ? null : () => kind == 'hub' ? _updateHub(latest) : _updateApp(latest),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: C.accent,
+                        foregroundColor: C.onAccent,
+                        disabledBackgroundColor: C.surface2,
+                        disabledForegroundColor: C.faint,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text(pend ? _tr('حدّث لـ ${latest!.version}', 'Update to ${latest.version}') : _tr('آخر نسخة', 'Up to date'),
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                if (_status[kind] != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_status[kind]!, style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.5)),
+                ],
+                const SizedBox(height: 10),
+                if (latest != null) Text(_genericNote(latest, true), style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
+                if (prev != null) ...[
+                  const SizedBox(height: 4),
+                  Text(_genericNote(prev, false), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
+                ],
+              ],
+            ]),
+          ),
       ]),
     );
   }
 
-  Widget _pill(String text, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: c.withValues(alpha: .14), borderRadius: BorderRadius.circular(999)),
-        child: Text(text, style: TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700)),
-      );
+  Widget _statusChip(bool busy, bool pend) {
+    final (bg, fg, label) = busy
+        ? (C.accent2.withValues(alpha: .14), C.accent2, _tr('جاري', 'Busy'))
+        : pend
+            ? (C.warn.withValues(alpha: .14), C.warn, _tr('تحديث متاح', 'Update available'))
+            : (C.green.withValues(alpha: .14), C.green, _tr('محدّث', 'Up to date'));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Text(label, style: TextStyle(color: fg, fontSize: 10.5, fontWeight: FontWeight.w700)),
+    );
+  }
+
+  Widget _stripBody() {
+    final online = [for (final x in s.strips) if (x.online) x];
+    if (online.isEmpty) return Text(_tr('مفيش مشتركات متصلة', 'No strips connected'), style: TextStyle(color: C.muted, fontSize: 12.5));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      for (final x in online)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(children: [
+            Expanded(child: Text(x.label.isNotEmpty ? x.label : x.mac, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+            Text(x.fw.isEmpty ? '—' : x.fw, textDirection: TextDirection.ltr, style: mono(12, color: x.fw != UpdateService.latestStripFw ? C.warn : C.muted)),
+          ]),
+        ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: s.mode == ConnMode.local ? () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => StripFirmwareScreen(state: s))) : null,
+        icon: const Icon(Icons.system_update_alt, size: 18),
+        label: Text(_tr('تحديث المشتركات', 'Update strips')),
+        style: OutlinedButton.styleFrom(foregroundColor: C.accent, side: BorderSide(color: C.tileOnBorder), minimumSize: const Size(0, 44)),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        _tr('هتختار ملف فيرموير المشترك، والهاب هو اللي بيفلشه على المشتركات.',
+            'Pick the strip firmware file; the hub flashes it onto the strips.'),
+        style: TextStyle(color: C.muted, fontSize: 11, height: 1.5),
+      ),
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([u, s]),
       builder: (context, _) {
-        final items = u.releases.where((r) => _filter == 'all' || r.kind == _filter).take(30).toList();
+        final kinds = ['app', 'hub', 'strip'];
+        final okCount = kinds.where((k) => !_pending(k)).length;
         return Scaffold(
           backgroundColor: C.bg,
           appBar: AppBar(
@@ -302,7 +310,13 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
             child: RefreshIndicator(
               color: C.accent,
               onRefresh: () => u.check(force: true),
-              child: ListView(padding: const EdgeInsets.fromLTRB(18, 4, 18, 28), children: [
+              child: ListView(padding: const EdgeInsets.fromLTRB(18, 10, 18, 28), children: [
+                _hero(okCount, kinds.length),
+                const SizedBox(height: 16),
+                _row('app', _tr('التطبيق', 'App')),
+                _row('hub', 'Hub'),
+                _row('strip', _tr('المشتركات', 'Strips')),
+                const SizedBox(height: 4),
                 Text(
                   u.error == 'rate'
                       ? _tr('GitHub طلب نستنى شوية قبل التشييك تاني.', 'GitHub asked us to wait before checking again.')
@@ -310,17 +324,9 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                           ? _tr('ماقدرتش أوصل لـ GitHub. اتأكد من النت.', 'Could not reach GitHub. Check the internet.')
                           : u.checkedAt == null
                               ? _tr('بيشيّك…', 'Checking…')
-                              : '${_tr('آخر تشييك', 'Last check')}: ${_ago(u.checkedAt!)} · GitHub',
+                              : '${_tr('آخر تشييك', 'Last check')}: ${_when(u.checkedAt!)}',
                   style: TextStyle(color: u.error != null ? C.warn : C.muted, fontSize: 12),
                 ),
-                const SizedBox(height: 12),
-                IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_mini('hub'), const SizedBox(width: 8), _mini('app')])),
-                const SizedBox(height: 18),
-                Row(children: [_chip('all', _tr('الكل', 'All')), _chip('hub', 'Hub'), _chip('app', _tr('التطبيق', 'App'))]),
-                const SizedBox(height: 14),
-                if (items.isEmpty && !u.loading)
-                  emptyCard(_tr('لسه مفيش إصدارات منشورة.', 'No releases published yet.'), icon: Icons.inventory_2_outlined),
-                for (var i = 0; i < items.length; i++) _release(items[i], i == items.length - 1),
               ]),
             ),
           ),
@@ -328,4 +334,52 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       },
     );
   }
+
+  Widget _hero(int okCount, int total) {
+    final allOk = okCount == total;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: cardBox(radius: 18),
+      child: Row(children: [
+        SizedBox(
+          width: 60,
+          height: 60,
+          child: CustomPaint(painter: _RingPainter(okCount / total, allOk ? C.green : C.accent)),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(allOk ? _tr('كل حاجة محدّثة', 'Everything is up to date') : _tr('${total - okCount} تحديثات متاحة', '${total - okCount} updates available'),
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            Text(_tr('التطبيق والهاب والمشتركات', 'App, hub and strips'), style: TextStyle(color: C.muted, fontSize: 12)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  final double frac;
+  final Color color;
+  const _RingPainter(this.frac, this.color);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.width / 2 - 5;
+    final bg = Paint()
+      ..color = Colors.white.withValues(alpha: .08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    final fg = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 6;
+    canvas.drawCircle(c, r, bg);
+    canvas.drawArc(Rect.fromCircle(center: c, radius: r), -math.pi / 2, 2 * math.pi * frac, false, fg);
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter old) => old.frac != frac || old.color != color;
 }

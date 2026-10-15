@@ -7,7 +7,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import 'about_screen.dart';
 import 'account_screen.dart';
-import 'backup_screen.dart';
+import 'sync_screen.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
@@ -147,7 +147,7 @@ class SettingsScreen extends StatelessWidget {
                 if (!st.isShared)
                   _row(context, Icons.restart_alt, C.danger, t('reboot_title'), st.hubReset.isEmpty ? '' : t('reboot_last', {'x': t('reset_${st.hubReset}')}),
                       () => _reboot(context, st)),
-                _row(context, Icons.settings_backup_restore, C.accent2, t('backup_title'), '', () => _open(context, BackupScreen(state: st)),
+                _row(context, Icons.settings_backup_restore, C.accent2, t('sync_title'), '', () => _open(context, SyncScreen(state: st)),
                     last: true),
               ]),
               const SizedBox(height: 18),

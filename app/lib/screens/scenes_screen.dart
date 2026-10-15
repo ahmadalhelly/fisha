@@ -7,7 +7,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
-import 'backup_screen.dart';
+import 'sync_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -118,8 +118,8 @@ class _ScenesScreenState extends State<ScenesScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_backup_restore),
-            tooltip: t('backup_title'),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => BackupScreen(state: widget.state))),
+            tooltip: t('sync_title'),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SyncScreen(state: widget.state))),
           ),
         ],
       ),

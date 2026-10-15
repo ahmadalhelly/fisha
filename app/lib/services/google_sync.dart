@@ -16,12 +16,24 @@ class GoogleSyncError implements Exception {
   String toString() => detail.isEmpty ? code : '$code: $detail';
 }
 
+/// One saved copy on Drive: its file id, when it was written, and its size.
+class SyncVersion {
+  final String id;
+  final DateTime modified;
+  final int bytes;
+  const SyncVersion(this.id, this.modified, this.bytes);
+}
+
 class GoogleSync {
   GoogleSync._();
   static final GoogleSync I = GoogleSync._();
 
   static const _scope = 'https://www.googleapis.com/auth/drive.appdata';
-  static const _fileName = 'fisha-sync.json';
+  // 2.0.20: every sync writes its own timestamped file, so old copies stay choosable at restore time
+  // instead of being overwritten. The single 'fisha-sync.json' from older builds is still read as a fallback.
+  static const _legacyName = 'fisha-sync.json';
+  static const _prefix = 'fisha-sync-';
+  static String _versionName(DateTime t) => '$_prefix${t.toUtc().millisecondsSinceEpoch}.json';
 
   final GoogleSignIn _g = GoogleSignIn(scopes: const ['email', _scope]);
   GoogleSignInAccount? _acc;
@@ -98,40 +110,51 @@ class GoogleSync {
     return r;
   }
 
-  /// Id of the newest sync file, or null when there is none. Throws on any Drive error, so a failed lookup is
-  /// never mistaken for "no file" (that used to create duplicate files and restore an old one).
-  Future<String?> _fileId() async {
-    final q = Uri.encodeQueryComponent("name='$_fileName' and trashed=false");
+  /// Every saved copy (versioned ones, plus the legacy single file if it is still there), newest first.
+  /// Throws on any Drive error, so a failed lookup is never mistaken for "no copies".
+  Future<List<SyncVersion>> listVersions() async {
+    final q = Uri.encodeQueryComponent("(name contains '$_prefix' or name='$_legacyName') and trashed=false");
     final r = await _send((h) => http.get(
           Uri.parse('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=$q'
-              '&orderBy=modifiedTime%20desc&fields=files(id,modifiedTime)'),
+              '&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime,size)&pageSize=50'),
           headers: h,
         ));
     if (r.statusCode != 200) throw GoogleSyncError('drive', 'list ${r.statusCode}');
     final j = jsonDecode(r.body);
     final files = j is Map ? j['files'] : null;
-    if (files is List && files.isNotEmpty && files.first is Map) return (files.first as Map)['id']?.toString();
-    return null;
+    if (files is! List) return const [];
+    final out = <SyncVersion>[];
+    for (final f in files) {
+      if (f is! Map) continue;
+      final id = f['id']?.toString();
+      final mod = DateTime.tryParse((f['modifiedTime'] ?? '').toString());
+      if (id == null || mod == null) continue;
+      out.add(SyncVersion(id, mod.toLocal(), int.tryParse((f['size'] ?? '0').toString()) ?? 0));
+    }
+    out.sort((a, b) => b.modified.compareTo(a.modified));
+    return out;
   }
 
-  /// Uploads (creates or replaces) the sync file.
-  Future<void> upload(Map<String, dynamic> data) async {
-    var id = await _fileId();
-    final body = utf8.encode(jsonEncode(data));
+  /// Id of the newest saved copy, or null when there is none.
+  Future<String?> _latestId() async {
+    final v = await listVersions();
+    return v.isEmpty ? null : v.first.id;
+  }
 
-    if (id == null) {
-      final createRes = await _send((h) => http.post(
-            Uri.parse('https://www.googleapis.com/drive/v3/files?fields=id'),
-            headers: {...h, 'Content-Type': 'application/json; charset=UTF-8'},
-            body: jsonEncode({'name': _fileName, 'parents': ['appDataFolder']}),
-          ));
-      if (createRes.statusCode != 200 && createRes.statusCode != 201) {
-        throw GoogleSyncError('drive', 'create ${createRes.statusCode}');
-      }
-      final created = jsonDecode(createRes.body);
-      if (created is! Map || created['id'] == null) throw const GoogleSyncError('drive', 'missing file id');
-      id = created['id'].toString();
+  /// Writes a new, separate copy, then deletes the oldest ones beyond [keep] (minimum 1).
+  Future<void> upload(Map<String, dynamic> data, {int keep = 5}) async {
+    final body = utf8.encode(jsonEncode(data));
+    final createRes = await _send((h) => http.post(
+          Uri.parse('https://www.googleapis.com/drive/v3/files?fields=id'),
+          headers: {...h, 'Content-Type': 'application/json; charset=UTF-8'},
+          body: jsonEncode({'name': _versionName(DateTime.now()), 'parents': ['appDataFolder']}),
+        ));
+    if (createRes.statusCode != 200 && createRes.statusCode != 201) {
+      throw GoogleSyncError('drive', 'create ${createRes.statusCode}');
     }
+    final created = jsonDecode(createRes.body);
+    if (created is! Map || created['id'] == null) throw const GoogleSyncError('drive', 'missing file id');
+    final id = created['id'].toString();
 
     final r = await _send((h) => http.patch(
           Uri.parse('https://www.googleapis.com/upload/drive/v3/files/$id?uploadType=media'),
@@ -139,13 +162,23 @@ class GoogleSync {
           body: body,
         ));
     if (r.statusCode != 200) throw GoogleSyncError('drive', 'upload ${r.statusCode}');
+
+    try {
+      final all = await listVersions();
+      for (final old in all.skip(keep < 1 ? 1 : keep)) {
+        await _send((h) => http.delete(Uri.parse('https://www.googleapis.com/drive/v3/files/${old.id}'), headers: h));
+      }
+    } catch (_) {
+      // pruning is best-effort: a failure here must not fail the upload that just succeeded
+    }
   }
 
-  /// The last synced data, or null when this Google account has none yet. Throws [GoogleSyncError] on failure.
-  Future<Map<String, dynamic>?> download() async {
-    final id = await _fileId();
-    if (id == null) return null;
-    final r = await _send((h) => http.get(Uri.parse('https://www.googleapis.com/drive/v3/files/$id?alt=media'), headers: h));
+  /// The data of [id], or of the newest saved copy when [id] is null; null when there is none yet.
+  /// Throws [GoogleSyncError] on failure.
+  Future<Map<String, dynamic>?> download([String? id]) async {
+    final fileId = id ?? await _latestId();
+    if (fileId == null) return null;
+    final r = await _send((h) => http.get(Uri.parse('https://www.googleapis.com/drive/v3/files/$fileId?alt=media'), headers: h));
     if (r.statusCode != 200) throw GoogleSyncError('drive', 'download ${r.statusCode}');
     try {
       final j = jsonDecode(utf8.decode(r.bodyBytes));

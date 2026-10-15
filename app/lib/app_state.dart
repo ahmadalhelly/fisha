@@ -263,6 +263,26 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 2.0.20: pauses automatic sync without signing out of the Google account (a manual "زامن دلوقتي" still works).
+  bool syncPaused = false;
+  Future<void> setSyncPaused(bool v) async {
+    syncPaused = v;
+    await _prefs?.setBool('syncPaused', v);
+    if (!v) _startAutoSync();
+    notifyListeners();
+  }
+
+  /// 2.0.20: how many past copies to keep on Drive (the rest are pruned after each upload).
+  int syncKeepVersions = 5;
+  Future<void> setSyncKeepVersions(int n) async {
+    syncKeepVersions = n.clamp(1, 10);
+    await _prefs?.setInt('syncKeep', syncKeepVersions);
+    notifyListeners();
+  }
+
+  /// Every saved copy on Drive, newest first; throws on a Drive error.
+  Future<List<SyncVersion>> listGoogleVersions() => GoogleSync.I.listVersions();
+
   Future<Map<String, dynamic>> _syncPayload() async {
     // 2.0.18: the copy of the hub's data (rules, schedules, names, protection, family) is refreshed first, so the
     // upload carries everything as it is now, not as it was at the last 15-minute refresh
@@ -320,7 +340,7 @@ class AppState extends ChangeNotifier {
   Future<String?> syncNow() async {
     try {
       final b = await _syncPayload();
-      await GoogleSync.I.upload(b);
+      await GoogleSync.I.upload(b, keep: syncKeepVersions);
       _lastSyncSig = jsonEncode(b['app']);
       await markSynced();
       if (_syncTimer == null) _startAutoSync();
@@ -330,9 +350,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<String?> restoreFromGoogle() async {
+  /// Restores a specific saved copy ([id]), or the newest one when [id] is null.
+  Future<String?> restoreFromGoogle([String? id]) async {
     try {
-      final b = await GoogleSync.I.download();
+      final b = await GoogleSync.I.download(id);
       if (b == null) return t('g_no_data');
       final app = b['app'];
       if (app is Map) app.removeWhere((k, _) => _noSyncKeys.contains(k));
@@ -382,13 +403,13 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _autoSync() async {
-    if (accountType != 'google') return;
+    if (accountType != 'google' || syncPaused) return;
     if (syncEveryMin > 0 && lastSync != null && DateTime.now().difference(lastSync!) < Duration(minutes: syncEveryMin)) return;
     try {
       final b = await _syncPayload();
       final sig = jsonEncode(b['app']);
       if (sig == _lastSyncSig) return;
-      await GoogleSync.I.upload(b);
+      await GoogleSync.I.upload(b, keep: syncKeepVersions);
       _lastSyncSig = sig;
       await markSynced();
     } catch (_) {}
@@ -416,6 +437,8 @@ class AppState extends ChangeNotifier {
     accountType = p.getString('accountType') ?? '';
     googleEmail = p.getString('googleEmail') ?? '';
     syncEveryMin = p.getInt('syncEvery') ?? 0;
+    syncPaused = p.getBool('syncPaused') ?? false;
+    syncKeepVersions = (p.getInt('syncKeep') ?? 5).clamp(1, 10);
     final ls = p.getString('lastSync');
     lastSync = ls == null ? null : DateTime.tryParse(ls);
     userName = p.getString('userName') ?? '';
