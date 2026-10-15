@@ -232,7 +232,9 @@ class AppState extends ChangeNotifier {
   int _seq = 0;
   int _gen = 0; // bumps on restart so old loops stop
 
-  bool get hubV2 => hubFw != null && !hubFw!.startsWith('1.');
+  /// the very first hubs reported 1.x versions without a patch number ("1.0-alpha"). 2.0.29: the public launch
+  /// restarts the hub at 1.0.0 (three numbers), which is a current hub.
+  bool get hubV2 => hubFw != null && (!hubFw!.startsWith('1.') || RegExp(r'^\d+\.\d+\.\d+$').hasMatch(hubFw!));
   bool get hubHasConfig => hubFw != null && hubFw != '1.0-alpha';
 
   // ---------- lifecycle ----------
