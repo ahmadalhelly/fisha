@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.34
+- Diagnostics only. 2.15.33 showed the state the hub builds sometimes comes out EMPTY (state_len 0). That matches the app's "not on the same Wi-Fi": the app's /api/state poll gets an empty answer it can't read, and the server copy is dropped too (mqtt_drop rising). The empty result can't be explained from the code yet (a host test with the real ESP32 String class showed that running out of memory still leaves at least "]}"), so when it happens the hub now records the free heap, the largest free block and the size of every piece of the state built one by one, in /api/health: `state_bad`, `state_bad_ago_s`, `state_bad_info`. Checked on both the live stream and the app's poll.
+- Validation: compiled; the record uses a fixed char buffer, worst case (largest numbers, 6 strips + 12 saved strips) tested on the computer under AddressSanitizer: 231 of 240 bytes, no overflow. Re-measured at most every 5 s.
+
 ### 2.15.33
 - Diagnostics only, no behaviour change. /api/health now shows the live stream to the phones (SSE): `sse_open` streams opened, `sse_cut` streams the hub closed because the phone didn't take the data in time (or sending failed), `sse_cut_ago_s` seconds since the last one, `sse_gone` streams the phone closed, `state_len`/`state_max` size of the state the hub sends. Reason: the app keeps saying "not on the same Wi-Fi" while the hub is fine. Suspected (not proven): the state (~6-7 KB) is bigger than the hub's 5.7 KB send buffer, so a phone that answers slowly (power saving) misses the 80 ms send window and the hub closes the stream. These numbers prove or rule it out before any fix.
 - Validation: reviewed every place a stream is closed; compiled; the MQTT queue host test still passes.

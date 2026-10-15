@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.33";
+const char* FW_VERSION = "2.15.34";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3159,14 +3159,20 @@ void webJsonNB(const String& body) {
   SubT st("web_send");
   if (!sendStr(c, h, 300) || !sendStr(c, body, 1500)) { webSlow++; c.stop(); }
 }
+void stateBadDiag(uint32_t gotLen);
 void handleState() {
   if (!guard()) return;
   if (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) webJsonNB(userStateJson(users[apiUserIdx]));
-  else webJsonNB(buildStateJson());
+  else {
+    String st = buildStateJson();
+    if (st.length() < 32) stateBadDiag(st.length());   // v2.15.34: the app's poll got an empty state
+    webJsonNB(st);
+  }
 }
 
 int sseCount();
-extern uint32_t sseOpened, sseCut, sseGone, sseCutAt, sseStateLen, sseStateMax;
+extern uint32_t sseOpened, sseCut, sseGone, sseCutAt, sseStateLen, sseStateMax, stateBadN, stateBadAt;
+extern char stateBadBuf[];
 // v2.15.6: how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
@@ -3183,6 +3189,8 @@ void handleHealth() {
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"mqtt_drop\":" + String(mqttOutDropped) + ",\"sse\":" + String(sseCount()) + ",\"sse_open\":" + String(sseOpened) +
            ",\"sse_cut\":" + String(sseCut) + ",\"sse_cut_ago_s\":" + (sseCut ? String((millis() - sseCutAt) / 1000) : String("-1")) +
            ",\"sse_gone\":" + String(sseGone) + ",\"state_len\":" + String(sseStateLen) + ",\"state_max\":" + String(sseStateMax) +
+           ",\"state_bad\":" + String(stateBadN) + ",\"state_bad_ago_s\":" + (stateBadN ? String((millis() - stateBadAt) / 1000) : String("-1")) +
+           ",\"state_bad_info\":\"" + String(stateBadBuf) + "\"" +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
@@ -3701,6 +3709,25 @@ uint32_t lastSsePush = 0, lastSseBeat = 0;
 // in time (or the send failed), closed by the phone, when the hub last closed one, and the size of the state it sends
 uint32_t sseOpened = 0, sseCut = 0, sseGone = 0, sseCutAt = 0, sseStateLen = 0, sseStateMax = 0;
 void sseCutNow() { sseCut++; sseCutAt = millis(); }
+// v2.15.34 diagnostics: on 2.15.33 the state the hub built came out empty (state_len 0), which matches the app's "not on
+// the same Wi-Fi" (an empty /api/state can't be read). When that happens, record the heap and the size of every piece of
+// the state, built one by one, in a plain char buffer (no String, so the record itself can't fail) for /api/health.
+uint32_t stateBadN = 0, stateBadAt = 0;
+char stateBadBuf[240] = "";
+void stateBadDiag(uint32_t gotLen) {
+  stateBadN++;
+  if (stateBadN > 1 && millis() - stateBadAt < 5000) return;   // counted; the pieces are re-measured at most every 5 s
+  stateBadAt = millis();
+  uint32_t fh = ESP.getFreeHeap(), ma = ESP.getMaxAllocHeap();
+  int n = snprintf(stateBadBuf, sizeof stateBadBuf, "len %u heap %u max %u lip %u hub %u nvs %u prov %u err %u host %u auth %u tmr %u",
+                   (unsigned)gotLen, (unsigned)fh, (unsigned)ma, (unsigned)WiFi.localIP().toString().length(), (unsigned)hubId.length(),
+                   (unsigned)nvsId.length(), (unsigned)provState.length(), (unsigned)mqttErr.length(), (unsigned)mqttHost().length(),
+                   (unsigned)authJson().length(), (unsigned)timersJson().length());
+  for (int i = 0; i < MAX_STRIPS && n > 0 && n < (int)sizeof stateBadBuf - 12; i++)
+    if (strips[i].used && strips[i].identified) n += snprintf(stateBadBuf + n, sizeof stateBadBuf - n, " s%d %u", i, (unsigned)stripJson(i).length());
+  for (int k = 0; k < knownCount && n > 0 && n < (int)sizeof stateBadBuf - 12; k++)
+    if (findStrip(known[k].mac) < 0) n += snprintf(stateBadBuf + n, sizeof stateBadBuf - n, " k%d %u", k, (unsigned)offlineStripJson(known[k]).length());
+}
 
 // v2.15.2: the state goes out in three pieces straight from the one copy (it used to be copied twice more per
 // phone, ~3 x the state size in RAM at once) and without blocking, so a push no longer starves the strips.
@@ -3798,6 +3825,7 @@ void ssePump() {
       String st = buildStateJson();
       sseStateLen = st.length();
       if (sseStateLen > sseStateMax) sseStateMax = sseStateLen;
+      if (sseStateLen < 32) stateBadDiag(sseStateLen);
       sseSend("state", st);
     }
   }
