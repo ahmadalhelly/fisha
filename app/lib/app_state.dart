@@ -1473,12 +1473,18 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> setOutlet(String mac, int outlet, bool on) async {
-    if (live(mac)?.online == false) {
+    final strip = live(mac);
+    if (strip?.online == false) {
       lastError = t('strip_offline_cmd');
       notifyListeners();
       return;
     }
-    final targets = outlet == 0 ? [1, 2, 3, 4] : [outlet];
+    // A master "all on/off" (outlet 0) leaves child-locked outlets alone — same as the hub (lockSkip, 2.15.23).
+    // Without this the UI showed the locked outlet flip, then flip back once the real state came back unchanged.
+    final targets = outlet != 0
+        ? [outlet]
+        : [for (final o in strip?.outlets ?? const <Outlet>[]) if (!o.locked) o.n];
+    if (targets.isEmpty) return;
     final p = _pending.putIfAbsent(mac, () => {});
     if (targets.any(p.containsKey)) {
       lastError = t('err_busy');                   // a previous command for this outlet is still on its way
@@ -1489,7 +1495,7 @@ class AppState extends ChangeNotifier {
       p[x] = on;
     }
     final before = _strips;
-    _strips = _strips.map((s) => s.mac == mac ? s.withOutlets(outlet, on) : s).toList();
+    _strips = _strips.map((s) => s.mac == mac ? s.withOutletState({for (final x in targets) x: on}) : s).toList();
     notifyListeners();
     final r = await api('onoff', {'mac': mac, 'outlet': outlet, 'on': on});
     for (final x in targets) {

@@ -74,6 +74,8 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
+// v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
+// with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
 // v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
 // is offline, and re-links it automatically once seen — no "Add strip" tap needed after a router change. See
 // autoResyncScan(). Logged as a "resync" event.
@@ -1054,10 +1056,17 @@ bool keepSkip(Strip& s, int ch, bool on, bool force) {
   return false;
 }
 
+// v2.15.23 fix: a master "all on/off" (outlet == 0) used to also re-command a child-locked outlet, which raced
+// with the "keep a locked outlet where it belongs" resend (the lock enforcement loop) and could stall or confuse
+// the whole batch for the strip, so the other (free) outlets did not respond properly either. A direct command to
+// that one outlet (outlet == ch, from its own tile) still goes through — only the whole-strip master command skips
+// locked channels now, the same way it already skips keep-always-on ones.
+bool lockSkip(Strip& s, int ch, int outlet) { return outlet == 0 && (s.lockMask & (1 << (ch - 1))); }
+
 void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
     if (on) s.tripMask &= ~(1 << (ch - 1));      // switched back on on purpose: stop chasing the safety cut
-    if (keepSkip(s, ch, on, force)) continue;
+    if (lockSkip(s, ch, outlet) || keepSkip(s, ch, on, force)) continue;
     noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     s.o[ch - 1].on = on;
@@ -1109,7 +1118,7 @@ bool waitForInfo(Strip& s, uint32_t seq, uint32_t ms) {
 bool setOutlets(Strip& s, int outlet, bool on) {
   for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
     if (on) s.tripMask &= ~(1 << (ch - 1));
-    if (keepSkip(s, ch, on, false)) continue;
+    if (lockSkip(s, ch, outlet) || keepSkip(s, ch, on, false)) continue;
     noteCommanded(s, ch, on);
     sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
     pumpFor(120);
