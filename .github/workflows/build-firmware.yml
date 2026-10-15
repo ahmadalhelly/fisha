@@ -98,3 +98,20 @@ jobs:
           make_latest: false
           files: fisha-hub-${{ steps.ver.outputs.v }}.bin
           body_path: RELEASE_NOTES.md
+
+      # Strip firmware (F1.0.82) for the hub's "fetch latest" button: the public draft release strip-F1.0.82 on
+      # fisha-app. The hub downloads from that link once the owner presses Publish, same as the hub and app builds.
+      - name: Publish strip firmware to fisha-app (draft)
+        if: success() && env.APP_TOKEN != ''
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ahmadalhelly/fisha-app
+          draft: true
+          token: ${{ env.APP_TOKEN }}
+          tag_name: strip-F1.0.82
+          name: Strip firmware F1.0.82
+          make_latest: false
+          files: firmware/strip-fw/comMTTL-W01_F1.0.82.fwr
+          body: |
+            Strip firmware F1.0.82 (MTTL-W01). The hub downloads it from this release; updating strips is done from the app's update center.
