@@ -172,13 +172,15 @@ jobs:
         run: |
           [ -f build10.log ] || echo "no build log" > build10.log
           tail -c 60000 build10.log > /tmp/build10.log
+          cp fisha-hub-*-10strips*.bin /tmp/ 2>/dev/null || true
           echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > /tmp/STATUS.txt
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
           git checkout --orphan ci-logs-fw-tmp
           git rm -rf --cached . > /dev/null 2>&1 || true
           cp /tmp/build10.log /tmp/STATUS.txt .
-          git add -f build10.log STATUS.txt
+          cp /tmp/fisha-hub-*.bin . 2>/dev/null || true      # the bins too, so they can be fetched with git
+          git add -f build10.log STATUS.txt fisha-hub-*.bin 2>/dev/null || git add -f build10.log STATUS.txt
           git commit -m "hub 10-strip build log, run ${{ github.run_number }}"
           git push -f origin HEAD:ci-logs-fw || true
 
