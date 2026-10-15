@@ -8,6 +8,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/ota_dialogs.dart';
 import '../services/apk_install.dart';
 import '../services/update_service.dart';
 import 'settings_screen.dart' show appVersion;
@@ -42,28 +43,6 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
 
   String _when(DateTime t) => '${t.day}/${t.month} · ${fmtTime12(t.hour, t.minute)}';
 
-  Future<String?> _askPass() async {
-    final ctrl = TextEditingController(text: s.otaPass);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: C.surface,
-        title: Text(_tr('باسورد التحديث', 'Update password'), style: const TextStyle(fontSize: 18)),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          obscureText: true,
-          textDirection: TextDirection.ltr,
-          decoration: const InputDecoration(hintText: 'OTA_PASS'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
-          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(t('save'))),
-        ],
-      ),
-    );
-  }
-
   Future<void> _updateHub(Release r) async {
     if (s.mode != ConnMode.local) {
       setState(() => _status['hub'] = t('fw_local_only'));
@@ -73,12 +52,6 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
         _tr('الـ Hub هيعيد التشغيل بعد التحديث، والمشتركات بتفضل شغالة.', 'The hub restarts after the update; the strips keep running.'),
         ok: _tr('حدّث', 'Update'))) {
       return;
-    }
-    var pass = s.otaPass;
-    if (pass.isEmpty && !s.isShared) {
-      final p = await _askPass();
-      if (p == null) return;
-      pass = p;
     }
     setState(() {
       _progress['hub'] = null;
@@ -98,16 +71,15 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       _progress['hub'] = 0;
       _status['hub'] = _tr('بيرفع على الـ Hub…', 'Uploading to the hub…');
     });
-    final err = await s.uploadFirmware(bytes, pass, (p) {
+    final err = await s.uploadFirmwareAuto(bytes, (p) {
       if (mounted) setState(() => _progress['hub'] = p);
-    });
-    if (err == null) await s.setOtaPass(pass);
+    }, ask: () => askUpdatePassword(context, s));
     if (!mounted) return;
     setState(() {
       _progress.remove('hub');
       _status['hub'] = switch (err) {
         null => _tr('اتحدّث. الـ Hub بيعيد التشغيل وهيرجع خلال دقيقة.', 'Done. The hub is restarting and will be back within a minute.'),
-        'auth' => t('fw_err_auth'),
+        'auth' || 'cancel' => t('fw_err_auth'),
         'net' => t('fw_err_net'),
         _ => err,
       };
@@ -135,7 +107,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     });
   }
 
-  /// The release whose version matches the one actually installed, if GitHub still has it.
+  /// The release whose version matches the one actually installed, if it is still published.
   Release? _releaseFor(String kind, String? version) {
     if (version == null || version.isEmpty) return null;
     for (final r in u.releases) {
@@ -368,9 +340,9 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                 const SizedBox(height: 4),
                 Text(
                   u.error == 'rate'
-                      ? _tr('GitHub طلب نستنى شوية قبل التشييك تاني.', 'GitHub asked us to wait before checking again.')
+                      ? _tr('سيرفر التحديثات طلب نستنى شوية قبل التشييك تاني.', 'The update server asked us to wait before checking again.')
                       : u.error == 'net'
-                          ? _tr('ماقدرتش أوصل لـ GitHub. اتأكد من النت.', 'Could not reach GitHub. Check the internet.')
+                          ? _tr('ماقدرتش أوصل لسيرفر التحديثات. اتأكد من النت.', 'Could not reach the update server. Check the internet.')
                           : u.checkedAt == null
                               ? _tr('بيشيّك…', 'Checking…')
                               : '${_tr('آخر تشييك', 'Last check')}: ${_when(u.checkedAt!)}',

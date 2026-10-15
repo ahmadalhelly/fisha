@@ -240,7 +240,13 @@ class AppState extends ChangeNotifier {
     await restart();
     // the web build has no Google sign-in (see WEB.md)
     if (!kIsWeb && accountType == 'google') {
-      GoogleSync.I.restore().then((ok) {
+      GoogleSync.I.restore().then((ok) async {
+        final ph = GoogleSync.I.photoUrl ?? '';          // a restored sign-in has the photo too (older builds never saved it)
+        if (ok && ph.isNotEmpty && ph != googlePhoto) {
+          googlePhoto = ph;
+          await _prefs?.setString('googlePhoto', ph);
+          notifyListeners();
+        }
         if (ok && lastSync != null) {
           _startAutoSync();
           Future.delayed(const Duration(seconds: 20), _autoSync);
@@ -539,6 +545,8 @@ class AppState extends ChangeNotifier {
               ],
             }
         ],
+        // 2.0.23: the daily energy history travels with every backup / Google sync (compact rows yyyymmdd:wh1:wh2:wh3:wh4:peak)
+        'energy': await _exportEnergy(),
         'config': {
           'temp_max': tempMax,
           'temp_protect': tempProtect,
@@ -556,6 +564,25 @@ class AppState extends ChangeNotifier {
       };
     }
 
+    return out;
+  }
+
+  Future<Map<String, String>> _exportEnergy() async {
+    final out = <String, String>{};
+    for (final s in allStrips) {
+      if (!s.online) continue;
+      final r = await api('energy', {'mac': s.mac});
+      final days = r.data?['days'];
+      if (!r.ok || days is! List) continue;
+      final rows = <String>[];
+      for (final d in days) {
+        if (d is! Map) continue;
+        final wh = d['wh'];
+        if (wh is! List || wh.length < 4) continue;
+        rows.add('${d['date']}:${wh[0]}:${wh[1]}:${wh[2]}:${wh[3]}:${(d['peak_w'] as num?)?.toInt().clamp(0, 65535) ?? 0}');
+      }
+      if (rows.isNotEmpty) out[s.mac] = rows.join(';');
+    }
     return out;
   }
 
@@ -618,6 +645,14 @@ class AppState extends ChangeNotifier {
 
       // strips
       final currentMacs = allStrips.map((s) => s.mac.toUpperCase()).toSet();
+      // energy history (hub 2.15.27+): days the hub already has are never overwritten
+      final en = hubData['energy'];
+      if (en is Map && !settings.isShared) {
+        for (final e in en.entries) {
+          if (e.value is String && (e.value as String).isNotEmpty) await api('energy_restore', {'mac': e.key.toString(), 'd': e.value});
+        }
+      }
+
       if (hubData['strips'] is List) {
         for (final raw in hubData['strips']) {
           if (raw is! Map) continue;
@@ -1636,6 +1671,15 @@ class AppState extends ChangeNotifier {
 
   Future<void> setLock(Strip s, int outlet, bool v) =>
       _flag(s, outlet, 'lock', {'locked': v}, (o) => o.copyWith(locked: v));
+  Future<void> setMasterLock(Strip s, bool v) async {
+    final before = _strips;
+    _strips = _strips.map((x) => x.mac == s.mac ? x.withMasterLock(v) : x).toList();
+    notifyListeners();
+    final r = await api('lock', {'mac': s.mac, 'outlet': 0, 'locked': v});
+    if (!r.ok) _strips = before;
+    _fail(r);
+    notifyListeners();
+  }
   Future<void> setProtected(Strip s, int outlet, bool v) =>
       _flag(s, outlet, 'protect', {'protected': v}, (o) => o.copyWith(protected: v));
   Future<void> setKeepOn(Strip s, int outlet, bool v) =>
@@ -1773,6 +1817,41 @@ class AppState extends ChangeNotifier {
     await _prefs?.setString('otaPass', v);
   }
 
+  /// The password every hub accepts for updates: fisha-<hub MAC>. The owner may also set one of their own.
+  String get defaultOtaPass => 'fisha-${settings.hubId.toUpperCase()}';
+
+  /// Uploads a hub .bin trying, in order, the saved own password then the default fisha-<MAC>; if both fail it asks
+  /// through [ask] once (returns null to cancel). Returns null on success, 'cancel', 'auth', 'net', 'bad_file' or the hub's text.
+  Future<String?> uploadFirmwareAuto(List<int> bytes, void Function(double) progress, {Future<String?> Function()? ask}) async {
+    if (settings.isShared) return uploadFirmware(bytes, '', progress);
+    final tried = <String>[];
+    Future<String?> go(String p) async {
+      tried.add(p);
+      return uploadFirmware(bytes, p, progress);
+    }
+    var err = await go(otaPass.isNotEmpty ? otaPass : defaultOtaPass);
+    if (err == 'auth' && !tried.contains(defaultOtaPass)) err = await go(defaultOtaPass);
+    if (err == null) {
+      if (tried.last == defaultOtaPass && otaPass.isNotEmpty) await setOtaPass('');
+      return null;
+    }
+    if (err != 'auth') return err;
+    if (otaPass.isNotEmpty) await setOtaPass('');       // the saved one is stale: forget it
+    final p = ask == null ? null : await ask();
+    if (p == null || p.isEmpty) return 'auth';
+    err = await go(p);
+    if (err == null) await setOtaPass(p == defaultOtaPass ? '' : p);
+    return err;
+  }
+
+  /// Owner: change the update password. [cur] = fisha-<MAC> or the current own one; [next] empty = back to the default.
+  Future<String?> changeOtaPass(String cur, String next) async {
+    final r = await api('ota_pass', {'cur': cur, 'new': next});
+    if (!r.ok) return r.error ?? 'failed';
+    await setOtaPass(next);
+    return null;
+  }
+
   bool get canUpdateFirmware => !kIsWeb && (_localFresh || settings.hasLocal);
 
   /// Uploads a firmware .bin to the hub's /update page; [progress] gets 0..1. Returns null on success or an error text.
@@ -1835,8 +1914,13 @@ class AppState extends ChangeNotifier {
   /// Uploads a strip .fwr to the hub (kept there until replaced). Returns null on success or an error text.
   Future<String?> uploadStripFw(List<int> bytes, void Function(double) progress) async {
     if (!looksLikeStripFw(bytes)) return 'bad_file';
-    final err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
+    var err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
         headers: _localHeaders, fileName: 'strip.fwr');
+    if (err == 'net') {                                   // the hub can be busy for a moment (flash erase): one more try
+      await Future.delayed(const Duration(seconds: 2));
+      err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
+          headers: _localHeaders, fileName: 'strip.fwr');
+    }
     if (err == null || err == 'net' || err == 'auth') return err;
     return _hubJson(err)?['error']?.toString() ?? err;
   }

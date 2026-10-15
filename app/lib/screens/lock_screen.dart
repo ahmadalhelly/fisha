@@ -111,7 +111,7 @@ class _AccessScreenState extends State<AccessScreen> {
             const SizedBox(height: 6),
             Text(
                 _phase == 'claim'
-                    ? _tr('اكتب باسورد تحديث الهاب (OTA) عشان التليفون ده يبقى تليفون المالك.', 'Enter the hub update (OTA) password to make this an owner phone.')
+                    ? _tr('أول تليفون بيقفل الهاب بيبقى تليفون المالك. من غير باسورد.', 'The first phone to lock the hub becomes the owner phone. No password needed.')
                     : _tr('عشان تشوف مشتركات البيت، صاحب الهاب لازم يوافق على التليفون ده.', 'To see the strips at home, the hub owner has to approve this phone.'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: C.muted, fontSize: 13, height: 1.6)),
@@ -201,23 +201,16 @@ class ClaimForm extends StatefulWidget {
 }
 
 class _ClaimFormState extends State<ClaimForm> {
-  final _ota = TextEditingController();
-  bool _obscure = true, _busy = false;
+  bool _busy = false;
   String? _err;
 
-  @override
-  void dispose() {
-    _ota.dispose();
-    super.dispose();
-  }
-
   Future<void> _go() async {
-    if (_ota.text.isEmpty || _busy) return;
+    if (_busy) return;
     setState(() {
       _busy = true;
       _err = null;
     });
-    final e = await widget.state.claimHub(_ota.text);
+    final e = await widget.state.claimHub('');
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -231,25 +224,11 @@ class _ClaimFormState extends State<ClaimForm> {
 
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        TextField(
-          controller: _ota,
-          obscureText: _obscure,
-          textDirection: TextDirection.ltr,
-          onSubmitted: (_) => _go(),
-          decoration: InputDecoration(
-            labelText: _tr('باسورد تحديث الهاب (OTA)', 'Hub update (OTA) password'),
-            suffixIcon: IconButton(icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined), onPressed: () => setState(() => _obscure = !_obscure)),
-          ),
-        ),
         if (_err != null) ...[
-          const SizedBox(height: 8),
           Text(_err!, style: TextStyle(color: C.danger, fontSize: 12.5)),
+          const SizedBox(height: 8),
         ],
-        const SizedBox(height: 12),
         primaryButton(_tr('اقفل الهاب على التليفون ده', 'Lock the hub to this phone'), _busy ? null : _go, icon: Icons.lock_outline),
-        const SizedBox(height: 8),
-        Text(_tr('ده نفس الباسورد اللي بتحدّث بيه فيرموير الهاب.', 'The same password you use to update the hub firmware.'),
-            style: TextStyle(color: C.muted, fontSize: 11.5)),
       ]);
 }
 

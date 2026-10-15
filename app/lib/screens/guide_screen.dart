@@ -77,8 +77,8 @@ class GuideScreen extends StatelessWidget {
         _Part(Icons.tune, _tr('بعد كده', 'Afterwards'), _tr('حاجات مفيدة:', 'Good to know:'), [
           _Step(_tr('الإشعارات', 'Notifications'), _tr('الإعدادات ← الإشعارات ← إشعارات لحظية. وافق على الصلاحيات، وخلي البطارية "بدون قيود" لـ Fisha.', 'Settings → Notifications → instant notifications. Allow the permissions and set battery to "unrestricted" for Fisha.')),
           _Step(_tr('تحديث الـ Hub', 'Updating the hub'),
-              _tr('نزّل ملف fisha-hub-X.bin من صفحة Releases على GitHub (أي إصدار اسمه Fisha Hub firmware)، وبعدين الإعدادات ← تحديث فيرموير الـ Hub ← اختار الملف. لازم تكون على نفس الواي فاي، ومش محتاج Arduino ولا تعديل في الكود.',
-                  'Download fisha-hub-X.bin from the GitHub Releases page (any "Fisha Hub firmware" release), then Settings → Update hub firmware → pick it. Same Wi-Fi needed; no Arduino or code edits.')),
+              _tr('افتح الإعدادات ← مركز التحديثات وادوس تحديث الـ Hub، أو الإعدادات ← تحديث فيرموير الـ Hub واختار ملف الفيرموير. لازم تكون على نفس الواي فاي، ومش محتاج Arduino ولا تعديل في الكود.',
+                  'Open Settings → Update Center and tap update for the hub, or Settings → Update hub firmware and pick the firmware file. Same Wi-Fi needed; no Arduino or code edits.')),
           _Step(_tr('الغرف', 'Rooms'), _tr('اضغط مطول على اسم الغرفة في الرئيسية (أو ⋮): تشغيل وإيقاف الكل، قفل بعد مدة، جدولة، أتمتة، إعادة تشغيل، تكرار، بصمة، وإشعارات للغرفة كلها.', 'Long-press a room name on Home (or ⋮): all on/off, off after a while, schedule, automation, power-cycle, loop, fingerprint and notifications for the whole room.')),
           _Step(_tr('لو غيّرت الراوتر', 'If you change the router'),
               _tr('غيّر الشبكة من الإعدادات ← شبكة الواي فاي قبلها. ولو نسيت، الـ Hub هيفتح شبكة Fisha-Hub-XXXX، ادخل عليها وافتح 192.168.4.1. وبعدها ضيف المشتركات تاني.',
@@ -90,7 +90,7 @@ class GuideScreen extends StatelessWidget {
               _tr('غالباً المشتركات اتحدثت من السحابة وغيّرت المنفذ لـ 21197. حدّث الـ Hub لـ 2.13.1 أو أحدث، وامنع النت عن المشتركات من الراوتر.', 'Most likely a cloud update moved them to port 21197. Update the hub to 2.13.1 or newer and block the strips from the internet in the router.')),
           _Step(_tr('المشترك مش ظاهر في البحث', 'The strip is not found'), _tr('ارجع وضع الإعداد (10 ثواني لحد الرمش السريع) وقرّبه من الـ Hub.', 'Put it back in setup mode (10 s, fast blinking) and move it closer.')),
           _Step(_tr('اتضاف بس ما ظهرش', 'Added but not showing'), _tr('افصل المشترك من الكهربا 10 ثواني ورجّعه. ولو لسه، اتأكد إن الشبكة 2.4GHz.', 'Unplug it for 10 s. If still missing, check the network is 2.4 GHz.')),
-          _Step(_tr('رفع الفيرموير فشل', 'Firmware upload failed'), _tr('اتأكد إن باسورد التحديث هو نفس OTA_PASS، وإنك على نفس الواي فاي.', 'Check the update password equals OTA_PASS and that you are on the same Wi-Fi.')),
+          _Step(_tr('رفع الفيرموير فشل', 'Firmware upload failed'), _tr('اتأكد إنك على نفس الواي فاي. باسورد التحديث الافتراضي هو fisha- وبعده رقم MAC الـ Hub، أو الباسورد اللي إنت غيّرته.', 'Make sure you are on the same Wi-Fi. The default update password is fisha- followed by the hub MAC, or the one you set.')),
         ]),
       ];
 

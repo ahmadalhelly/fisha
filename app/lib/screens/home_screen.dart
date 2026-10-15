@@ -270,7 +270,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
-        const BrandMark(size: 32),
+        const LoopLogo(size: 32),
         const SizedBox(width: 6),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -365,7 +365,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: SizedBox(
             width: math.max(0, MediaQuery.sizeOf(context).width - 48),
             child: Row(children: [
-              const BrandMark(size: 24),
+              const LoopLogo(size: 24),
               const SizedBox(width: 6),
               Row(textDirection: TextDirection.ltr, crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
                 FlowColor(

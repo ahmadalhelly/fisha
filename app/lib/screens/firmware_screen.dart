@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/ota_dialogs.dart';
 
 /// Updates the hub firmware from the phone: pick the .bin, upload it to the hub's /update page.
 class FirmwareScreen extends StatefulWidget {
@@ -47,22 +48,22 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     final bytes = _bytes;
     if (bytes == null) return;
     if (!await confirmDialog(context, t('fw_confirm_t'), t('fw_confirm_b'), ok: t('fw_upload'))) return;
-    await s.setOtaPass(_pass.text);
+    if (_pass.text.isNotEmpty) await s.setOtaPass(_pass.text);
     setState(() {
       _progress = 0;
       _error = null;
       _done = false;
     });
-    final err = await s.uploadFirmware(bytes, _pass.text, (p) {
+    final err = await s.uploadFirmwareAuto(bytes, (p) {
       if (mounted) setState(() => _progress = p);
-    });
+    }, ask: () => askUpdatePassword(context, s));
     if (!mounted) return;
     setState(() {
       _progress = null;
       _done = err == null;
       _error = switch (err) {
         null => null,
-        'auth' => t('fw_err_auth'),
+        'auth' || 'cancel' => t('fw_err_auth'),
         'net' => t('fw_err_net'),
         'bad_file' => t('fw_bad_file'),
         _ => err,
@@ -115,6 +116,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                 ),
               ),
             ),
+            if (s.isOwner)
+              OutlinedButton.icon(
+                onPressed: busy ? null : () => changeUpdatePasswordDialog(context, s),
+                icon: const Icon(Icons.key_outlined),
+                label: Text(Tr.isAr ? 'تغيير / إعادة تعيين الباسورد' : 'Change / reset the password'),
+                style: OutlinedButton.styleFrom(foregroundColor: C.accent, side: BorderSide(color: C.tileOnBorder), minimumSize: const Size(0, 44)),
+              ),
           ]),
           const SizedBox(height: 16),
           if (busy) ...[

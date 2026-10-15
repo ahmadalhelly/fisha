@@ -111,6 +111,16 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                     state.requiresBio(s.mac, 0),
                     true,
                     (v) => state.setRequiresBio(s.mac, 0, v)),
+                if (state.can(Perm.prot))
+                _switchTile(
+                    Icons.lock_outline,
+                    Tr.isAr ? 'قفل الأطفال للمفتاح الفيزيائي' : 'Child lock for the physical button',
+                    s.fw.contains('F1.0.82')
+                        ? (Tr.isAr ? 'يمنع زرار المشترك نفسه من تشغيل أو إيقاف أي حاجة' : 'The strip\'s own master button stops working')
+                        : (Tr.isAr ? 'محتاج فيرموير المشترك F1.0.82 (حدّثه من مركز التحديثات)' : 'Needs strip firmware F1.0.82 (update it in the Update Center)'),
+                    s.masterLock,
+                    state.hubV2 && s.online && s.fw.contains('F1.0.82'),
+                    (v) => state.setMasterLock(s, v)),
                 if (state.canAdmin)
                 _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
                     (v) => state.setNotifyMask(s, v ? s.notifyMask | 0x10 : s.notifyMask & ~0x10)),

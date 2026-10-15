@@ -115,7 +115,7 @@ class SettingsScreen extends StatelessWidget {
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
-                // 2.0.16: hub and app builds from GitHub, with how many are newer than what runs here
+                // 2.0.16: latest hub and app builds, with how many are newer than what runs here
                 if (!kIsWeb)
                   ListenableBuilder(
                     listenable: UpdateService.instance,
@@ -191,7 +191,7 @@ class SettingsScreen extends StatelessWidget {
               ]),
               const SizedBox(height: 26),
               Column(children: [
-                const BrandMark(size: 56),
+                const LoopLogo(size: 56),
                 const SizedBox(height: 6),
                 Text('${t('app_name')} · Fisha', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                 Text('${t('version')} $appVersion', style: TextStyle(color: C.muted, fontSize: 12)),

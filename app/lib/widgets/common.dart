@@ -331,6 +331,101 @@ class BrandMark extends StatelessWidget {
   Widget build(BuildContext context) => Image.asset('assets/brand/icon_fg.png', width: size, height: size);
 }
 
+class BoltPainter extends CustomPainter {
+  final double v;
+  const BoltPainter(this.v);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final k = size.width / 1024, sc = 0.95, cx = 512.0, y0 = 512 - 30 - 60 * sc;
+    Offset pt(double dx, double dy) => Offset((cx + dx * sc) * k, (y0 + dy * sc) * k);
+    final path = Path()
+      ..moveTo(pt(18, 38).dx, pt(18, 38).dy)
+      ..lineTo(pt(-52, 140).dx, pt(-52, 140).dy)
+      ..lineTo(pt(-6, 140).dx, pt(-6, 140).dy)
+      ..lineTo(pt(-24, 214).dx, pt(-24, 214).dy)
+      ..lineTo(pt(54, 104).dx, pt(54, 104).dy)
+      ..lineTo(pt(8, 104).dx, pt(8, 104).dy)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85 * v)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
+    canvas.drawPath(path, Paint()..color = const Color(0xFFEFFFF9).withValues(alpha: v));
+  }
+
+  @override
+  bool shouldRepaint(BoltPainter old) => old.v != v;
+}
+
+/// The splash logo, looping softly: a mint glow breathes behind the plug and the bolt flickers once per cycle.
+/// Static when the system asks for reduced motion.
+class LoopLogo extends StatefulWidget {
+  final double size;
+  const LoopLogo({super.key, this.size = 32});
+
+  @override
+  State<LoopLogo> createState() => _LoopLogoState();
+}
+
+class _LoopLogoState extends State<LoopLogo> with SingleTickerProviderStateMixin {
+  static const _mint = Color(0xFF2EE6B0);
+  static const _ms = 4200;
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: _ms));
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    if (!MediaQuery.of(context).disableAnimations) _c.repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sz = widget.size;
+    if (!_c.isAnimating) return BrandMark(size: sz);
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (_, __) {
+          final ms = _c.value * _ms;
+          final glow = 0.5 + 0.5 * math.sin(_c.value * 2 * math.pi);
+          final f = ms >= 300 && ms <= 550 ? (ms - 300) / 250 : 0.0; // the same flicker as the splash
+          final bolt = f == 0 ? 0.0 : (f < .3 ? f / .3 : f < .45 ? .35 : f < .65 ? 1.0 : (1 - f) / .35);
+          return SizedBox(
+            width: sz,
+            height: sz,
+            child: Stack(clipBehavior: Clip.none, children: [
+              Positioned(
+                left: -sz * 0.4,
+                top: -sz * 0.4,
+                width: sz * 1.8,
+                height: sz * 1.8,
+                child: Opacity(
+                  opacity: 0.35 + 0.55 * glow,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [_mint.withValues(alpha: 0.22), _mint.withValues(alpha: 0.06), _mint.withValues(alpha: 0)], stops: const [0, .45, 1]),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(child: BrandMark(size: sz)),
+              if (bolt > 0) Positioned.fill(child: CustomPaint(painter: BoltPainter(bolt))),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+}
+
 // ---------- duration picker: hours / minutes / seconds drop-downs ----------
 /// Three drop-downs (h, m, s). [value] and [onChanged] are in seconds.
 class DurationPicker extends StatelessWidget {

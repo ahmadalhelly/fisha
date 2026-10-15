@@ -223,7 +223,7 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
                         height: logo,
                         child: Stack(children: [
                           const BrandMark(size: logo),
-                          if (bolt > 0) Positioned.fill(child: CustomPaint(painter: _BoltPainter(bolt))),
+                          if (bolt > 0) Positioned.fill(child: CustomPaint(painter: BoltPainter(bolt))),
                         ]),
                       ),
                     ),
@@ -263,30 +263,6 @@ class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateM
 }
 
 /// Lights the bolt cut-out of the brand mark (same geometry as tool/brand.py, icon_fg.png at scale 0.95).
-class _BoltPainter extends CustomPainter {
-  final double v;
-  const _BoltPainter(this.v);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final k = size.width / 1024, sc = 0.95, cx = 512.0, y0 = 512 - 30 - 60 * sc;
-    Offset pt(double dx, double dy) => Offset((cx + dx * sc) * k, (y0 + dy * sc) * k);
-    final path = Path()
-      ..moveTo(pt(18, 38).dx, pt(18, 38).dy)
-      ..lineTo(pt(-52, 140).dx, pt(-52, 140).dy)
-      ..lineTo(pt(-6, 140).dx, pt(-6, 140).dy)
-      ..lineTo(pt(-24, 214).dx, pt(-24, 214).dy)
-      ..lineTo(pt(54, 104).dx, pt(54, 104).dy)
-      ..lineTo(pt(8, 104).dx, pt(8, 104).dy)
-      ..close();
-    canvas.drawPath(path, Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85 * v)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5));
-    canvas.drawPath(path, Paint()..color = const Color(0xFFEFFFF9).withValues(alpha: v));
-  }
-
-  @override
-  bool shouldRepaint(_BoltPainter old) => old.v != v;
-}
-
 class Shell extends StatefulWidget {
   final AppState state;
   const Shell({super.key, required this.state});

@@ -4,6 +4,13 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.27
+- Update password: every hub accepts the fixed `fisha-<MAC>` (12 hex digits, upper case, e.g. `fisha-80F3DA40F674`), plus the owner's own password if they set one. No random password any more (it left the owner locked out). Reason: the owner must always be able to recover the hub.
+- New owner-only API `ota_pass` (`cur`, `new`): reset or change the update password; an empty `new` puts the default back.
+- Wi-Fi move: the hub now moves only when every strip took the new network. Otherwise it stays on the old network and hands the old one back to the strips that answered. Reason: a half-accepted move left strips on a different network than the hub, so all of them showed offline.
+- Strip-level child lock: `lock` with `outlet` 0 blocks the strip's own master button (F1.0.82 `up:childlock`, bit 0). The mask is re-sent on every connect and reported as `mlock`. Reason: the app had no way to lock the physical master button.
+- `energy_restore`: puts saved daily energy history back (never overwrites days the hub already has), so reports travel with sync and backups.
+
 ### 2.15.26
 - Roles as the owner sets them: view sees everything, control switches outlets (not overload-protected ones), full admin also gets Wi-Fi, updates, reboot, automations and protections.
 - Owner can grant extra permissions per member (automations, protections, strip updates, hub updates, Wi-Fi, export).
@@ -30,7 +37,7 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 - Web application removed from the hub (the Fisha app is the only client).
 
 ### 2.15.20 (beta)
-- No secrets in the code. The update password is random per hub and kept in NVS.
+- No secrets in the code. (Update password: see 2.15.27.)
 - The hub server user defaults to `ESP_hub`. The server address and user come from the app (`cloud` command: `host`, `user`, `pass`).
 - The owner sets the hub address in the app (`cloud` command: `lip`). The hub checks it is on the home network, saves it, and restarts.
 - If the router does not answer on the saved address within a minute of boot, the hub goes back to 192.168.1.100.

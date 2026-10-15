@@ -241,6 +241,44 @@ class _UsersScreenState extends State<UsersScreen> {
     return names.isEmpty ? '${u.strips.length}' : names.join('، ');
   }
 
+  // the owner (this phone's Google account) heads the list with the same photo/name/email card as members
+  Widget _ownerCard() {
+    final mine = s.isOwner;
+    final others = [for (final o in s.ownerPhones) if (!mine || o.email.toLowerCase() != s.googleEmail.toLowerCase()) o];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (mine)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: cardBox(radius: 20),
+          child: Row(children: [
+            Avatar(photo: s.googlePhoto, name: s.userName.isEmpty ? s.googleEmail : s.userName, size: 48, ring: roleColor(3)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(s.userName.isEmpty ? s.googleEmail.split('@').first : s.userName, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                if (s.googleEmail.isNotEmpty) SelectableText(s.googleEmail, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 12)),
+              ]),
+            ),
+            roleChip(3),
+          ]),
+        ),
+      for (final o in others) ...[
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: cardBox(radius: 20),
+          child: Row(children: [
+            Avatar(photo: '', name: o.email, size: 48, ring: roleColor(3)),
+            const SizedBox(width: 12),
+            Expanded(child: SelectableText(o.email, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 12.5))),
+            roleChip(3),
+          ]),
+        ),
+      ],
+    ]);
+  }
+
   // 2.0.22 (family page "ب"): one expanded card per member: Google photo, name, email, role, strips and extra permissions
   Widget _memberCard(HubUser u) {
     final extras = [for (final p in [Perm.auto, Perm.prot, Perm.stripFw, Perm.wifi, Perm.hubFw, Perm.export]) if (u.perms & p != 0) t('perm_$p')];
@@ -334,6 +372,8 @@ class _UsersScreenState extends State<UsersScreen> {
               ),
             ]),
             const SizedBox(height: 14),
+            _ownerCard(),
+            const SizedBox(height: 10),
             if (users != null && users.isEmpty) emptyCard(t('users_empty'), icon: Icons.group_outlined),
             if (users != null)
               for (final u in users) ...[

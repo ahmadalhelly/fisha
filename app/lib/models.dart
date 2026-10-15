@@ -84,6 +84,7 @@ class Strip {
   final int notifyMask; // bit 0-3 outlets, bit 4 strip-level events
   final bool hasSchedule; // whole-strip schedule
   final bool hasRule; // whole-strip rule
+  final bool masterLock; // child lock on the strip's own physical master button (strip fw F1.0.82)
 
   const Strip({
     required this.mac,
@@ -98,6 +99,7 @@ class Strip {
     this.notifyMask = 0x1F,
     this.hasSchedule = false,
     this.hasRule = false,
+    this.masterLock = false,
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -122,6 +124,7 @@ class Strip {
       notifyMask: _i(j['notify'], 0x1F),
       hasSchedule: j['sched'] == true,
       hasRule: j['rule'] == true,
+      masterLock: j['mlock'] == true,
     );
   }
 
@@ -131,7 +134,7 @@ class Strip {
   double get livePower => outlets.fold(0.0, (sum, o) => sum + (o.on ? o.powerW : 0));
   bool get anyProtectedOn => outlets.any((o) => o.protected && o.on);
 
-  Strip _with({List<Outlet>? outlets, String? label}) => Strip(
+  Strip _with({List<Outlet>? outlets, String? label, bool? masterLock}) => Strip(
         mac: mac,
         fw: fw,
         online: online,
@@ -144,6 +147,7 @@ class Strip {
         notifyMask: notifyMask,
         hasSchedule: hasSchedule,
         hasRule: hasRule,
+        masterLock: masterLock ?? this.masterLock,
       );
 
   Strip withOutlets(int n, bool on) =>
@@ -151,6 +155,8 @@ class Strip {
 
   Strip withOutletState(Map<int, bool> overrides) =>
       _with(outlets: outlets.map((o) => overrides.containsKey(o.n) ? o.copyWith(on: overrides[o.n]) : o).toList());
+
+  Strip withMasterLock(bool v) => _with(masterLock: v);
 
   Strip withLabel(int n, String value) =>
       n == 0 ? _with(label: value) : _with(outlets: outlets.map((o) => o.n == n ? o.copyWith(label: value) : o).toList());

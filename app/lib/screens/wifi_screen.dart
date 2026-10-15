@@ -143,6 +143,7 @@ class _WifiScreenState extends State<WifiScreen> {
   Widget _testCard() {
     final (icon, color, text) = switch (s.wifiTest) {
       'ok' => (Icons.check_circle_outline, C.green, _trx('الـ Hub اتنقل لـ "{x}" واتحفظت.', 'The hub moved to "{x}" and saved it.', {'x': s.wifiTestSsid})),
+      'failed' when s.wifiTestSsid.startsWith('strips:') => (Icons.error_outline, C.danger, _trx('{x} مشترك ما قبلش الشبكة الجديدة، فالـ Hub فضل على الشبكة القديمة والمشتركات رجعت زي ما كانت. اضغط زرار المشترك 10 ثواني ثم جرّب تاني.', '{x} strip(s) did not take the new network, so the hub stayed on the old one and the strips were put back. Hold the strip button 10 s, then try again.', {'x': s.wifiTestSsid.substring(7)})),
       'failed' => (Icons.error_outline, C.danger, _trx('"{x}" ما اشتغلتش (اسم أو باسورد غلط؟)، والـ Hub رجع للشبكة القديمة.', '"{x}" did not work (wrong name or password?); the hub went back to the old network.', {'x': s.wifiTestSsid})),
       'moving' => (Icons.wifi_tethering, C.accent, _trx('"{x}" شغالة. الـ Hub بيبعتها للمشتركات وينقلهم معاه…', '"{x}" works. The hub is handing it to the strips and moving them…', {'x': s.wifiTestSsid})),
       _ => (Icons.sync, C.accent, _trx('الـ Hub بيجرّب "{x}"…', 'The hub is trying "{x}"…', {'x': s.wifiTestSsid})),

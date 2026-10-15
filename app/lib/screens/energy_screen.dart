@@ -10,6 +10,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../models.dart';
 import '../services/outlet_history.dart';
+import '../services/report_export.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -138,12 +139,23 @@ class _EnergyScreenState extends State<EnergyScreen> {
   Future<void> _export() async {
     final days = _period;
     if (days.isEmpty) return;
+    final fmt = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final f in const [('pdf', Icons.picture_as_pdf_outlined, 'PDF'), ('docx', Icons.description_outlined, 'Word (DOCX)'), ('csv', Icons.table_chart_outlined, 'CSV / Excel')])
+            ListTile(leading: Icon(f.$2, color: C.accent), title: Text(f.$3), onTap: () => Navigator.pop(ctx, f.$1)),
+        ]),
+      ),
+    );
+    if (fmt == null) return;
     final names = {for (final st in s.allStrips) st.mac.toUpperCase(): s.stripName(st)};
-    final b = StringBuffer('\uFEFF${_tr('اليوم', 'Date')},${_tr('المشترك', 'Strip')},${_tr('المخرج', 'Outlet')},kWh,${t('egp')}\r\n');
     String q(String v) => '"${v.replaceAll('"', '""')}"';
+    String dateOf(int d) => '${d ~/ 10000}-${((d ~/ 100) % 100).toString().padLeft(2, '0')}-${(d % 100).toString().padLeft(2, '0')}';
+    final rows = <List<String>>[];
     var total = 0.0;
     for (final d in days.reversed) {
-      final date = '${d ~/ 10000}-${((d ~/ 100) % 100).toString().padLeft(2, '0')}-${(d % 100).toString().padLeft(2, '0')}';
       for (final m in _selMacs) {
         final wh = _whIdx[m]?[d];
         if (wh == null) continue;
@@ -151,14 +163,35 @@ class _EnergyScreenState extends State<EnergyScreen> {
           if (_mac != null && _outlet != 0 && o + 1 != _outlet) continue;
           final kwh = wh[o] / 1000;
           total += kwh;
-          b.write('$date,${q(names[m.toUpperCase()] ?? m)},${o + 1},${kwh.toStringAsFixed(3)},${(kwh * s.tariff).toStringAsFixed(2)}\r\n');
+          rows.add([dateOf(d), names[m.toUpperCase()] ?? m, '${o + 1}', kwh.toStringAsFixed(3), (kwh * s.tariff).toStringAsFixed(2)]);
         }
       }
     }
-    b.write(',${q(_tr('الإجمالي', 'Total'))},,${total.toStringAsFixed(3)},${(total * s.tariff).toStringAsFixed(2)}\r\n');
-    final bytes = Uint8List.fromList(utf8.encode(b.toString()));
+    final header = [_tr('اليوم', 'Date'), _tr('المشترك', 'Strip'), _tr('المخرج', 'Outlet'), 'kWh', t('egp')];
+    final totalRow = [_tr('الإجمالي', 'Total'), '', '', total.toStringAsFixed(3), (total * s.tariff).toStringAsFixed(2)];
+    final base = 'fisha-energy-${days.last}-${days.first}';
+    Uint8List bytes;
     try {
-      final res = await FilePicker.platform.saveFile(fileName: 'fisha-energy-${days.last}-${days.first}.csv', bytes: bytes);
+      if (fmt == 'csv') {
+        final b = StringBuffer('\uFEFF${header.join(',')}\r\n');
+        for (final r in rows) {
+          b.write('${r[0]},${q(r[1])},${r[2]},${r[3]},${r[4]}\r\n');
+        }
+        b.write(',${q(totalRow[0])},,${totalRow[3]},${totalRow[4]}\r\n');
+        bytes = Uint8List.fromList(utf8.encode(b.toString()));
+      } else {
+        final table = ReportTable(
+          title: _tr('تقرير استهلاك الكهرباء', 'Energy report'),
+          subtitle: '${dateOf(days.last)}  →  ${dateOf(days.first)}',
+          header: header,
+          rows: rows,
+          total: totalRow,
+          widths: const [0.2, 0.34, 0.12, 0.17, 0.17],
+          rtl: Tr.isAr,
+        );
+        bytes = fmt == 'pdf' ? await buildPdf(table) : buildDocx(table);
+      }
+      final res = await FilePicker.platform.saveFile(fileName: '$base.$fmt', bytes: bytes);
       if (!mounted) return;
       if (res != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('اتحفظ التقرير', 'Report saved'))));
     } catch (_) {

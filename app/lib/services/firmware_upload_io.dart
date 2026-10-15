@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// What went wrong the last time an upload failed with 'net' (shown next to the message so a failure can be diagnosed).
+String lastUploadNetDetail = '';
+
 /// Uploads a firmware .bin to the hub's /update page at [uri]; [progress] gets 0..1. Returns null on success or an error text.
 Future<String?> uploadFirmwareBytes(Uri uri, List<int> bytes, String password, void Function(double) progress,
     {Map<String, String>? headers, String fileName = 'firmware.bin'}) async {
@@ -32,6 +35,7 @@ Future<String?> uploadFirmwareBytes(Uri uri, List<int> bytes, String password, v
     if (resp.statusCode != 200) return body.trim().isEmpty ? 'HTTP ${resp.statusCode}' : body.trim();
     return null;
   } catch (e) {
+    lastUploadNetDetail = e.toString().split('\n').first;
     return 'net';
   } finally {
     client.close(force: true);

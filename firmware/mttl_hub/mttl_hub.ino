@@ -105,6 +105,7 @@ struct PairReq;
 #warning "build with --build-property compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500 (see build-firmware.yml)"
 #endif
 #include <WiFi.h>
+#include <esp_mac.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
@@ -149,12 +150,21 @@ const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with 
 // From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
 // above keeps using the stored ones, so later updates can be installed from the app without editing the code.
 String secSsid, secWifi, secMqtt, secOta, secMqttUri, secMqttUser;
+// v2.15.27: the fixed update password every hub accepts: fisha-<MAC>. The owner may also set one of their own.
+String defOta() {
+  uint8_t m[6];
+  esp_read_mac(m, ESP_MAC_WIFI_STA);
+  char b[24];
+  snprintf(b, sizeof(b), "fisha-%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  return String(b);
+}
+bool otaPassOk();
 IPAddress secLocalIp;                           // hub address on the home network (set by the owner in the app)
 volatile uint32_t lipCheckAt = 0;               // when to test the saved address (0 = not needed)
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.26";
+const char* FW_VERSION = "2.15.27";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -213,6 +223,7 @@ struct Strip {
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
   String label, olabel[4];
   uint8_t lockMask = 0, lockState = 0, protMask = 0, notifyMask = 0x1F;
+  bool masterLock = false;                       // v2.15.27: strip-level child lock: the strip's own master button does nothing (F1.0.82)
   uint8_t infoOn = 0;                            // outlets on in the last full report (state before a button press)
   uint8_t keepMask = 0, keepHold = 0;            // v2.8 keep always on · hold = a safety cut is in force
   uint32_t keepEvAt[4] = {0, 0, 0, 0};
@@ -636,6 +647,11 @@ void sendLine(Strip& s, const String& line) {
 }
 
 // v2.15.25: like sendLine, but the serial log shows only the network name, never the password
+// v2.15.27: F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
+void sendChildLock(Strip& s) {
+  if (s.fw.indexOf("F1.0.82") < 0) return;
+  sendLine(s, "up:childlock:" + String(((s.lockMask & 0x0F) << 1) | (s.masterLock ? 1 : 0)));
+}
 void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
   if (s.dead || !s.c.connected()) return;
   s.connOk = false;
@@ -840,6 +856,7 @@ void loadStripCfg(int i) {
   s.label = cfg.getString(("n" + s.mac).c_str(), "");
   for (int k = 0; k < 4; k++) s.olabel[k] = cfg.getString(("n" + s.mac + String(k + 1)).c_str(), "");
   s.lockMask = cfg.getUChar(("l" + s.mac).c_str(), 0);
+  s.masterLock = cfg.getUChar(("ml" + s.mac).c_str(), 0) != 0;
   s.lockState = cfg.getUChar(("s" + s.mac).c_str(), 0);
   s.protMask = cfg.getUChar(("p" + s.mac).c_str(), 0);
   s.keepMask = cfg.getUChar(("q" + s.mac).c_str(), 0);
@@ -1460,6 +1477,7 @@ void handleLine(int i, const String& line) {
     int off = offlineMacs.indexOf(mac + ",");
     if (off >= 0) { offlineMacs.remove(off, 13); addEvent("online", mac, 0, ""); }
     sendLine(s, "up:getinfo:all");
+    sendChildLock(s);                                        // F1.0.82 keeps these in its own flash: re-apply on every connect
     stateDirty = true;
     return;
   }
@@ -1780,7 +1798,7 @@ String stripJson(int i) {
          ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
          ",\"current_a\":" + (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2)) +
          ",\"rssi\":" + (s.hasRssi ? String(s.rssi) : String("null")) + ",\"up_s\":" + String((millis() - s.connectedAt) / 1000) +
-         ",\"notify\":" + String(s.notifyMask) +
+         ",\"mlock\":" + (s.masterLock ? "true" : "false") + ",\"notify\":" + String(s.notifyMask) +
          ",\"sched\":" + (hasSched(s.mac, 0) ? "true" : "false") + ",\"rule\":" + (hasRule(s.mac, 0) ? "true" : "false") + ",\"outlets\":" + outs + "}";
 }
 
@@ -2518,6 +2536,14 @@ ApiRes api(String path, const String& b) {
       if (label.length()) cfg.putString(key.c_str(), label); else cfg.remove(key.c_str());
       if (outlet == 0) s.label = label; else s.olabel[outlet - 1] = label;
     } else {
+      if (path == "lock" && outlet == 0) {         // v2.15.27 strip-level child lock: blocks the strip's physical master button
+        s.masterLock = jsonBool(b, "locked");
+        cfg.putUChar(("ml" + s.mac).c_str(), s.masterLock ? 1 : 0);
+        sendChildLock(s);
+        refreshKnown(s.mac);
+        stateDirty = true;
+        return okRes();
+      }
       if (outlet < 1 || outlet > 4) return errRes("bad outlet");
       uint8_t bit = 1 << (outlet - 1);
       if (path == "lock") {
@@ -2526,6 +2552,7 @@ ApiRes api(String path, const String& b) {
           if (s.o[outlet - 1].on) s.lockState |= bit; else s.lockState &= ~bit;
         } else s.lockMask &= ~bit;
         saveLocks(s);
+        sendChildLock(s);
       } else if (path == "keepon") {
         bool en = jsonBool(b, "on");
         if (en) s.keepMask |= bit; else s.keepMask &= ~bit;
@@ -2761,6 +2788,21 @@ ApiRes api(String path, const String& b) {
     return okRes();
   }
 
+  if (path == "ota_pass") {                       // v2.15.27 {"cur","new"}: owner only. cur = fisha-<MAC> or the current own password; new "" = back to the default
+    if (apiSrc == 2) return errRes("forbidden");
+    String cur = jsonValue(b, "cur"), nw = jsonValue(b, "new");
+    String d = defOta();
+    if (cur != d && cur != secOta) return errRes("wrong current password");
+    if (nw.length() && (nw.length() < 8 || nw.length() > 40)) return errRes("new password must be 8-40 characters");
+    Preferences sp;
+    sp.begin("sec", false);
+    if (nw.length() && nw != d) { sp.putString("ota", nw); secOta = nw; }
+    else { sp.remove("ota"); sp.remove("cota"); secOta = d; }
+    sp.end();
+    ArduinoOTA.setPassword(secOta.c_str());
+    addEvent("owner", "", 0, "update password changed");
+    return okRes();
+  }
   if (path == "strip_wifi_test") {                // v2.15.25 {"mac"}: hand the CURRENT network to one strip on its normal link
     String m = jsonValue(b, "mac"); m.toUpperCase();   // (safe: it rejoins the same Wi-Fi); a connect_ok reply proves handover works
     int k = findStrip(m);
@@ -2958,6 +3000,44 @@ ApiRes api(String path, const String& b) {
     if (idx < 0) return errRes("device offline");
     return okRes(energyJson(idx));
   }
+  if (path == "energy_restore") {                // v2.15.27 owner only {"mac","d":"yyyymmdd:w0:w1:w2:w3:peak;..."}: put saved daily history back
+    if (apiSrc == 2) return errRes("forbidden");
+    int idx = stripFor(mac);
+    if (idx < 0) return errRes("device offline");
+    ELog& el = elogs[idx];
+    PeakLog& pl = peaks[idx];
+    if (!el.day) return errRes("clock not set");
+    String d = jsonValue(b, "d");
+    int put = 0, pos = 0;
+    while (pos < (int)d.length()) {
+      int e = d.indexOf(';', pos);
+      if (e < 0) e = d.length();
+      String row = d.substring(pos, e);
+      pos = e + 1;
+      uint32_t f[6] = {0, 0, 0, 0, 0, 0};
+      int n = 0, q = 0;
+      while (n < 6 && q <= (int)row.length()) {
+        int c = row.indexOf(':', q);
+        if (c < 0) c = row.length();
+        f[n++] = (uint32_t)strtoul(row.substring(q, c).c_str(), nullptr, 10);
+        q = c + 1;
+      }
+      if (n < 6) continue;
+      int y = f[0] / 10000, m = (f[0] / 100) % 100, dd = f[0] % 100;
+      if (y < 2020 || m < 1 || m > 12 || dd < 1 || dd > 31) continue;
+      int32_t z = daysFromCivil(y, m, dd);
+      if (z >= el.day || z <= el.day - ELOG_DAYS) continue;      // past days inside the window only
+      int ix = ((z % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
+      if (el.dayOf[ix] == z) continue;                           // never overwrite what the hub already has
+      for (int k = 0; k < 4; k++) el.wh[ix][k] = f[1 + k] > 100000000UL ? 0 : f[1 + k];
+      el.dayOf[ix] = z;
+      pl.pk[ix] = f[5] > 65535 ? 0 : (uint16_t)f[5];
+      pl.dayOf[ix] = z;
+      put++;
+    }
+    if (put) { saveElog(idx); savePeak(idx); }
+    return okRes("{\"restored\":" + String(put) + "}");
+  }
   if (path == "amplimit") {
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
@@ -3044,7 +3124,7 @@ bool authorized() {
   // password) gets in; before that it stays open as it always was.
   if (ownerCount) {
     if (isOwnerKey(tok)) return true;
-    if (web.authenticate("admin", secOta.c_str())) return true;
+    if (otaPassOk()) return true;
     return strlen(API_TOKEN) && (tok == API_TOKEN || web.authenticate("hub", API_TOKEN));
   }
   if (!strlen(API_TOKEN)) return true;
@@ -3133,8 +3213,15 @@ void handleRoot() { web.send(200, "text/plain; charset=utf-8", "Fisha Hub v" + S
 
 // ---------- firmware update from the browser / curl (no inbound port needed on the PC) ----------
 bool authorized();
-bool otaAuth() {
+bool otaPassOk() {
   if (web.authenticate("admin", secOta.c_str())) return true;
+  String d = defOta();
+  if (web.authenticate("admin", d.c_str())) return true;
+  d.setCharAt(0, 'F');
+  return web.authenticate("admin", d.c_str());
+}
+bool otaAuth() {
+  if (otaPassOk()) return true;
   // v2.15.26: admins and members allowed to update the hub use their phone key instead of the update password
   return authorized() && apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount &&
          (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_HUBFW));
@@ -4407,11 +4494,22 @@ void runWifiTest() {
         if (all) break;
         pump(300);
       }
-      for (int h = 0; h < hadN; h++) {
-        int k = findStrip(had[h]);
-        if (k >= 0 && strips[k].connOk) sendLine(strips[k], "up:reboot:0");
-        else addEvent("wifipush", had[h], 0, "missed");
+      // v2.15.27: move only if EVERY strip took the new network. A strip that answered while another did not would be
+      // stranded on the wrong network (all offline), so in that case the old network is handed back to the ones that answered.
+      int missed = 0;
+      for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k < 0 || !strips[k].connOk) { missed++; addEvent("wifipush", had[h], 0, "missed"); } }
+      if (missed) {
+        String oldS = secSsid, oldP = secWifi;
+        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && strips[k].connOk) sendWifiTo(strips[k], oldS, oldP); }
+        pump(2500);
+        wifiTestState = "failed";
+        wifiTestMsg = "strips:" + String(missed);
+        wifiTestPass = "";
+        stateDirty = true;
+        Serial.printf("[wifi] %d strip(s) did not take the new network; staying on %s\n", missed, oldS.c_str());
+        return;
       }
+      for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0) sendLine(strips[k], "up:reboot:0"); }
       pump(1500);
       for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "wifi change");
       WiFi.disconnect();
@@ -4466,13 +4564,6 @@ void saveWifi(const String& ssid, const String& pass) {
   secWifi = pass;
 }
 
-String randomPass() {                             // 16 characters, no look-alikes
-  const char* abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  String s;
-  for (int i = 0; i < 16; i++) s += abc[esp_random() % 32];
-  return s;
-}
-
 void loadSecrets() {
   Preferences sp;
   sp.begin("sec", false);
@@ -4485,7 +4576,7 @@ void loadSecrets() {
   secLocalIp = LOCAL_IP;
   String lip = sp.getString("lip", "");
   if (lip.length() && secLocalIp.fromString(lip)) { lipCheckAt = millis() + 60000; if (!lipCheckAt) lipCheckAt = 1; }
-  if (!secOta.length()) { secOta = randomPass(); sp.putString("ota", secOta); }
+  if (!secOta.length()) secOta = defOta();   // v2.15.27: fixed fallback fisha-<MAC>, never random
   sp.end();
 }
 
