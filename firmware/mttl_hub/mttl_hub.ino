@@ -77,8 +77,9 @@ struct PairReq;
 // v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
 // with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
 // v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
-// is offline, and re-links it automatically once seen — no "Add strip" tap needed after a router change. See
-// autoResyncScan(). Logged as a "resync" event.
+// is offline, and re-links it automatically once seen. The strip only opens that network after its button is held
+// ~10 s (stock firmware has no automatic fallback we could find), so after a router change the user still presses
+// the button, but no longer needs the phone or "Add strip". See autoResyncScan(). Logged as a "resync" event.
 // v2.15.22: automations go from 10 to 40 (MAX_AUTO); NVS blobs saved under the old cap migrate on first boot.
 // v2.15.22: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
 // the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
@@ -4439,11 +4440,11 @@ void stg(const char* next) {
 
 // ---------- v2.15.23: re-link known strips after a Wi-Fi/router change, with no "Add strip" tap needed ----------
 // A strip keeps its own Wi-Fi credentials; when the router's name or password changes, the strip can't reconnect
-// and used to just sit offline until the user ran "Add strip" on it again by hand. Stock firmware falls back to
-// its own setup network (TONLY_TAP_<id>) on its own after it fails to reconnect for a while, so the hub now keeps
-// scanning for that network from any strip it already knows and, once it sees one, re-provisions it with the
-// current Wi-Fi automatically - the same flow "Add strip" uses, just started by the hub instead of a tap. This
-// can only relink a strip that has already fallen back to its own setup network; the hub cannot force that step.
+// and used to just sit offline until the user ran "Add strip" on it again by hand. Stock firmware keeps retrying
+// the old network ("auto reconnect" in its strings) and opens its setup network (TONLY_TAP_<id>) only after the
+// button is held ~10 s; no automatic fallback was found. So the hub keeps scanning for that network from any strip
+// it already knows and, once it sees one, re-provisions it with the current Wi-Fi automatically - the same flow
+// "Add strip" uses, just started by the hub instead of a tap in the app.
 uint32_t autoResyncAt = 0;
 void autoResyncScan() {
   if (provState == "running" || provState == "waiting" || provRequested || suRunning()) return;
