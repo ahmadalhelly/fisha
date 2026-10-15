@@ -258,7 +258,7 @@ struct NoteMsg { char topic[68]; char title[200]; char body[160]; uint8_t high; 
 // v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
 struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };
 // v2.15.26: HubUser.rsv holds extra permissions the owner grants on top of the role (admins have them all)
-const uint8_t P_AUTO = 1, P_PROT = 2, P_SFW = 4, P_WIFI = 8;
+const uint8_t P_AUTO = 1, P_PROT = 2, P_SFW = 4, P_WIFI = 8, P_HUBFW = 16, P_EXPORT = 32;
 struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
 
 Strip strips[MAX_STRIPS];
@@ -2063,7 +2063,7 @@ void profSet(const char* id, char k, const String& v) {
 }
 String userJson(const HubUser& u) {
   String j = "{\"id\":\"" + String(u.id) + "\",\"name\":\"" + jsonEsc(String(u.name)) + "\",\"role\":" + String(u.role) +
-             ",\"perms\":" + String(u.rsv & 0x0F) + ",\"email\":\"" + jsonEsc(profGet(u.id, 'e')) + "\",\"photo\":\"" +
+             ",\"perms\":" + String(u.rsv & 0x3F) + ",\"email\":\"" + jsonEsc(profGet(u.id, 'e')) + "\",\"photo\":\"" +
              jsonEsc(profGet(u.id, 'p')) + "\",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
   for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
   return j + "]}";
@@ -2617,7 +2617,7 @@ ApiRes api(String path, const String& b) {
     strlcpy(u.name, nm.c_str(), sizeof u.name);
     u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     u.all = jsonBool(b, "all") ? 1 : 0;
-    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
+    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x3F);
     parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
@@ -2636,7 +2636,7 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "name")) { String nm = jsonValue(b, "name"); nm.trim(); if (nm.length()) strlcpy(u.name, nm.c_str(), sizeof u.name); }
     if (jsonHas(b, "role")) u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     if (jsonHas(b, "all")) u.all = jsonBool(b, "all") ? 1 : 0;
-    if (jsonHas(b, "perms")) u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
+    if (jsonHas(b, "perms")) u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x3F);
     if (jsonHas(b, "strips")) parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     users[i] = u;
@@ -2666,7 +2666,7 @@ ApiRes api(String path, const String& b) {
     strlcpy(u.pw, pw.c_str(), sizeof u.pw);
     u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     u.all = jsonBool(b, "all") ? 1 : 0;
-    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
+    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x3F);
     parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     int i = findUser(u.id);
@@ -3132,7 +3132,13 @@ void handleOther() {
 void handleRoot() { web.send(200, "text/plain; charset=utf-8", "Fisha Hub v" + String(FW_VERSION) + " - open the Fisha app"); }
 
 // ---------- firmware update from the browser / curl (no inbound port needed on the PC) ----------
-bool otaAuth() { return web.authenticate("admin", secOta.c_str()); }
+bool authorized();
+bool otaAuth() {
+  if (web.authenticate("admin", secOta.c_str())) return true;
+  // v2.15.26: admins and members allowed to update the hub use their phone key instead of the update password
+  return authorized() && apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount &&
+         (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_HUBFW));
+}
 void handleUpdatePage() {
   if (!otaAuth()) return web.requestAuthentication();
   web.send(200, "text/html; charset=utf-8",
