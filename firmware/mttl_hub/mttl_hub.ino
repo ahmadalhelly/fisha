@@ -74,7 +74,7 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
-// v2.16.0: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
+// v2.15.22: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
 // the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
 // v2.15.20: the owner sets the hub address in the app (cloud settings "lip"; stored in NVS, the hub restarts to use it).
 // If the router does not answer on that address within a minute of boot, the hub goes back to the default address.
@@ -138,7 +138,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.16.0";
+const char* FW_VERSION = "2.15.22";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3400,7 +3400,7 @@ void handleSuUploadDone() {
   if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
   web.send(200, "application/json", suJson());
 }
-// v2.16.0: the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
+// v2.15.22: the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
 // same spare slot and validation (stripFwCheck) as a phone upload — only where the bytes come from differs.
 bool stripFwFetch(const String& url, String& why) {
   const esp_partition_t* part = stripFwPart();
