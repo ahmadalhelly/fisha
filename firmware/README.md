@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.35
+- Diagnostics only. 2.15.34 showed every piece of the state builds fine on its own (strips ~1.1 KB each, heap ~55 KB free, largest block ~36 KB), yet the whole state keeps coming out empty or as just "]}", and the phone stream is cut almost every time it opens. That pattern means memory requests are being refused at that moment. The hub now registers ESP-IDF's failed-allocation callback, so any refused allocation (Strings, network buffers) is recorded in /api/health: `alloc_fail`, `alloc_fail_ago_s`, `alloc_fail_size`, `alloc_fail_max_size`, `alloc_fail_caps`, `alloc_fail_free`, `alloc_fail_largest`, `alloc_fail_fn`.
+- Validation: compiled; checked in the built firmware (disassembly) that String growth goes realloc -> heap_caps_realloc_default -> heap_caps_alloc_failed -> this callback. The callback allocates nothing and only stores numbers.
+
 ### 2.15.34
 - Diagnostics only. 2.15.33 showed the state the hub builds sometimes comes out EMPTY (state_len 0). That matches the app's "not on the same Wi-Fi": the app's /api/state poll gets an empty answer it can't read, and the server copy is dropped too (mqtt_drop rising). The empty result can't be explained from the code yet (a host test with the real ESP32 String class showed that running out of memory still leaves at least "]}"), so when it happens the hub now records the free heap, the largest free block and the size of every piece of the state built one by one, in /api/health: `state_bad`, `state_bad_ago_s`, `state_bad_info`. Checked on both the live stream and the app's poll.
 - Validation: compiled; the record uses a fixed char buffer, worst case (largest numbers, 6 strips + 12 saved strips) tested on the computer under AddressSanitizer: 231 of 240 bytes, no overflow. Re-measured at most every 5 s.

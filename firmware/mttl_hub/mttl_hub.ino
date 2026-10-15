@@ -130,6 +130,7 @@ struct PairReq;
 #include "lwip/sockets.h"
 #include <errno.h>
 #include <vector>
+#include "esp_heap_caps.h"
 
 // ================== CONFIG ==================
 const char* WIFI_SSID = "YOUR_WIFI_NAME";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
@@ -164,7 +165,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.34";
+const char* FW_VERSION = "2.15.35";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3173,6 +3174,8 @@ void handleState() {
 int sseCount();
 extern uint32_t sseOpened, sseCut, sseGone, sseCutAt, sseStateLen, sseStateMax, stateBadN, stateBadAt;
 extern char stateBadBuf[];
+extern volatile uint32_t allocFailN, allocFailAt, allocFailSize, allocFailCaps, allocFailFree, allocFailLargest, allocFailMaxSize;
+extern const char* volatile allocFailFn;
 // v2.15.6: how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
@@ -3191,6 +3194,10 @@ void handleHealth() {
            ",\"sse_gone\":" + String(sseGone) + ",\"state_len\":" + String(sseStateLen) + ",\"state_max\":" + String(sseStateMax) +
            ",\"state_bad\":" + String(stateBadN) + ",\"state_bad_ago_s\":" + (stateBadN ? String((millis() - stateBadAt) / 1000) : String("-1")) +
            ",\"state_bad_info\":\"" + String(stateBadBuf) + "\"" +
+           ",\"alloc_fail\":" + String(allocFailN) + ",\"alloc_fail_ago_s\":" + (allocFailN ? String((millis() - allocFailAt) / 1000) : String("-1")) +
+           ",\"alloc_fail_size\":" + String(allocFailSize) + ",\"alloc_fail_max_size\":" + String(allocFailMaxSize) +
+           ",\"alloc_fail_caps\":\"" + String(allocFailCaps, HEX) + "\",\"alloc_fail_free\":" + String(allocFailFree) +
+           ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\"" +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
@@ -3709,6 +3716,22 @@ uint32_t lastSsePush = 0, lastSseBeat = 0;
 // in time (or the send failed), closed by the phone, when the hub last closed one, and the size of the state it sends
 uint32_t sseOpened = 0, sseCut = 0, sseGone = 0, sseCutAt = 0, sseStateLen = 0, sseStateMax = 0;
 void sseCutNow() { sseCut++; sseCutAt = millis(); }
+// v2.15.35 diagnostics: 2.15.34 showed every piece of the state builds fine on its own and the heap looks fine, yet the
+// whole state comes out empty, so some memory request is being refused. ESP-IDF calls this whenever any allocation in
+// the hub fails (Strings, network buffers, ...): it records the size asked, what was free at that instant and who asked.
+// No allocation and no logging in here, only plain variables.
+volatile uint32_t allocFailN = 0, allocFailAt = 0, allocFailSize = 0, allocFailCaps = 0, allocFailFree = 0, allocFailLargest = 0, allocFailMaxSize = 0;
+const char* volatile allocFailFn = "";
+static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
+  allocFailN++;
+  allocFailAt = millis();
+  allocFailSize = size;
+  if (size > allocFailMaxSize) allocFailMaxSize = size;
+  allocFailCaps = caps;
+  allocFailFn = fn ? fn : "";
+  allocFailFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  allocFailLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+}
 // v2.15.34 diagnostics: on 2.15.33 the state the hub built came out empty (state_len 0), which matches the app's "not on
 // the same Wi-Fi" (an empty /api/state can't be read). When that happens, record the heap and the size of every piece of
 // the state, built one by one, in a plain char buffer (no String, so the record itself can't fail) for /api/health.
@@ -4736,6 +4759,7 @@ void loadSecrets() {
 
 void setup() {
   Serial.begin(115200);
+  heap_caps_register_failed_alloc_callback(allocFailCb);   // v2.15.35 diagnostics, see allocFailCb
   // v2.15.8: armed first thing (it used to be armed only at the end of setup, so a hang while booting
   // needed the reset button); 90 s covers a first-boot LittleFS format and the Wi-Fi join
   esp_task_wdt_config_t wc = {};
