@@ -12,6 +12,15 @@ class HomeWidget {
     return true;
   }
 
+  /// 2.0.27: "mac|n" when the app was opened from a widget's outlet name (n = -1: the strip), else null. Read once.
+  static Future<String?> takeOpen() async {
+    try {
+      return await _channel.invokeMethod<String>('takeOpen');
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<bool?> updateWidget({String? name, String? androidName, String? iOSName, String? qualifiedAndroidName}) async {
     try {
       return await _channel.invokeMethod<bool>('update', Map<String, String>.from(_data));

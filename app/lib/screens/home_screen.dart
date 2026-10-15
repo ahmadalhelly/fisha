@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:home_widget/home_widget.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
@@ -16,7 +17,7 @@ import '../widgets/notion_icon_picker.dart';
 import 'add_strip_screen.dart';
 import 'automations_screen.dart';
 import 'events_screen.dart';
-import 'outlet_sheet.dart' show roomCycleDialog, roomLoopDialog;
+import 'outlet_sheet.dart' show roomCycleDialog, roomLoopDialog, openOutletSheet, openStripSheet;
 import 'rooms_screen.dart';
 import 'schedules_screen.dart' show ScheduleEditor;
 import 'scenes_screen.dart';
@@ -40,12 +41,31 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<String> _collapsedRooms = {};
   bool _compact = false;
 
+  AppLifecycleListener? _life;
+
+  Future<void> _widgetOpen() async {
+    if (kIsWeb) return;
+    final v = await HomeWidget.takeOpen();
+    if (v == null || !v.contains('|') || !mounted) return;
+    final p = v.split('|');
+    final n = int.tryParse(p[1]) ?? -1;
+    if (s.live(p[0]) == null) return;
+    if (n <= 0) {
+      openStripSheet(context, s, p[0]);
+    } else {
+      openOutletSheet(context, s, p[0], n);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     UpdateService.instance.check(); // at most every 6 hours
     // 2.0.24: a hub in setup mode nearby gets the pairing card
     WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) HubSetupWatcher.start(context, s); });
+    // 2.0.27: a tap on an outlet's name in the strip widget opens its sheet here (same options as a long press)
+    WidgetsBinding.instance.addPostFrameCallback((_) => _widgetOpen());
+    _life = AppLifecycleListener(onResume: _widgetOpen);
     s.addListener(_checkPairs);
     _scroll.addListener(() {
       final c = _scroll.hasClients && _scroll.offset > 230;
@@ -60,6 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     s.removeListener(_checkPairs);
     HubSetupWatcher.stop();
+    _life?.dispose();
     _tick?.cancel();
     _scroll.dispose();
     super.dispose();

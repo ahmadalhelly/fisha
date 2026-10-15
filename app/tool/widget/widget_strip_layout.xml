@@ -10,60 +10,44 @@
         android:layout_height="match_parent"
         android:scaleType="fitXY" />
 
+    <!-- tap areas, same bands as the drawing: header 28 / sockets 44 / names 28; columns left to right -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:layoutDirection="ltr"
         android:orientation="vertical">
 
         <FrameLayout
             android:id="@+id/strip_hd"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="20" />
+            android:layout_weight="28" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="29"
+            android:layout_weight="44"
+            android:layoutDirection="ltr"
             android:orientation="horizontal">
-
-            <FrameLayout
-                android:id="@+id/sock_1"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1" />
-
-            <FrameLayout
-                android:id="@+id/sock_2"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1" />
+            <FrameLayout android:id="@+id/sock_0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/sock_1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/sock_2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/sock_3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/sock_4" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="29"
+            android:layout_weight="28"
+            android:layoutDirection="ltr"
             android:orientation="horizontal">
-
-            <FrameLayout
-                android:id="@+id/sock_3"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1" />
-
-            <FrameLayout
-                android:id="@+id/sock_4"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1" />
+            <FrameLayout android:id="@+id/lab_0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/lab_1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/lab_2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/lab_3" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
+            <FrameLayout android:id="@+id/lab_4" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
         </LinearLayout>
-
-        <FrameLayout
-            android:id="@+id/strip_ft"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="22" />
     </LinearLayout>
 
 </FrameLayout>

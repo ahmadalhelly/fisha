@@ -117,6 +117,11 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     private fun releaseHub() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         cm.bindProcessToNetwork(null)
@@ -191,7 +196,12 @@ class MainActivity : FlutterFragmentActivity() {
             KeepAlive.handle(this, call, result)
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/widget").setMethodCallHandler { call, result ->
-            if (call.method == "update") {
+            if (call.method == "takeOpen") {
+                // 2.0.27: the strip widget opened the app on an outlet ("mac|n"); handed over once
+                val v = intent?.getStringExtra("w_open")
+                intent?.removeExtra("w_open")
+                result.success(v)
+            } else if (call.method == "update") {
                 try {
                     val editor = getSharedPreferences("HomeWidgetPreferences", Context.MODE_PRIVATE).edit()
                     val args = call.arguments as? Map<*, *>

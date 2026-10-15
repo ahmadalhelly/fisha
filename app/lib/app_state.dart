@@ -14,6 +14,7 @@ import 'services/firmware_upload.dart';
 import 'services/google_sync.dart';
 import 'services/mqtt_factory.dart';
 import 'services/outlet_history.dart';
+import 'services/widget_data.dart';
 
 enum ConnMode { offline, local, cloud }
 
@@ -2552,7 +2553,6 @@ class AppState extends ChangeNotifier {
       }
       final ar = Tr.isAr;
       const hues = [162.0, 222.0, 36.0, 300.0, 100.0, 0.0];
-      final can = canControl;
       final strips = <Map<String, dynamic>>[];
       for (var i = 0; i < _strips.length; i++) {
         final st = _strips[i];
@@ -2564,17 +2564,7 @@ class AppState extends ChangeNotifier {
           'w': st.livePower.round(),
           't': st.maxTemp,
           'c': _hex(HSLColor.fromAHSL(1, h, .85, .6).toColor()),
-          'o': [
-            for (final o in st.outlets)
-              {
-                'n': o.n,
-                'name': outletName(st, o.n),
-                'w': o.powerW.round(),
-                'on': o.on,
-                'c': _hex(HSLColor.fromAHSL(1, (h + (o.n - 1) * 90) % 360, .85, .6).toColor()),
-                'lock': !can || o.locked || o.protected || requiresBio(st.mac, o.n),
-              }
-          ],
+          ...stripWidgetJson(this, st),
         });
       }
       final conn = switch (mode) {
@@ -2600,7 +2590,7 @@ class AppState extends ChangeNotifier {
         'l_run': ar ? 'شغال' : 'On',
         'l_total': ar ? 'الإجمالي' : 'Total',
         'l_none': ar ? 'افتح فيشة وسجّل الدخول' : 'Open Fisha and sign in',
-        't_lock': ar ? 'المخرج ده محمي، افتح التطبيق' : 'Protected outlet, open the app',
+        't_lock': ar ? 'ده محتاج تأكيد، افتح التطبيق' : 'This needs a confirmation, open the app',
         't_away': ar ? 'التحكم من الويدجت على شبكة البيت بس' : 'Widget control works on the home network only',
         't_fail': ar ? 'الأمر ماوصلش' : 'The command did not go through',
       };
