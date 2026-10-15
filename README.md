@@ -305,3 +305,7 @@ flutter build apk --release
 ---
 
 By **[@ahmadalhelly](https://github.com/ahmadalhelly)**
+
+## سجل تعديلات 2026-10-15
+
+- حذف نسخة الويب (آيفون) بالكامل: صفحة /app ولانشرها من فيرموير الهاب (هاب 2.15.21)، وملفات بناء الويب من الريبو الخاص (CI، WEB.md، web_overrides، configure_web.py). السبب: طلب المستخدم إيقاف نسخة الويب نهائيًا بدل تجميدها فقط.

@@ -136,7 +136,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.20";
+const char* FW_VERSION = "2.15.21";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3015,41 +3015,9 @@ void handleOther() {
   web.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}");
 }
 
-const char PAGE[] PROGMEM = R"HTML(<!doctype html><html dir=rtl lang=ar><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>Fisha Hub</title>
-<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#e8edf3;margin:0;padding:16px}
-.card{background:#151b23;border:1px solid #263040;border-radius:14px;padding:14px;margin-bottom:14px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-button{border:0;border-radius:12px;padding:16px 8px;font-size:16px;background:#2a323b;color:#e8edf3}
-button.on{background:#f2b544;color:#1a1300}small{display:block;opacity:.75;margin-top:4px}</style>
-<h2>&#9889; Fisha Hub</h2><div id=app>...</div><p style="opacity:.5;font-size:12px">@ahmadalhelly</p>
-<script>
-const q=location.search;
-async function load(){try{const r=await fetch('/api/state'+q);render(await r.json())}catch(e){app.textContent='No connection'}}
-function render(d){if(!d.devices.length){app.innerHTML='<div class=card>No strip connected</div>';return}
-app.innerHTML=d.devices.map(s=>`<div class=card><b>${s.label||s.name}</b><small>${s.power_w} W</small><div class=grid>${s.outlets.map(o=>`<button class="${o.on?'on':''}" onclick="t('${s.mac}',${o.n},${!o.on})">${o.label||o.n}<small>${o.power_w} W · ${o.temp_c}&deg;C</small></button>`).join('')}</div></div>`).join('')}
-async function t(mac,outlet,on){await fetch('/api/onoff'+q,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac,outlet,on})});load()}
-load();setInterval(load,3000);
-</script>)HTML";
-
-void handleRoot() { if (guard()) web.send_P(200, "text/html; charset=utf-8", PAGE); }
-
-// v2.14.2: launcher for the web app (iPhone). The app's code comes from the public site, but the page runs on the
-// hub's http origin, so the app can reach /api/* here on the LAN (an https page could not) and the cloud as well.
-// Static and secret-free: the app itself asks for the invite code. Needs internet to load the app the first time.
-const char APP_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name=apple-mobile-web-app-capable content=yes><meta name=mobile-web-app-capable content=yes>
-<meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
-<meta name=apple-mobile-web-app-title content=Fisha><meta name=theme-color content="#060B18">
-<title>Fisha</title><style>html,body{margin:0;height:100%;background:#060B18}</style>
-<script>window.FISHA_BASE='https://ahmadalhelly.github.io/fisha-web/';
-document.write('<link rel=apple-touch-icon href="'+FISHA_BASE+'icons/Icon-192.png"><link rel=icon href="'+FISHA_BASE+'favicon.png">');</script>
-</head><body><script>var s=document.createElement('script');s.src=FISHA_BASE+'flutter_bootstrap.js';s.async=true;
-s.onerror=function(){document.body.innerHTML='<p dir=rtl style="color:#e8edf3;font-family:sans-serif;padding:24px">Fisha: محتاج إنترنت عشان يحمّل التطبيق أول مرة.</p>'};
-document.body.appendChild(s);</script></body></html>)HTML";
-
-void handleApp() { web.send_P(200, "text/html; charset=utf-8", APP_PAGE); }
+// v2.15.21: the built-in browser page and the web-app launcher are gone; the Fisha app is the only client.
+// "/" answers with one plain line (no data), so a browser pointed at the hub's IP still gets a sane reply.
+void handleRoot() { web.send(200, "text/plain; charset=utf-8", "Fisha Hub v" + String(FW_VERSION) + " - open the Fisha app"); }
 
 // ---------- firmware update from the browser / curl (no inbound port needed on the PC) ----------
 bool otaAuth() { return web.authenticate("admin", secOta.c_str()); }
@@ -4342,7 +4310,6 @@ void setup() {
   const char* hk[] = {"X-Token", "X-User"};
   web.collectHeaders(hk, 2);
   web.on("/", HTTP_GET, handleRoot);
-  web.on("/app", HTTP_GET, handleApp);
   web.on("/api/state", HTTP_GET, handleState);
   web.on("/api/health", HTTP_GET, handleHealth);
   web.on("/api/raw", HTTP_GET, handleRaw);
