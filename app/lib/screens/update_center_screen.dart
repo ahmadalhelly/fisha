@@ -15,9 +15,8 @@ import 'strip_firmware_screen.dart';
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
 /// Update center (2.0.20): one ring for the overall state, then the app, the hub, and the strips, each
-/// expandable in place. The changelog shown per item is the current and previous version only — a short,
-/// user-facing summary, never the raw commit log.
-/// Builds come from the public repo ahmadalhelly/fisha-app (CI copies every app and hub build there).
+/// expandable in place. The changelog shown per item is the version installed now and the new one available —
+/// a short, generic line each, never the full release history or the raw commit log.
 class UpdateCenterScreen extends StatefulWidget {
   final AppState state;
   const UpdateCenterScreen({super.key, required this.state});
@@ -135,11 +134,19 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     });
   }
 
-  /// A short, generic line per release — current and previous only, never the raw commit log.
-  String _genericNote(Release r, bool isCurrent) {
-    final tag = isCurrent ? _tr('(الحالي)', '(current)') : _tr('(السابق)', '(previous)');
-    final first = r.lines.isNotEmpty ? r.lines.first : _tr('تحسينات عامة وإصلاحات', 'General improvements and fixes');
-    return '${r.version} $tag — $first';
+  /// The release whose version matches the one actually installed, if GitHub still has it.
+  Release? _releaseFor(String kind, String? version) {
+    if (version == null || version.isEmpty) return null;
+    for (final r in u.releases) {
+      if (r.kind == kind && compareVersions(r.version, version) == 0) return r;
+    }
+    return null;
+  }
+
+  /// A short, generic line — the version installed now, and the new one available, never the full history.
+  String _genericNote(String version, Release? r, String tag) {
+    final first = r != null && r.lines.isNotEmpty ? r.lines.first : _tr('تحسينات عامة وإصلاحات', 'General improvements and fixes');
+    return '$version ($tag) — $first';
   }
 
   Widget _kindIcon(String kind, {double size = 20}) => Icon(
@@ -159,7 +166,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     final pend = _pending(kind);
     final busy = _progress.containsKey(kind);
     final latest = u.latest(kind);
-    final prev = u.previous(kind);
+    final cur = _current(kind);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: cardBox(radius: 16),
@@ -231,11 +238,15 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                   Text(_status[kind]!, style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.5)),
                 ],
                 const SizedBox(height: 10),
-                if (latest != null) Text(_genericNote(latest, true), style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
-                if (prev != null) ...[
-                  const SizedBox(height: 4),
-                  Text(_genericNote(prev, false), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
-                ],
+                if (pend && latest != null) ...[
+                  Text(_genericNote(latest.version, latest, _tr('جديد', 'New')), style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
+                  if (cur != null && cur.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(_genericNote(cur, _releaseFor(kind, cur), _tr('الحالي', 'Current')), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
+                  ],
+                ] else if (cur != null && cur.isNotEmpty)
+                  Text(_genericNote(cur, _releaseFor(kind, cur) ?? latest, _tr('آخر نسخة عندك', 'Your current version')),
+                      style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
               ],
             ]),
           ),
