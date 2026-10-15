@@ -4,6 +4,11 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.32
+- Corrected the diagnosis of the 2.15.30 crash. The crashing message was not a deliberate empty message: it was a family member's state whose building ran out of memory right after connecting to the server (an Arduino String that runs out of heap comes back empty with no buffer). 2.15.31 would have sent it as an empty retained message, which wipes that member's state on the server. Now such a message is dropped and counted in `mqtt_drop`; a real empty message still goes out.
+- The send queue is 8 KB (was 16 KB) to give the heap back, and retained state copies may use only 6 KB of it, so events and command answers always keep room. One state bigger than that still goes out when nothing else is waiting. Queue length 12 -> 48 (a reconnect sends the state, each member's state and up to 12 saved events per member at once).
+- Validation: host test `tests/mqtt_queue/run.sh` runs the queue code from this file, verbatim, with the real ESP32 String class under AddressSanitizer/UBSan: empty message, out-of-memory String, ordering, caps with a stuck server, full queue, offline, and a stress run (2 senders + client restarts). The same test crashes on 2.15.30 exactly like the device did and fails on 2.15.31. Not yet tested on the device.
+
 ### 2.15.31
 - Fixed the crash-and-restart loop of 2.15.30 (Guru Meditation, LoadProhibited in mqttPub). An empty message (the one that clears a family member's retained state on the server) has no text buffer at all, and the new queue copied from that null pointer. Now only real bytes are copied.
 

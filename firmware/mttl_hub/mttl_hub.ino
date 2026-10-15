@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.31";
+const char* FW_VERSION = "2.15.32";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3886,7 +3886,10 @@ static QueueHandle_t mqttOutQ = nullptr;
 static SemaphoreHandle_t mqttMx = nullptr;          // held while the publisher task uses the client (stop/destroy wait on it)
 static volatile uint32_t mqttOutBytes = 0;          // bytes waiting in the queue, capped so a stuck server can't eat the heap
 static portMUX_TYPE mqttOutMux = portMUX_INITIALIZER_UNLOCKED;
-const uint32_t MQTT_OUT_MAX_BYTES = 16384;
+// v2.15.32: 8 KB (was 16 KB): the extra copies right after connecting ran the heap out (see mqttPub). Retained state
+// copies may fill only MQTT_OUT_STATE_BYTES, so events and command answers keep room (the state is re-sent every 30 s).
+const uint32_t MQTT_OUT_MAX_BYTES = 8192;
+const uint32_t MQTT_OUT_STATE_BYTES = 6144;
 uint32_t mqttOutDropped = 0;
 
 static void mqttOutTask(void*) {
@@ -3907,7 +3910,7 @@ static void mqttOutTask(void*) {
 void mqttOutInit() {
   if (mqttOutQ) return;
   mqttMx = xSemaphoreCreateMutex();
-  mqttOutQ = xQueueCreate(12, sizeof(MqttOut));
+  mqttOutQ = xQueueCreate(48, sizeof(MqttOut));   // v2.15.32: 12 was too few for a reconnect burst (state + user states + 12 saved events per user)
   xTaskCreatePinnedToCore(mqttOutTask, "mqtt_out", 4096, nullptr, 1, nullptr, 0);
 }
 
@@ -3917,17 +3920,19 @@ void mqttUnlock() { if (mqttMx) xSemaphoreGive(mqttMx); }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
   if (!mqtt || !mqttUp || !topic.length() || !mqttOutQ) return;
+  // v2.15.32: a String whose building ran out of memory comes back empty with no buffer (c_str() == nullptr). That is
+  // what crashed 2.15.30 (a user state right after connecting). Publishing it as "" would also wipe the retained state
+  // on the server, so it is dropped; a real empty message ("") always has a buffer and still goes out.
+  if (!payload.c_str()) { mqttOutDropped++; return; }
   SubT st("mqtt_pub");
   int len = payload.length();
-  if (mqttOutBytes + len > MQTT_OUT_MAX_BYTES) { mqttOutDropped++; return; }
+  // nothing waiting: always take it, so one big state (many strips) can't be refused forever
+  if (mqttOutBytes && mqttOutBytes + len > (retain ? MQTT_OUT_STATE_BYTES : MQTT_OUT_MAX_BYTES)) { mqttOutDropped++; return; }
   MqttOut m;
   m.topic = strdup(topic.c_str());
   m.data = (char*)malloc(len + 1);
   if (!m.topic || !m.data) { free(m.topic); free(m.data); mqttOutDropped++; return; }
-  if (!payload.c_str()) len = 0;
-  // an empty Arduino String can have no buffer at all (c_str() == nullptr): copy only real bytes (2.15.30 crashed here)
-  const char* src = payload.c_str();
-  if (src && len) memcpy(m.data, src, len);
+  if (len) memcpy(m.data, payload.c_str(), len);
   m.data[len] = 0;
   m.len = len; m.qos = qos; m.retain = retain ? 1 : 0;
   portENTER_CRITICAL(&mqttOutMux);
