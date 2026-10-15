@@ -731,12 +731,25 @@ class _SocketPainter extends CustomPainter {
       canvas.drawCircle(c, r - 6, Paint()
         ..color = haloColor.withValues(alpha: 0.08 + 0.22 * load)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+      // 2.0.21: the ring used a flat solid color here while every outlet fades it with a SweepGradient — that made
+      // the master button noticeably more vivid than the outlets and hid the gradient detail. Same treatment now.
       final sweep = 2 * math.pi * math.max(0.04, load);
-      canvas.drawArc(Rect.fromCircle(center: c, radius: r - 3), -math.pi / 2, sweep, false, Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 4
-        ..strokeCap = StrokeCap.round
-        ..color = haloColor);
+      canvas.drawArc(
+        Rect.fromCircle(center: c, radius: r - 3),
+        -math.pi / 2,
+        sweep,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..strokeCap = StrokeCap.round
+          ..shader = SweepGradient(
+            startAngle: -math.pi / 2,
+            endAngle: -math.pi / 2 + sweep,
+            colors: [Color.lerp(haloColor, C.surface, 0.35)!, haloColor],
+            transform: const GradientRotation(-math.pi / 2),
+          ).createShader(Rect.fromCircle(center: c, radius: r)),
+      );
       final a = -math.pi / 2 + 2 * math.pi * spin;
       canvas.drawCircle(c + Offset(math.cos(a), math.sin(a)) * (r - 3), 1.6, Paint()..color = Colors.white.withValues(alpha: 0.75));
     }

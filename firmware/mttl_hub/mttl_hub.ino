@@ -74,6 +74,7 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
+// v2.15.22: automations go from 10 to 40 (MAX_AUTO); NVS blobs saved under the old cap migrate on first boot.
 // v2.15.22: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
 // the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
 // v2.15.20: the owner sets the hub address in the app (cloud settings "lip"; stored in NVS, the hub restarts to use it).
@@ -168,7 +169,8 @@ MrY=
 const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
 const float STRIP_MAX_W = 3500;                   // v2.15.9 user rule: 3500 W per strip in total
-const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 10, MAX_EVENTS = 40, MAX_SSE = 4;
+const uint8_t  DIAG_EVERY = 3, MAX_STRIPS = 6, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 40, MAX_EVENTS = 40, MAX_SSE = 4;
+const uint8_t  OLD_MAX_AUTO = 10;   // v2.15.22 raised MAX_AUTO 10 -> 40; NVS blobs saved before that are this size
 const int      ELOG_DAYS = 90;
 
 // ---------- data ----------
@@ -904,10 +906,14 @@ void loadGlobals() {
   if (cfg.getBytesLength("aut") == sizeof(Autom) * MAX_AUTO) {
     cfg.getBytes("aut", autos, sizeof(Autom) * MAX_AUTO);
     autoCount = min((int)cfg.getUChar("autN", 0), (int)MAX_AUTO);
-  } else if (cfg.getBytesLength("aut") == sizeof(AutomV2) * MAX_AUTO) {   // migrate rules saved by v2.0 .. v2.2
-    static AutomV2 old[MAX_AUTO];
+  } else if (cfg.getBytesLength("aut") == sizeof(Autom) * OLD_MAX_AUTO) {   // v2.15.22 raised the cap 10 -> 40
+    cfg.getBytes("aut", autos, sizeof(Autom) * OLD_MAX_AUTO);
+    autoCount = min((int)cfg.getUChar("autN", 0), (int)OLD_MAX_AUTO);
+    saveAutos();
+  } else if (cfg.getBytesLength("aut") == sizeof(AutomV2) * OLD_MAX_AUTO) {   // migrate rules saved by v2.0 .. v2.2
+    static AutomV2 old[OLD_MAX_AUTO];
     cfg.getBytes("aut", old, sizeof(old));
-    autoCount = min((int)cfg.getUChar("autN", 0), (int)MAX_AUTO);
+    autoCount = min((int)cfg.getUChar("autN", 0), (int)OLD_MAX_AUTO);
     for (int i = 0; i < autoCount; i++) {
       memset(&autos[i], 0, sizeof(Autom));
       memcpy(&autos[i], &old[i], offsetof(AutomV2, metric) + 1);
