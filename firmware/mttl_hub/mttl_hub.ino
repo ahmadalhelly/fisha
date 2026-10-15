@@ -165,7 +165,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.36";
+const char* FW_VERSION = "2.15.37";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3861,7 +3861,10 @@ void ssePump() {
     }
     if (x.used && !x.c.connected()) { if (x.ready) sseGone++; x.c.stop(); x = SseClient(); }
   }
-  if (stateDirty && millis() - lastSsePush > 250) {
+  // v2.15.37: at most one state per second to the phones (was every 250 ms). Each push builds ~4 KB and copies it into
+  // every phone's socket; four times a second that used up the hub's memory (2.15.36: ~25 refused requests a second,
+  // network buffers among them) and nearly every live stream got cut.
+  if (stateDirty && millis() - lastSsePush > 1000) {
     stateDirty = false;
     lastSsePush = millis();
     bool any = false;

@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.37
+- 2.15.36 fixed the empty state (state_bad 0), but the real free memory still hits ~0 (heap8_min 360) with ~25 refused requests a second from the main loop, some of them network send buffers (caps 0x80c), and nearly every live stream to the phones gets cut (41 of 42). The state was pushed to the phones up to 4 times a second (~4 KB built + copied into every phone socket each time). Now at most once a second.
+- Validation: one constant changed; the flag it reads is cleared only there; compiled. Not yet tested on the device.
+
 ### 2.15.36
 - Cause of the empty state found (2.15.35 data): at the moment the state is built, the usable memory is almost gone (refused request 4128 B = the state growing; free at that instant 9.5 KB, largest piece 3.2 KB; ~2000 refusals in 5 min). The "heap 55 KB / max_alloc 36 KB" in health was misleading: those count IRAM too, which Strings and network buffers can't use. Health now also shows the real numbers: `heap8`, `heap8_max`, `heap8_min`, plus `alloc_fail_task`.
 - Less memory per state: the state (owner and family) is reserved once and closed in place instead of being copied whole at the end. Host test with the real String class: the same 4.1 KB state now needs ~8.1 KB free instead of ~12.5 KB, identical text.
