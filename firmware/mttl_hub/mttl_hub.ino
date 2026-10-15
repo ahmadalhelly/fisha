@@ -165,7 +165,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.35";
+const char* FW_VERSION = "2.15.36";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -665,6 +665,7 @@ void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
 }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain);
+bool userHas(const HubUser& u, const String& macIn);
 void mqttLock();
 void mqttUnlock();
 extern uint32_t mqttOutDropped;
@@ -1827,6 +1828,17 @@ String timersJson() {
   return j + "]";
 }
 
+// v2.15.36: room for the devices part of the state, so it is reserved once instead of growing piece by piece
+// (each growth can need the old and the new copy at once). A low guess only means one more growth later.
+uint32_t stateDevicesBytes(const HubUser* u) {
+  uint32_t n = 0;
+  for (int i = 0; i < MAX_STRIPS; i++)
+    if (strips[i].used && strips[i].identified && (!u || userHas(*u, strips[i].mac))) n += 1300;
+  for (int k = 0; k < knownCount; k++)
+    if (findStrip(known[k].mac) < 0 && (!u || userHas(*u, known[k].mac))) n += 1100;
+  return n;
+}
+
 String buildStateJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
              "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
@@ -1843,6 +1855,7 @@ String buildStateJson() {
              ",\"emqx_cfg\":" + (emqxReady() ? "true" : "false") + ",\"users_n\":" + String(userCount) +
              ",\"reset\":\"" + resetText() + "\"" + ",\"auth\":" + authJson() +
              ",\"timers\":" + timersJson() + ",\"devices\":[";
+  j.reserve(j.length() + stateDevicesBytes(nullptr) + 4);
   bool first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
     if (!strips[i].used || !strips[i].identified) continue;
@@ -1856,7 +1869,8 @@ String buildStateJson() {
     j += offlineStripJson(known[k]);
     first = false;
   }
-  return j + "]}";
+  j += "]}";        // v2.15.36: was "return j + \"]}\"", a second full copy of the state the heap often couldn't give
+  return j;
 }
 
 String schedJson(const Sched& c) {
@@ -2427,6 +2441,7 @@ String userStateJson(const HubUser& u) {
          ",\"repeat_s\":" + String(x.periodS) + "}";
   }
   j += "],\"devices\":[";
+  j.reserve(j.length() + stateDevicesBytes(&u) + 4);
   first = true;
   for (int i = 0; i < MAX_STRIPS; i++) {
     if (!strips[i].used || !strips[i].identified || !userHas(u, strips[i].mac)) continue;
@@ -2440,7 +2455,8 @@ String userStateJson(const HubUser& u) {
     j += offlineStripJson(known[k]);
     first = false;
   }
-  return j + "]}";
+  j += "]}";        // v2.15.36: no second full copy (see buildStateJson)
+  return j;
 }
 // list actions answered per user (filtered to the user's strips)
 bool userList(const HubUser& u, const String& p, ApiRes& r) {
@@ -3176,6 +3192,7 @@ extern uint32_t sseOpened, sseCut, sseGone, sseCutAt, sseStateLen, sseStateMax, 
 extern char stateBadBuf[];
 extern volatile uint32_t allocFailN, allocFailAt, allocFailSize, allocFailCaps, allocFailFree, allocFailLargest, allocFailMaxSize;
 extern const char* volatile allocFailFn;
+extern const char* volatile allocFailTask;
 // v2.15.6: how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
@@ -3197,7 +3214,10 @@ void handleHealth() {
            ",\"alloc_fail\":" + String(allocFailN) + ",\"alloc_fail_ago_s\":" + (allocFailN ? String((millis() - allocFailAt) / 1000) : String("-1")) +
            ",\"alloc_fail_size\":" + String(allocFailSize) + ",\"alloc_fail_max_size\":" + String(allocFailMaxSize) +
            ",\"alloc_fail_caps\":\"" + String(allocFailCaps, HEX) + "\",\"alloc_fail_free\":" + String(allocFailFree) +
-           ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\"" +
+           ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\",\"alloc_fail_task\":\"" + String((const char*)allocFailTask) + "\"" +
+           // v2.15.36: "heap"/"max_alloc"/"heap_min" count IRAM too, which Strings and network buffers can't use; these are the real numbers
+           ",\"heap8\":" + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + ",\"heap8_max\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)) +
+           ",\"heap8_min\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
@@ -3722,6 +3742,7 @@ void sseCutNow() { sseCut++; sseCutAt = millis(); }
 // No allocation and no logging in here, only plain variables.
 volatile uint32_t allocFailN = 0, allocFailAt = 0, allocFailSize = 0, allocFailCaps = 0, allocFailFree = 0, allocFailLargest = 0, allocFailMaxSize = 0;
 const char* volatile allocFailFn = "";
+const char* volatile allocFailTask = "";
 static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
   allocFailN++;
   allocFailAt = millis();
@@ -3729,6 +3750,7 @@ static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
   if (size > allocFailMaxSize) allocFailMaxSize = size;
   allocFailCaps = caps;
   allocFailFn = fn ? fn : "";
+  allocFailTask = pcTaskGetName(nullptr);
   allocFailFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   allocFailLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 }
@@ -3931,12 +3953,12 @@ void mqttStart() {
   cfgm.session.last_will.retain = 1;
   cfgm.session.keepalive = 30;
   cfgm.network.reconnect_timeout_ms = 5000;
-  cfgm.buffer.size = 8192;
+  cfgm.buffer.size = 2048;      // v2.15.36: receive only (was 8192); commands are under 1 KB and bigger ones are refused anyway
   cfgm.buffer.out_size = 8192;
 #else
   cfgm.uri = secMqttUri.c_str(); cfgm.cert_pem = MQTT_CA; cfgm.username = secMqttUser.c_str(); cfgm.client_id = mqttClientId; cfgm.password = secMqtt.c_str();
   cfgm.lwt_topic = tStatus.c_str(); cfgm.lwt_msg = "offline"; cfgm.lwt_qos = 1; cfgm.lwt_retain = 1; cfgm.keepalive = 30;
-  cfgm.reconnect_timeout_ms = 5000; cfgm.buffer_size = 8192; cfgm.out_buffer_size = 8192;
+  cfgm.reconnect_timeout_ms = 5000; cfgm.buffer_size = 2048; cfgm.out_buffer_size = 8192;
 #endif
   mqtt = esp_mqtt_client_init(&cfgm);
   esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, mqttEvent, nullptr);
@@ -3954,8 +3976,8 @@ static volatile uint32_t mqttOutBytes = 0;          // bytes waiting in the queu
 static portMUX_TYPE mqttOutMux = portMUX_INITIALIZER_UNLOCKED;
 // v2.15.32: 8 KB (was 16 KB): the extra copies right after connecting ran the heap out (see mqttPub). Retained state
 // copies may fill only MQTT_OUT_STATE_BYTES, so events and command answers keep room (the state is re-sent every 30 s).
-const uint32_t MQTT_OUT_MAX_BYTES = 8192;
-const uint32_t MQTT_OUT_STATE_BYTES = 6144;
+const uint32_t MQTT_OUT_MAX_BYTES = 6144;          // v2.15.36: 8 KB -> 6 KB, retained 6 KB -> 4.5 KB (one state at a time)
+const uint32_t MQTT_OUT_STATE_BYTES = 4608;
 uint32_t mqttOutDropped = 0;
 
 static void mqttOutTask(void*) {

@@ -115,17 +115,17 @@ int main() { setvbuf(stdout, nullptr, _IONBF, 0);
   for (int i = 0; ok && i < 30; i++) ok = pubs[i].topic == "t/" + std::to_string(i) && pubs[i].data == "{\"n\":" + std::to_string(i) + "}" && pubs[i].qos == (i & 1) && pubs[i].retain == ((i & 2) ? 1 : 0);
   CHECK(ok, "30 messages intact, ordered, qos/retain kept");
 
-  printf("T4 stuck server: retained copies capped at 6 KB, events/acks keep room up to 8 KB\n");
+  printf("T4 stuck server: retained copies capped at 4.5 KB, events/acks keep room up to 6 KB\n");
   reset(); gate = true;
   std::string k3(3000, 'x');
   mqttPub("s", "warm", 0, false); usleep(20000);       // worker now stuck inside enqueue with this one
   CHECK(mqttOutBytes == 4, "only the in-flight 4 bytes counted");
   int accS = 0; for (int i = 0; i < 4; i++) { uint32_t d = mqttOutDropped; mqttPub("state", String(k3.c_str()), 0, true); if (mqttOutDropped == d) accS++; }
-  CHECK(accS == 2, "2 x 3000 B retained accepted, rest dropped");
+  CHECK(accS == 1, "1 x 3000 B retained accepted, rest dropped");
   int accE = 0; std::string e200(200, 'e');
   for (int i = 0; i < 20; i++) { uint32_t d = mqttOutDropped; mqttPub("ev", String(e200.c_str()), 1, false); if (mqttOutDropped == d) accE++; }
-  CHECK(accE == 10, "events fill the remaining room to 8 KB (10 x 200 B)");
-  CHECK(mqttOutBytes <= 8192, "never above 8 KB");
+  CHECK(accE == 15, "events fill the remaining room to 6 KB (15 x 200 B)");
+  CHECK(mqttOutBytes <= 6144, "never above 6 KB");
   gate = false; drain();
   CHECK(mqttOutBytes == 0, "byte counter back to 0 after drain");
   CHECK((int)pubs.size() == 1 + accS + accE, "everything accepted was delivered");

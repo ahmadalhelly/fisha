@@ -4,6 +4,12 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.36
+- Cause of the empty state found (2.15.35 data): at the moment the state is built, the usable memory is almost gone (refused request 4128 B = the state growing; free at that instant 9.5 KB, largest piece 3.2 KB; ~2000 refusals in 5 min). The "heap 55 KB / max_alloc 36 KB" in health was misleading: those count IRAM too, which Strings and network buffers can't use. Health now also shows the real numbers: `heap8`, `heap8_max`, `heap8_min`, plus `alloc_fail_task`.
+- Less memory per state: the state (owner and family) is reserved once and closed in place instead of being copied whole at the end. Host test with the real String class: the same 4.1 KB state now needs ~8.1 KB free instead of ~12.5 KB, identical text.
+- MQTT receive buffer 8 KB -> 2 KB (commands are under 640 B; anything bigger was already refused). Send queue 8 KB -> 6 KB (retained state max 4.5 KB, one at a time).
+- Validation: compiled; MQTT queue host test updated to the new caps and passing; builder peak measured on the computer as above. Not yet tested on the device.
+
 ### 2.15.35
 - Diagnostics only. 2.15.34 showed every piece of the state builds fine on its own (strips ~1.1 KB each, heap ~55 KB free, largest block ~36 KB), yet the whole state keeps coming out empty or as just "]}", and the phone stream is cut almost every time it opens. That pattern means memory requests are being refused at that moment. The hub now registers ESP-IDF's failed-allocation callback, so any refused allocation (Strings, network buffers) is recorded in /api/health: `alloc_fail`, `alloc_fail_ago_s`, `alloc_fail_size`, `alloc_fail_max_size`, `alloc_fail_caps`, `alloc_fail_free`, `alloc_fail_largest`, `alloc_fail_fn`.
 - Validation: compiled; checked in the built firmware (disassembly) that String growth goes realloc -> heap_caps_realloc_default -> heap_caps_alloc_failed -> this callback. The callback allocates nothing and only stores numbers.
