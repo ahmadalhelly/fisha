@@ -100,7 +100,11 @@ class _WifiScreenState extends State<WifiScreen> {
                 primaryButton(_tr('جرّب واحفظ', 'Test & save'), _busy || s.mode == ConnMode.offline ? null : _apply, icon: Icons.check),
               ]),
             const SizedBox(height: 14),
-            emptyCard(_tr('المشتركات بتحفظ الشبكة جواها. لو غيّرت اسم أو باسورد الراوتر نفسه، كل مشترك محتاج تضيفه تاني من "إضافة مشترك"، وأساميه وإعداداته هترجع زي ما هي.', 'Strips keep the network inside them. If you change the router name or password, add each strip again with "Add strip"; its names and settings come back as they were.'), icon: Icons.info_outline),
+            emptyCard(
+                _tr(
+                    'المشتركات بتحفظ الشبكة جواها. لو غيّرت اسم أو باسورد الراوتر نفسه، الـ Hub بيحاول يربطهم تاني لوحده أول ما كل مشترك يرجع لشبكة ضبطه الخاصة — من غير ما تعمل حاجة. لو استغرق وقت طويل، ضيفه بنفسك من "إضافة مشترك" وأساميه وإعداداته هترجع زي ما هي.',
+                    'Strips keep the network inside them. If you change the router name or password, the hub tries to relink each one by itself once it falls back to its own setup network — no action needed. If it takes a while, add it yourself with "Add strip"; its names and settings come back as they were.'),
+                icon: Icons.info_outline),
             const SizedBox(height: 10),
             emptyCard(_tr('لو غيّرت الراوتر قبل ما تغيّر هنا، الـ Hub هيفتح شبكة مفتوحة (من غير باسورد) اسمها Fisha-Hub-XXXX. ادخل عليها من الموبايل، وافتح 192.168.4.1 واختار الشبكة الجديدة.', 'If you change the router first, the hub opens an open network (no password) called Fisha-Hub-XXXX. Join it from your phone, open 192.168.4.1 and pick the new network.'), icon: Icons.router_outlined),
           ]),

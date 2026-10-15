@@ -74,6 +74,9 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
+// v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
+// is offline, and re-links it automatically once seen — no "Add strip" tap needed after a router change. See
+// autoResyncScan(). Logged as a "resync" event.
 // v2.15.22: automations go from 10 to 40 (MAX_AUTO); NVS blobs saved under the old cap migrate on first boot.
 // v2.15.22: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
 // the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
@@ -139,7 +142,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.22";
+const char* FW_VERSION = "2.15.23";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -4423,6 +4426,40 @@ void stg(const char* next) {
   subMax = 0; subWhere = "";
 }
 
+// ---------- v2.15.23: re-link known strips after a Wi-Fi/router change, with no "Add strip" tap needed ----------
+// A strip keeps its own Wi-Fi credentials; when the router's name or password changes, the strip can't reconnect
+// and used to just sit offline until the user ran "Add strip" on it again by hand. Stock firmware falls back to
+// its own setup network (TONLY_TAP_<id>) on its own after it fails to reconnect for a while, so the hub now keeps
+// scanning for that network from any strip it already knows and, once it sees one, re-provisions it with the
+// current Wi-Fi automatically - the same flow "Add strip" uses, just started by the hub instead of a tap. This
+// can only relink a strip that has already fallen back to its own setup network; the hub cannot force that step.
+uint32_t autoResyncAt = 0;
+void autoResyncScan() {
+  if (provState == "running" || provState == "waiting" || provRequested || suRunning()) return;
+  if (autoResyncAt && millis() - autoResyncAt < 90000) return;   // once every 90 s at most; a scan briefly interrupts Wi-Fi
+  bool anyOffline = false;
+  for (int i = 0; i < knownCount; i++) if (findStrip(known[i].mac) < 0) { anyOffline = true; break; }
+  if (!anyOffline) return;
+  autoResyncAt = millis();
+  int n = WiFi.scanNetworks(false, false, false, 300);
+  for (int i = 0; i < n; i++) {
+    String ss = WiFi.SSID(i);
+    if (!ss.startsWith("TONLY_TAP_") && !ss.startsWith("ONLY_TAP_")) continue;
+    String id = ss.substring(ss.lastIndexOf('_') + 1);
+    id.toUpperCase();
+    for (int k = 0; k < knownCount; k++) {
+      if (!known[k].mac.endsWith(id) || findStrip(known[k].mac) >= 0) continue;
+      Serial.printf("[auto-resync] %s is back in setup mode, re-linking\n", known[k].mac.c_str());
+      addEvent("resync", known[k].mac, 0, "auto");
+      provSsid = ss;
+      requestProvision();
+      WiFi.scanDelete();
+      return;
+    }
+  }
+  WiFi.scanDelete();
+}
+
 void loop() {
   esp_task_wdt_reset();
   stg("loop");
@@ -4509,6 +4546,7 @@ void loop() {
   suTick();
   stg("provision");
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();
+  else autoResyncScan();
   static uint32_t wifiReqAt = 0;
   if (wifiTestReq) { if (!wifiReqAt) wifiReqAt = millis(); else if (millis() - wifiReqAt > 1500) { wifiReqAt = 0; runWifiTest(); } }
   stg("loop_end");

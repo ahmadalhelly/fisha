@@ -40,6 +40,7 @@ String eventText(AppState s, HubEvent e) {
     'pair_ok' => t('ev_pair_ok', {'x': m}),
     'pair_no' => t('ev_pair_no', {'x': m}),
     'owner' => t('ev_owner', {'x': m}),
+    'resync' => t('ev_resync'),
     _ => '${e.type} $m',
   };
   return who.isEmpty ? body.trim() : '$who — ${body.trim()}';
@@ -68,6 +69,7 @@ IconData _icon(String type) => switch (type) {
       'strip_fw' => Icons.system_update_alt,
       'strip_fw_fail' => Icons.error_outline,
       'pair' || 'pair_ok' || 'pair_no' || 'owner' => Icons.phonelink_lock_outlined,
+      'resync' => Icons.sync,
       _ => Icons.info_outline,
     };
 
@@ -83,7 +85,7 @@ Color _tone(String type) => switch (type) {
 
 /// System-log filter of a hub event: wifi / hub / fw
 String _sysGroup(String type) => switch (type) {
-      'wifi' => 'wifi',
+      'wifi' || 'resync' => 'wifi',
       'strip_fw' || 'strip_fw_fail' => 'fw',
       _ => 'hub',
     };
