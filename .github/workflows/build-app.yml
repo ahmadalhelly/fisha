@@ -97,6 +97,11 @@ jobs:
           } > "$f"
           cp "$f" RELEASE_NOTES.md
           cat "$f"
+          # public repo (fisha-app): general categories only, never details (owner rule 2026-10-15). Each commit may carry
+          # a trailer like "Public: إصلاح أخطاء"; details stay in the private release above.
+          git log --no-merges --format='%(trailers:key=Public,valueonly)' $range | sed 's/^ *//; s/ *$//' | grep -v '^$' | awk '!seen[$0]++' | sed 's/^/- /' > PUBLIC_NOTES.md
+          [ -s PUBLIC_NOTES.md ] || echo "- إصلاح أخطاء وتحسينات" > PUBLIC_NOTES.md
+          cat PUBLIC_NOTES.md
 
       - name: Publish APK as a release
         if: success()
@@ -128,7 +133,7 @@ jobs:
           name: App ${{ steps.ver.outputs.v }} (build ${{ github.run_number }})
           make_latest: false
           files: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
-          body_path: RELEASE_NOTES.md
+          body_path: PUBLIC_NOTES.md
 
       - name: Save build log to the ci-logs branch
         if: always()

@@ -86,6 +86,11 @@ jobs:
             | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' | cat -s > RELEASE_NOTES.md
           [ -s RELEASE_NOTES.md ] || echo "Hub firmware ${{ steps.ver.outputs.v }}" > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
+          # public repo (fisha-app): general categories only, never details (owner rule 2026-10-15). Each commit may carry
+          # a trailer like "Public: إصلاح أخطاء"; details stay in the private release above.
+          git log --no-merges --format='%(trailers:key=Public,valueonly)' $range -- firmware | sed 's/^ *//; s/ *$//' | grep -v '^$' | awk '!seen[$0]++' | sed 's/^/- /' > PUBLIC_NOTES.md
+          [ -s PUBLIC_NOTES.md ] || echo "- إصلاح أخطاء وتحسينات" > PUBLIC_NOTES.md
+          cat PUBLIC_NOTES.md
 
       # the public repo fisha-app is where the app's update center looks (this repo is private). Published as a draft:
       # the update center sees it only after the owner presses Publish on github.com/ahmadalhelly/fisha-app/releases.
@@ -102,7 +107,7 @@ jobs:
           name: Hub ${{ steps.ver.outputs.v }}
           make_latest: false
           files: fisha-hub-${{ steps.ver.outputs.v }}.bin
-          body_path: RELEASE_NOTES.md
+          body_path: PUBLIC_NOTES.md
 
       # Strip firmware (F1.0.82) for the hub's "fetch latest" button: the public draft release strip-F1.0.82 on
       # fisha-app. The hub downloads from that link once the owner presses Publish, same as the hub and app builds.
@@ -119,4 +124,4 @@ jobs:
           make_latest: false
           files: firmware/strip-fw/comMTTL-W01_F1.0.82.fwr
           body: |
-            Strip firmware F1.0.82 (MTTL-W01). The hub downloads it from this release; updating strips is done from the app's update center.
+            - تحديث فيرموير المشترك
