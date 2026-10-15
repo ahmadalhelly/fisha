@@ -76,6 +76,10 @@ struct PairReq;
 */
 // v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
 // with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
+// v2.15.26: roles as the owner set them: view sees all, control switches outlets (not overload-protected ones),
+//           admin also gets Wi-Fi, strip updates, reboot, automations and protections. The owner can grant a member
+//           extra permissions (automations, protections, strip updates, Wi-Fi) kept in HubUser.rsv. Members' Google
+//           email + photo are kept in NVS "uprof" and shown on the family page (api profile).
 // v2.15.25: changing the hub's Wi-Fi from the app hands the new network to every online strip first (up:connect on
 //           its normal link, up:reboot:0 after connect_ok), so strips move with the hub. api strip_wifi_test tries it
 //           on one strip with the current network. Logged as "wifipush" events.
@@ -150,7 +154,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.25";
+const char* FW_VERSION = "2.15.26";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -253,6 +257,8 @@ struct Note { String type, mac, msg; int outlet; };   // queued phone notificati
 struct NoteMsg { char topic[68]; char title[200]; char body[160]; uint8_t high; };   // handed to the notification task
 // v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
 struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };
+// v2.15.26: HubUser.rsv holds extra permissions the owner grants on top of the role (admins have them all)
+const uint8_t P_AUTO = 1, P_PROT = 2, P_SFW = 4, P_WIFI = 8;
 struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
 
 Strip strips[MAX_STRIPS];
@@ -2043,9 +2049,22 @@ void parseStrips(HubUser& u, const String& list) {
     if (p.length() == 12 && isHex(p) && u.n < 6) strlcpy(u.strips[u.n++], p.c_str(), 13);
   }
 }
+// v2.15.26: each member's Google email and photo link, kept apart from the users blob so its layout stays the same
+String profGet(const char* id, char k) {
+  Preferences pp; pp.begin("uprof", true);
+  String v = pp.getString((String(k) + id).c_str(), "");
+  pp.end();
+  return v;
+}
+void profSet(const char* id, char k, const String& v) {
+  Preferences pp; pp.begin("uprof", false);
+  if (v.length()) pp.putString((String(k) + id).c_str(), v); else pp.remove((String(k) + id).c_str());
+  pp.end();
+}
 String userJson(const HubUser& u) {
   String j = "{\"id\":\"" + String(u.id) + "\",\"name\":\"" + jsonEsc(String(u.name)) + "\",\"role\":" + String(u.role) +
-             ",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
+             ",\"perms\":" + String(u.rsv & 0x0F) + ",\"email\":\"" + jsonEsc(profGet(u.id, 'e')) + "\",\"photo\":\"" +
+             jsonEsc(profGet(u.id, 'p')) + "\",\"all\":" + (u.all ? "true" : "false") + ",\"strips\":[";
   for (int k = 0; k < u.n && k < 6; k++) { if (k) j += ","; j += "\"" + String(u.strips[k]) + "\""; }
   return j + "]}";
 }
@@ -2324,11 +2343,20 @@ String resetText() {
 
 // what a shared user may call · 0 view · 1 control · 2 admin · -1 never
 int needRole(const String& p) {
-  if (p == "state" || p == "events" || p == "energy" || p == "link" || p == "schedules" || p == "automations") return 0;
+  if (p == "state" || p == "events" || p == "energy" || p == "link" || p == "schedules" || p == "automations" || p == "profile") return 0;
   if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete" || p == "schedule_skip") return 1;
   if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit" || p == "automation_save" || p == "automation_delete") return 2;
+  if (p == "wifi" || p == "strip_wifi_test" || p == "reboot") return 2;
   return -1;
 }
+// v2.15.26: the extra permission that lets a lower role do an admin action anyway (0 = none)
+uint8_t grantFor(const String& p) {
+  if (p == "automation_save" || p == "automation_delete") return P_AUTO;
+  if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit") return P_PROT;
+  if (p == "wifi" || p == "strip_wifi_test") return P_WIFI;
+  return 0;
+}
+bool globalAction(const String& p) { return p == "wifi" || p == "strip_wifi_test" || p == "reboot" || p == "profile"; }
 // the mac an action touches ("" = none / global)
 String actionMac(const String& p, const String& b) {
   if (p == "timer_cancel") {
@@ -2417,10 +2445,32 @@ bool userList(const HubUser& u, const String& p, ApiRes& r) {
 ApiRes userApi(const HubUser& u, String path, const String& b) {
   if (path.startsWith("/api/")) path = path.substring(5);
   int need = needRole(path);
-  if (need < 0 || u.role < need) return errRes("forbidden");
+  uint8_t g = grantFor(path);
+  if (need < 0 || (u.role < need && !(g && (u.rsv & g)))) return errRes("forbidden");
   ApiRes r;
   if (userList(u, path, r)) return r;
+  if (path == "profile") {                        // v2.15.26 {"email","photo"}: a member's own Google email and photo
+    String e = jsonValue(b, "email"), ph = jsonValue(b, "photo");
+    if (e.length() > 64 || ph.length() > 300 || (ph.length() && !ph.startsWith("https://"))) return errRes("bad profile");
+    profSet(u.id, 'e', e);
+    profSet(u.id, 'p', ph);
+    stateDirty = true;
+    return okRes();
+  }
+  if (globalAction(path)) {
+    if (!u.all) return errRes("forbidden");
+    apiSrc = 0;                                   // allowed above; run it as the hub's own action
+    ApiRes ar = api(path, b);
+    apiSrc = 2;
+    return ar;
+  }
   String m = actionMac(path, b);
+  // v2.15.26: control members switch outlets but not overload-protected ones, unless allowed to change protections
+  if (path == "onoff" && u.role < 2 && !(u.rsv & P_PROT)) {
+    int si = findStrip(m);
+    int o = jsonValue(b, "outlet").toInt();
+    if (si >= 0 && strips[si].protMask && (o == 0 ? true : (strips[si].protMask & (1 << (o - 1))))) return errRes("protected");
+  }
   if (path == "refresh") { if (!u.all) return errRes("forbidden"); }
   else if (!m.length() || m == "?" || !userHas(u, m)) return errRes("forbidden");
   return api(path, b);
@@ -2567,6 +2617,7 @@ ApiRes api(String path, const String& b) {
     strlcpy(u.name, nm.c_str(), sizeof u.name);
     u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     u.all = jsonBool(b, "all") ? 1 : 0;
+    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
     parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
@@ -2585,6 +2636,7 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "name")) { String nm = jsonValue(b, "name"); nm.trim(); if (nm.length()) strlcpy(u.name, nm.c_str(), sizeof u.name); }
     if (jsonHas(b, "role")) u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     if (jsonHas(b, "all")) u.all = jsonBool(b, "all") ? 1 : 0;
+    if (jsonHas(b, "perms")) u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
     if (jsonHas(b, "strips")) parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     users[i] = u;
@@ -2614,6 +2666,7 @@ ApiRes api(String path, const String& b) {
     strlcpy(u.pw, pw.c_str(), sizeof u.pw);
     u.role = (uint8_t)constrain((int)jsonValue(b, "role").toInt(), 0, 2);
     u.all = jsonBool(b, "all") ? 1 : 0;
+    u.rsv = (uint8_t)(jsonValue(b, "perms").toInt() & 0x0F);
     parseStrips(u, jsonValue(b, "strips"));
     if (!u.all && !u.n) return errRes("pick at least one strip");
     int i = findUser(u.id);
@@ -2685,6 +2738,7 @@ ApiRes api(String path, const String& b) {
     if (emqxReady()) { cloudTodoId = u.id; cloudTodoPw = pw; cloudTodoAt = 0; }
     users[userCount++] = u;
     saveUsers();
+    profSet(u.id, 'e', p.email);                  // v2.15.26: the family page shows each member's email
     publishUserState(u);
     p.result = "\"code\":\"" + inviteCode(u, pw) + "\"";
     p.state = 2; p.at = millis();
@@ -3409,18 +3463,28 @@ String suJson() {
   return j + "]}";
 }
 
+// v2.15.26: strip updates are open to admins and members the owner allowed to update strips
+bool sfwOnly() {
+  if (!guard()) return false;
+  if (apiSrc == 2 && !(apiUserIdx >= 0 && apiUserIdx < userCount && users[apiUserIdx].all &&
+                       (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW)))) {
+    web.send(403, "application/json", "{\"ok\":false,\"error\":\"forbidden\"}");
+    return false;
+  }
+  return true;
+}
 bool ownerOnly() {
   if (!guard()) return false;
   if (apiSrc == 2) { web.send(403, "application/json", "{\"ok\":false,\"error\":\"forbidden\"}"); return false; }
   return true;
 }
 void handleSuState() {
-  if (!ownerOnly()) return;
+  if (!sfwOnly()) return;
   web.send(200, "application/json", suJson());
 }
 // body {"macs":["88D039...", ...]}
 void handleSuStart() {
-  if (!ownerOnly()) return;
+  if (!sfwOnly()) return;
   String b = web.arg("plain");
   String macs[MAX_STRIPS];
   int n = 0, at = b.indexOf("\"macs\"");
@@ -3438,19 +3502,20 @@ void handleSuStart() {
   web.send(200, "application/json", suJson());
 }
 void handleSuCancel() {
-  if (!ownerOnly()) return;
+  if (!sfwOnly()) return;
   suCancel = true;                     // the strip in progress finishes; the rest are skipped
   web.send(200, "application/json", suJson());
 }
 bool suUploadAuth = false;
 void handleSuUpload() {
   HTTPUpload& u = web.upload();
-  if (u.status == UPLOAD_FILE_START) suUploadAuth = authorized() && apiSrc != 2;
+  if (u.status == UPLOAD_FILE_START) suUploadAuth = authorized() && (apiSrc != 2 || (apiUserIdx >= 0 && apiUserIdx < userCount &&
+      users[apiUserIdx].all && (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW))));
   if (!suUploadAuth || suRunning()) { stripFwErr = true; return; }
   stripFwChunk(u);
 }
 void handleSuUploadDone() {
-  if (!ownerOnly()) return;
+  if (!sfwOnly()) return;
   if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
   String why;
   if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
@@ -3498,7 +3563,7 @@ bool stripFwFetch(const String& url, String& why) {
   return stripFwStore(why);
 }
 void handleSuFetch() {
-  if (!ownerOnly()) return;
+  if (!sfwOnly()) return;
   if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
   String b = web.arg("plain");
   int at = b.indexOf("\"url\"");
