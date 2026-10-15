@@ -3430,6 +3430,8 @@ bool stripFwFetch(const String& url, String& why) {
   HTTPClient http;
   http.setConnectTimeout(8000);
   http.setTimeout(15000);
+  // GitHub release links answer 302 to their file server; follow it.
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   bool ok = https ? (sc.setInsecure(), http.begin(sc, url)) : http.begin(pc, url);
   if (!ok) { why = "could not open the url"; return false; }
   int code = http.GET();
