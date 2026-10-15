@@ -102,7 +102,7 @@ class _WifiScreenState extends State<WifiScreen> {
             const SizedBox(height: 14),
             emptyCard(_tr('المشتركات بتحفظ الشبكة جواها. لو غيّرت اسم أو باسورد الراوتر نفسه، كل مشترك محتاج تضيفه تاني من "إضافة مشترك"، وأساميه وإعداداته هترجع زي ما هي.', 'Strips keep the network inside them. If you change the router name or password, add each strip again with "Add strip"; its names and settings come back as they were.'), icon: Icons.info_outline),
             const SizedBox(height: 10),
-            emptyCard(_tr('لو غيّرت الراوتر قبل ما تغيّر هنا، الـ Hub هيفتح شبكة اسمها Fisha-Hub-XXXX. ادخل عليها من الموبايل (الباسورد هو باسورد التحديث، أو fisha1234) وافتح 192.168.4.1 واختار الشبكة الجديدة.', 'If you change the router first, the hub opens a network called Fisha-Hub-XXXX. Join it (password: your update password, or fisha1234), open 192.168.4.1 and pick the new network.'), icon: Icons.router_outlined),
+            emptyCard(_tr('لو غيّرت الراوتر قبل ما تغيّر هنا، الـ Hub هيفتح شبكة مفتوحة (من غير باسورد) اسمها Fisha-Hub-XXXX. ادخل عليها من الموبايل، وافتح 192.168.4.1 واختار الشبكة الجديدة.', 'If you change the router first, the hub opens an open network (no password) called Fisha-Hub-XXXX. Join it from your phone, open 192.168.4.1 and pick the new network.'), icon: Icons.router_outlined),
           ]),
         ),
       ),
