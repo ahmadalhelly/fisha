@@ -4,6 +4,11 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.39
+- Same code as 2.15.38; only the version changed. The 10-strip build is now the only hub build (CI `build` job compiles `platformio.ini`; the old arduino-cli 6-strip build was removed to save CI minutes). Reason: 2.15.38-10strips held on the device for 11 minutes with the app open: heap8_min 23.2 KB (was ~600 B), alloc_fail 0, sse_cut 0, state_bad 0, mqtt on, no Wi-Fi drops; only one 3.4 s stall at boot ("provision").
+- Published bin names stay `fisha-hub-<v>.bin` / `-FULL-flash-0x0.bin`.
+- Not measured yet: the memory cost of each extra strip (the reading had 3 strips).
+
 ### 2.15.38
 - Live updates without cutting: the phones get the full state (~4 KB) only when something besides the numbers changed (names, locks, settings, a strip came or went) and every 15 s; in between, once a second, an SSE `live` event with only each online strip's numbers (`{"ts","d":[{"mac","v","r","up","o":[[on,W,kWh,°C,auto_off_in_s] x4]}]}`, ~170 B a strip). 2.15.37 still cut 36 of 37 streams: each push copied ~4 KB into every phone socket and the hub had ~17 KB of usable memory.
 - The state is no longer built as one String: `stateStream` sends the head, then one strip at a time, then `]}` straight into the phone socket (SSE) or the `/api/state` answer (now without Content-Length, ends when the hub closes). With 10 strips the one String would be ~13 KB.

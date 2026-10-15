@@ -169,7 +169,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.38";
+const char* FW_VERSION = "2.15.39";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----

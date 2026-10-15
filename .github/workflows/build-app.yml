@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - '**'
+    paths:                       # only app changes build the APK (saves CI minutes); run by hand otherwise
+      - 'app/**'
   workflow_dispatch:
 
 permissions:
