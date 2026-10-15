@@ -76,6 +76,8 @@ struct PairReq;
 */
 // v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
 // with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
+// v2.15.24: the strip's master button with a child-locked outlet on: a press now turns the free outlets on instead
+//           of doing nothing (the strip's "all off" was undone for the locked one and the rest were already off).
 // v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
 // is offline, and re-links it automatically once seen. The strip only opens that network after its button is held
 // ~10 s (stock firmware has no automatic fallback we could find), so after a router change the user still presses
@@ -145,7 +147,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.23";
+const char* FW_VERSION = "2.15.24";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -204,6 +206,7 @@ struct Strip {
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
   String label, olabel[4];
   uint8_t lockMask = 0, lockState = 0, protMask = 0, notifyMask = 0x1F;
+  uint8_t infoOn = 0;                            // outlets on in the last full report (state before a button press)
   uint8_t keepMask = 0, keepHold = 0;            // v2.8 keep always on · hold = a safety cut is in force
   uint32_t keepEvAt[4] = {0, 0, 0, 0};
   uint16_t autoOffMin[4] = {0, 0, 0, 0};
@@ -1384,6 +1387,8 @@ bool tryParseInfo(int i) {
   s.gotInfo = true;
   s.pendingInfo = "";
   s.infoSeq++;
+  s.infoOn = 0;
+  for (int k = 0; k < 4; k++) if (s.o[k].on) s.infoOn |= 1 << k;
   for (int k = 0; k < 4; k++) {                  // keep always on (wins over the child lock)
     uint8_t bit = 1 << k;
     if (!(s.keepMask & bit)) continue;
@@ -1482,6 +1487,12 @@ void handleLine(int i, const String& line) {
       stateDirty = true;
     }
   } else if (isEvent && ch == 0) {
+    // v2.15.24: the strip's own master button turns everything off while any outlet is on. With a child-locked outlet
+    // left on, every press meant "all off": the hub put the locked one back and the free ones (already off) never came
+    // on. So a press that switched off while every free outlet was already off is taken as "turn the free ones on".
+    uint8_t freeM = 0x0F & ~s.lockMask;
+    if (s.lockMask && freeM && f[1] == "off" && !(s.infoOn & freeM))
+      for (int k = 0; k < 4; k++) if (freeM & (1 << k)) sendOnOffF(s, k + 1, true, false);
     sendLine(s, "up:getinfo:all");                           // master button: next poll re-applies locks
   }
 }
