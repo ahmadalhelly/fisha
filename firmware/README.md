@@ -4,6 +4,9 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.31
+- Fixed the crash-and-restart loop of 2.15.30 (Guru Meditation, LoadProhibited in mqttPub). An empty message (the one that clears a family member's retained state on the server) has no text buffer at all, and the new queue copied from that null pointer. Now only real bytes are copied.
+
 ### 2.15.30
 - Sending to the server (MQTT) no longer runs on the main loop: messages go into a small queue and a separate task hands them to the MQTT client. Reason: when the internet or the server was slow, one send waited 19-21 s for the MQTT client (log: "mqtt_pub 20748 ms"), the whole hub froze, every strip dropped and came back again and again, and the app showed the hub as not on the same Wi-Fi.
 - The queue is capped at 16 KB; anything past that is dropped (counted in /api/health as `mqtt_drop`) so a stuck server can't use up the memory.

@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.30";
+const char* FW_VERSION = "2.15.31";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3924,7 +3924,11 @@ void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
   m.topic = strdup(topic.c_str());
   m.data = (char*)malloc(len + 1);
   if (!m.topic || !m.data) { free(m.topic); free(m.data); mqttOutDropped++; return; }
-  memcpy(m.data, payload.c_str(), len + 1);
+  if (!payload.c_str()) len = 0;
+  // an empty Arduino String can have no buffer at all (c_str() == nullptr): copy only real bytes (2.15.30 crashed here)
+  const char* src = payload.c_str();
+  if (src && len) memcpy(m.data, src, len);
+  m.data[len] = 0;
   m.len = len; m.qos = qos; m.retain = retain ? 1 : 0;
   portENTER_CRITICAL(&mqttOutMux);
   mqttOutBytes += len;
