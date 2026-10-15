@@ -4,6 +4,31 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.26
+- Roles as the owner sets them: view sees everything, control switches outlets (not overload-protected ones), full admin also gets Wi-Fi, updates, reboot, automations and protections.
+- Owner can grant extra permissions per member (automations, protections, strip updates, hub updates, Wi-Fi, export).
+- Each member's Google email and photo are kept on the hub for the family page.
+- Members with the hub-update permission can update the hub with their phone key.
+
+### 2.15.25
+- Changing the hub's Wi-Fi from the app hands the new network to every online strip (up:connect on the normal link, then up:reboot after connect_ok), then the hub moves.
+- Strips that do not answer are logged as "wifipush" events; hold the strip button 10 s and the hub relinks it.
+- Test endpoint `strip_wifi_test` sends the current network to one strip.
+
+### 2.15.24
+- Strip master button with a child-locked outlet on: a press turns the free outlets on instead of doing nothing.
+
+### 2.15.23
+- Auto-relink: the hub scans for a known strip's setup network (TONLY_TAP_...) and re-provisions it with the current Wi-Fi.
+- Stock strip firmware has no automatic fallback to setup mode; the strip must be put in setup mode by holding its button 10 s.
+
+### 2.15.22
+- Strip firmware can be fetched by the hub from a direct link (`/api/stripfw/fetch`), with redirects followed.
+- Automation cap raised from 10 to 40, with NVS migration.
+
+### 2.15.21
+- Web application removed from the hub (the Fisha app is the only client).
+
 ### 2.15.20 (beta)
 - No secrets in the code. The update password is random per hub and kept in NVS.
 - The hub server user defaults to `ESP_hub`. The server address and user come from the app (`cloud` command: `host`, `user`, `pass`).
@@ -20,3 +45,5 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 - SSE header and heartbeat sent without blocking.
 
 ### 2.15.16 and earlier: see git history.
+
+Strip firmware: `strip-fw/comMTTL-W01_F1.0.82.fwr` (stock 1.0.66 with our build changes; not built by CI).
