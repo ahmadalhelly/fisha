@@ -29,6 +29,8 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
   String? _error;
   String? _fileName;
   Timer? _poll;
+  final _urlCtrl = TextEditingController();
+  bool _fetching = false;
 
   @override
   void initState() {
@@ -42,6 +44,7 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _urlCtrl.dispose();
     super.dispose();
   }
 
@@ -90,6 +93,31 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
     _refresh();
   }
 
+  Future<void> _fetchFromUrl() async {
+    final url = _urlCtrl.text.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setState(() => _error = t('sfw_fetch_bad_url'));
+      return;
+    }
+    setState(() {
+      _fetching = true;
+      _error = null;
+    });
+    final err = await s.fetchStripFwByUrl(url);
+    if (!mounted) return;
+    setState(() {
+      _fetching = false;
+      _error = switch (err) {
+        null => null,
+        'bad_file' => t('sfw_bad_file'),
+        'net' => t('fw_err_net'),
+        'auth' => t('sfw_owner_only'),
+        _ => err,
+      };
+    });
+    _refresh();
+  }
+
   Future<void> _start() async {
     final macs = [for (final x in s.strips) if (x.online && _picked.contains(x.mac)) x.mac];
     if (macs.isEmpty) return;
@@ -113,7 +141,7 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
     final online = [for (final x in s.strips) if (x.online) x];
     _picked.removeWhere((m) => !online.any((x) => x.mac == m));
     final allPicked = online.isNotEmpty && _picked.length == online.length;
-    final busy = _progress != null || _running;
+    final busy = _progress != null || _running || _fetching;
     return Scaffold(
       backgroundColor: C.bg,
       appBar: AppBar(
@@ -140,13 +168,40 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
                         : ((_hub?['why'] ?? '').toString().isNotEmpty ? t('sfw_refused', {'x': _hub!['why']}) : t('sfw_none')))),
               ]),
               OutlinedButton.icon(
-                onPressed: busy || _hub == null ? null : _pickAndUpload,
+                onPressed: busy || _hub == null || _fetching ? null : _pickAndUpload,
                 icon: const Icon(Icons.folder_open),
                 label: Text(_fileName ?? t('sfw_pick')),
                 style: OutlinedButton.styleFrom(foregroundColor: C.accent, side: BorderSide(color: C.tileOnBorder), minimumSize: const Size(0, 48)),
               ),
               if (_progress != null)
                 LinearProgressIndicator(value: _progress, minHeight: 6, color: C.accent, backgroundColor: C.surface2, borderRadius: BorderRadius.circular(3)),
+              const SizedBox(height: 14),
+              Row(children: [
+                Expanded(child: Divider(color: C.border)),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Text(t('sfw_or'), style: TextStyle(color: C.muted, fontSize: 12))),
+                Expanded(child: Divider(color: C.border)),
+              ]),
+              const SizedBox(height: 10),
+              Text(t('sfw_fetch_url'), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 4),
+              Text(t('sfw_fetch_hint'), style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.5)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _urlCtrl,
+                enabled: !busy && !_fetching,
+                textDirection: TextDirection.ltr,
+                decoration: InputDecoration(hintText: t('sfw_fetch_url_label'), isDense: true, contentPadding: const EdgeInsets.all(12)),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: busy || _fetching || _hub == null ? null : _fetchFromUrl,
+                  icon: _fetching ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.cloud_download_outlined),
+                  label: Text(t('sfw_fetch_btn')),
+                  style: OutlinedButton.styleFrom(foregroundColor: C.accent, side: BorderSide(color: C.tileOnBorder)),
+                ),
+              ),
             ]),
             const SizedBox(height: 14),
             section(t('sfw_strips'), [

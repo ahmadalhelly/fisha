@@ -1787,6 +1787,21 @@ class AppState extends ChangeNotifier {
     return _hubJson(err)?['error']?.toString() ?? err;
   }
 
+  /// Hub 2.16+: the hub downloads the .fwr itself over HTTP(S) and stores it — the file never passes through
+  /// this phone. Returns null on success or an error text.
+  Future<String?> fetchStripFwByUrl(String url) async {
+    try {
+      final r = await http
+          .post(_localUri('/api/stripfw/fetch'),
+              headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders}, body: jsonEncode({'url': url}))
+          .timeout(const Duration(seconds: 30));
+      if (r.statusCode == 200) return null;
+      return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+    } catch (_) {
+      return 'net';
+    }
+  }
+
   // ---------- schedules / automations ----------
   Future<bool> loadSchedules() async {
     final r = await api('schedules');

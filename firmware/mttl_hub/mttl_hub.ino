@@ -74,6 +74,8 @@ struct PairReq;
            schedules keep their layout); a skipped run is logged as a "skipped" event.
            The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
 */
+// v2.16.0: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
+// the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
 // v2.15.20: the owner sets the hub address in the app (cloud settings "lip"; stored in NVS, the hub restarts to use it).
 // If the router does not answer on that address within a minute of boot, the hub goes back to the default address.
 // The hub server user defaults to ESP_hub.
@@ -136,7 +138,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.21";
+const char* FW_VERSION = "2.16.0";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3398,6 +3400,58 @@ void handleSuUploadDone() {
   if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
   web.send(200, "application/json", suJson());
 }
+// v2.16.0: the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
+// same spare slot and validation (stripFwCheck) as a phone upload — only where the bytes come from differs.
+bool stripFwFetch(const String& url, String& why) {
+  const esp_partition_t* part = stripFwPart();
+  if (!part || part->size < STRIP_FW_MAX) { why = "no spare slot"; return false; }
+  bool https = url.startsWith("https://");
+  if (!https && !url.startsWith("http://")) { why = "url must start with http:// or https://"; return false; }
+  WiFiClientSecure sc;
+  WiFiClient pc;
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(15000);
+  bool ok = https ? (sc.setInsecure(), http.begin(sc, url)) : http.begin(pc, url);
+  if (!ok) { why = "could not open the url"; return false; }
+  int code = http.GET();
+  if (code != 200) { why = "server replied " + String(code); http.end(); return false; }
+  int len = http.getSize();
+  if (len <= 0 || (uint32_t)len > STRIP_FW_MAX) { why = "file too big or unknown size"; http.end(); return false; }
+  if (esp_partition_erase_range(part, 0, STRIP_FW_MAX) != ESP_OK) { why = "flash erase failed"; http.end(); return false; }
+  WiFiClient* stream = http.getStreamPtr();
+  uint8_t buf[1024];
+  uint32_t written = 0;
+  uint32_t lastByte = millis();
+  while (http.connected() && written < (uint32_t)len && millis() - lastByte < 15000) {
+    size_t avail = stream->available();
+    if (!avail) { delay(5); esp_task_wdt_reset(); continue; }
+    size_t n = stream->readBytes(buf, min(avail, sizeof buf));
+    if (!n) break;
+    if (esp_partition_write(part, written, buf, n) != ESP_OK) { why = "flash write failed"; http.end(); return false; }
+    written += n;
+    lastByte = millis();
+    esp_task_wdt_reset();
+  }
+  http.end();
+  if (written != (uint32_t)len) { why = "download incomplete (" + String(written) + "/" + String(len) + " bytes)"; return false; }
+  stripFwWritten = written;
+  stripFwErr = false;
+  return stripFwStore(why);
+}
+void handleSuFetch() {
+  if (!ownerOnly()) return;
+  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
+  String b = web.arg("plain");
+  int at = b.indexOf("\"url\"");
+  int a = at >= 0 ? b.indexOf('"', b.indexOf(':', at) + 1) : -1;
+  int e = a >= 0 ? b.indexOf('"', a + 1) : -1;
+  String url = a >= 0 && e > a ? b.substring(a + 1, e) : "";
+  if (!url.length()) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"no url\"}"); return; }
+  String why;
+  if (!stripFwFetch(url, why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  web.send(200, "application/json", suJson());
+}
 // form on /stripfw: mac=...&mac=... (checkboxes)
 void handleSuForm() {
   if (!otaAuth()) return web.requestAuthentication();
@@ -4323,6 +4377,7 @@ void setup() {
   web.on("/api/stripfw/start", HTTP_POST, handleSuStart);
   web.on("/api/stripfw/cancel", HTTP_POST, handleSuCancel);
   web.on("/api/stripfw/upload", HTTP_POST, handleSuUploadDone, handleSuUpload);
+  web.on("/api/stripfw/fetch", HTTP_POST, handleSuFetch);
   web.onNotFound(handleOther);
   web.begin();
   webRoutesReady = true;
