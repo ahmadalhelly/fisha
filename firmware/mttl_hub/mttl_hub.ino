@@ -76,6 +76,9 @@ struct PairReq;
 */
 // v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
 // with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
+// v2.15.25: changing the hub's Wi-Fi from the app hands the new network to every online strip first (up:connect on
+//           its normal link, up:reboot:0 after connect_ok), so strips move with the hub. api strip_wifi_test tries it
+//           on one strip with the current network. Logged as "wifipush" events.
 // v2.15.24: the strip's master button with a child-locked outlet on: a press now turns the free outlets on instead
 //           of doing nothing (the strip's "all off" was undone for the locked one and the rest were already off).
 // v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
@@ -147,7 +150,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.24";
+const char* FW_VERSION = "2.15.25";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -227,6 +230,7 @@ struct Strip {
   int rssi = 0;
   Outlet o[4];
   uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
+  bool connOk = false;                           // v2.15.25: strip answered connect_ok to a network handed over on its link
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
 };
 
@@ -623,6 +627,15 @@ void sendLine(Strip& s, const String& line) {
   if (!flushTx(s, 150) && !s.dead)
     Serial.printf("[tx %s] slow, %u bytes waiting\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), s.txq.length());
   Serial.printf("[tx %s] %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), line.c_str());
+}
+
+// v2.15.25: like sendLine, but the serial log shows only the network name, never the password
+void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
+  if (s.dead || !s.c.connected()) return;
+  s.connOk = false;
+  s.txq += "up:connect:" + ssid + ":" + pass + "\r\n";
+  flushTx(s, 150);
+  Serial.printf("[tx %s] up:connect:%s:****\n", s.mac.c_str(), ssid.c_str());
 }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain);
@@ -1455,6 +1468,11 @@ void handleLine(int i, const String& line) {
       }
       voltCheck(s);
     }
+    return;
+  }
+  if (line.indexOf("connect_ok") >= 0) {          // v2.15.25: reply to a Wi-Fi handover sent on the normal link
+    s.connOk = true;
+    addEvent("wifipush", s.mac, 0, "connect_ok");
     return;
   }
   if (line.startsWith("up:query:")) { s.rssi = line.substring(9).toInt(); s.hasRssi = true; return; }
@@ -2689,6 +2707,14 @@ ApiRes api(String path, const String& b) {
     return okRes();
   }
 
+  if (path == "strip_wifi_test") {                // v2.15.25 {"mac"}: hand the CURRENT network to one strip on its normal link
+    String m = jsonValue(b, "mac"); m.toUpperCase();   // (safe: it rejoins the same Wi-Fi); a connect_ok reply proves handover works
+    int k = findStrip(m);
+    if (k < 0) return errRes("strip not connected");
+    sendWifiTo(strips[k], secSsid, secWifi);
+    addEvent("wifipush", strips[k].mac, 0, "test sent");
+    return okRes();
+  }
   if (path == "wifi") {
     String ns = jsonValue(b, "ssid"), np = jsonValue(b, "pass");
     ns.trim();
@@ -4275,10 +4301,53 @@ void runWifiTest() {
   stateDirty = true;
   ssePump();
   delay(300);
+  String had[MAX_STRIPS];                        // strips online before the change get the new network handed over
+  int hadN = 0;
+  for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].mac.length()) had[hadN++] = strips[i].mac;
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "wifi change");
   WiFi.disconnect();
   delay(300);
   if (tryWiFi(wifiTestSsid, wifiTestPass, 20000)) {
+    if (hadN) {
+      // v2.15.25: the new network works. Go back, wait for the strips to re-dial, hand each one the new network on its
+      // normal link (up:connect, then up:reboot:0 once it answers connect_ok, as in "Add strip"), then move for good.
+      // A strip that misses it stays on the old network; holding its button 10 s lets autoResyncScan() relink it.
+      wifiTestState = "moving";
+      WiFi.disconnect();
+      delay(300);
+      connectWiFi();
+      uint32_t t0 = millis();
+      auto pump = [&](uint32_t ms) {
+        uint32_t ts = millis();
+        while (millis() - ts < ms) { esp_task_wdt_reset(); pumpStrips(); delay(10); }
+      };
+      while (millis() - t0 < 60000) {
+        int back = 0;
+        for (int h = 0; h < hadN; h++) if (findStrip(had[h]) >= 0) back++;
+        if (back == hadN) break;
+        pump(500);
+      }
+      pump(1500);
+      for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0) sendWifiTo(strips[k], wifiTestSsid, wifiTestPass); }
+      t0 = millis();
+      while (millis() - t0 < 15000) {
+        bool all = true;
+        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && !strips[k].connOk) all = false; }
+        if (all) break;
+        pump(300);
+      }
+      for (int h = 0; h < hadN; h++) {
+        int k = findStrip(had[h]);
+        if (k >= 0 && strips[k].connOk) sendLine(strips[k], "up:reboot:0");
+        else addEvent("wifipush", had[h], 0, "missed");
+      }
+      pump(1500);
+      for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "wifi change");
+      WiFi.disconnect();
+      delay(300);
+      saveWifi(wifiTestSsid, wifiTestPass);
+      if (!tryWiFi(wifiTestSsid, wifiTestPass, 20000)) Serial.println("[wifi] rejoin of the new network slow; loop keeps retrying");
+    }
     saveWifi(wifiTestSsid, wifiTestPass);
     wifiWasConnected = true;
     startStripListener();

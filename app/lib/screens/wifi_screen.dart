@@ -43,7 +43,7 @@ class _WifiScreenState extends State<WifiScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('اسم الشبكة أو الباسورد مينفعش يكون فيهم علامة :', 'The name or password cannot contain ":"'))));
       return;
     }
-    if (!await confirmDialog(context, _tr('تغيير شبكة الـ Hub؟', 'Change the hub network?'), _trx('الـ Hub هيفصل حوالي 20 ثانية ويجرّب "{x}". لو نجح هيكمل عليها ويحفظها، ولو فشل هيرجع للشبكة الحالية لوحده.', 'The hub goes offline for about 20 seconds and tries "{x}". If it works it stays and saves it; if not, it goes back to the current network.', {'x': ssid}), ok: _tr('جرّب واحفظ', 'Test & save'))) return;
+    if (!await confirmDialog(context, _tr('تغيير شبكة الـ Hub؟', 'Change the hub network?'), _trx('الـ Hub هيفصل شوية ويجرّب "{x}". لو نجحت هيبعتها للمشتركات المتصلة وينقلوا كلهم عليها، ولو فشلت هيرجع للشبكة الحالية لوحده.', 'The hub goes offline for a bit and tries "{x}". If it works it hands it to the connected strips and they all move; if not, it goes back to the current network.', {'x': ssid}), ok: _tr('جرّب واحفظ', 'Test & save'))) return;
     setState(() => _busy = true);
     final r = await s.setHubWifi(ssid, pass);
     if (!mounted) return;
@@ -102,9 +102,10 @@ class _WifiScreenState extends State<WifiScreen> {
             const SizedBox(height: 14),
             emptyCard(
                 _tr(
-                    'المشتركات بتحفظ الشبكة جواها. لو غيّرت اسم أو باسورد الراوتر نفسه، المشترك هيفضل يحاول على الشبكة القديمة. دوس على زرار المشترك 10 ثواني لحد ما يدخل وضع الضبط، والـ Hub هيلاقيه ويربطه على الشبكة الجديدة لوحده من غير الموبايل، وأساميه وإعداداته هترجع زي ما هي. فصل الـ Hub نفسه مش بيأثر على شبكة المشتركات.',
-                    'Strips keep the network inside them. If you change the router name or password, a strip keeps trying the old network. Hold its button for 10 seconds until it enters setup mode, and the hub finds it and links it to the new network by itself, no phone needed; its names and settings come back as they were. The hub going offline does not affect the strips\' network.'),
+                    'لما تغيّر الشبكة من هنا، الـ Hub بيجرّبها الأول، وبعدين يبعتها لكل مشترك متصل وينقلوا معاه لوحدهم. غيّر هنا الأول وبعدين غيّر الراوتر. لو غيّرت الراوتر الأول، أو مشترك ما اتنقلش، دوس زراره 10 ثواني والـ Hub هيربطه لوحده. فصل الـ Hub نفسه مش بيأثر على شبكة المشتركات.',
+                    'When you change the network here, the hub tests it first, then hands it to every connected strip and they move with it. Change it here first, then change the router. If you change the router first, or a strip did not move, hold its button for 10 seconds and the hub relinks it. The hub going offline does not affect the strips\' network.'),
                 icon: Icons.info_outline),
+            if (s.strips.any((x) => x.online)) ...[const SizedBox(height: 10), _handoverTest()],
             const SizedBox(height: 10),
             emptyCard(_tr('لو غيّرت الراوتر قبل ما تغيّر هنا، الـ Hub هيفتح شبكة مفتوحة (من غير باسورد) اسمها Fisha-Hub-XXXX. ادخل عليها من الموبايل، وافتح 192.168.4.1 واختار الشبكة الجديدة.', 'If you change the router first, the hub opens an open network (no password) called Fisha-Hub-XXXX. Join it from your phone, open 192.168.4.1 and pick the new network.'), icon: Icons.router_outlined),
           ]),
@@ -113,10 +114,37 @@ class _WifiScreenState extends State<WifiScreen> {
     );
   }
 
+  String? _testMac;
+
+  // one strip gets the CURRENT network on its normal link; the answer shows up in the system log
+  Widget _handoverTest() {
+    final online = s.strips.where((x) => x.online).toList();
+    final mac = online.any((x) => x.mac == _testMac) ? _testMac : online.first.mac;
+    return section(_tr('اختبار نقل الشبكة', 'Network handover test'), [
+      Text(_tr('بيبعت الشبكة الحالية لمشترك واحد (آمن، بيرجع على نفس الواي فاي). لو ظهر في سجل النظام "المشترك استلم الشبكة"، يبقى النقل التلقائي شغال.',
+              'Sends the current network to one strip (safe, it rejoins the same Wi-Fi). If the system log shows "The strip accepted the network", automatic moving works.'),
+          style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+      DropdownButton<String>(
+        value: mac,
+        isExpanded: true,
+        items: [for (final x in online) DropdownMenuItem(value: x.mac, child: Text(s.stripName(x)))],
+        onChanged: (v) => setState(() => _testMac = v),
+      ),
+      primaryButton(_tr('ابعت الاختبار', 'Send test'), _busy || mac == null ? null : () async {
+        setState(() => _busy = true);
+        final r = await s.testStripWifi(mac);
+        if (!mounted) return;
+        setState(() => _busy = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.ok ? _tr('اتبعت. شوف سجل النظام بعد ثواني.', 'Sent. Check the system log in a few seconds.') : (r.error ?? t('err_failed')))));
+      }, icon: Icons.wifi_tethering),
+    ]);
+  }
+
   Widget _testCard() {
     final (icon, color, text) = switch (s.wifiTest) {
       'ok' => (Icons.check_circle_outline, C.green, _trx('الـ Hub اتنقل لـ "{x}" واتحفظت.', 'The hub moved to "{x}" and saved it.', {'x': s.wifiTestSsid})),
       'failed' => (Icons.error_outline, C.danger, _trx('"{x}" ما اشتغلتش (اسم أو باسورد غلط؟)، والـ Hub رجع للشبكة القديمة.', '"{x}" did not work (wrong name or password?); the hub went back to the old network.', {'x': s.wifiTestSsid})),
+      'moving' => (Icons.wifi_tethering, C.accent, _trx('"{x}" شغالة. الـ Hub بيبعتها للمشتركات وينقلهم معاه…', '"{x}" works. The hub is handing it to the strips and moving them…', {'x': s.wifiTestSsid})),
       _ => (Icons.sync, C.accent, _trx('الـ Hub بيجرّب "{x}"…', 'The hub is trying "{x}"…', {'x': s.wifiTestSsid})),
     };
     return Container(

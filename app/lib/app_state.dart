@@ -1710,6 +1710,10 @@ class AppState extends ChangeNotifier {
 
   // ---------- hub Wi-Fi ----------
   /// Asks the hub to switch to another home network. It tests it first and stays on the old one if it fails.
+  /// Hands the hub's current network to one strip on its normal link (safe: it rejoins the same Wi-Fi). A
+  /// "wifipush connect_ok" event in the system log means moving strips with the hub works.
+  Future<CmdResult> testStripWifi(String mac) => api('strip_wifi_test', {'mac': mac});
+
   Future<CmdResult> setHubWifi(String ssid, String pass) async {
     final r = await api('wifi', {'ssid': ssid, 'pass': pass});
     if (r.ok) {
