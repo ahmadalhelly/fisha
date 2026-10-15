@@ -47,6 +47,8 @@ jobs:
         run: |
           arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --build-property compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500 --output-dir out firmware/mttl_hub
           cp out/mttl_hub.ino.bin fisha-hub-${{ steps.ver.outputs.v }}.bin
+          # full flash image (bootloader + partitions + boot_app0 + app) for an erased/new hub: flash at 0x0
+          cp out/mttl_hub.ino.merged.bin fisha-hub-${{ steps.ver.outputs.v }}-FULL-flash-0x0.bin
           ls -l fisha-hub-*.bin
           sha256sum fisha-hub-*.bin
 
@@ -64,10 +66,13 @@ jobs:
           prerelease: true
           make_latest: false
           target_commitish: ${{ github.sha }}
-          files: fisha-hub-${{ steps.ver.outputs.v }}.bin
+          files: |
+            fisha-hub-${{ steps.ver.outputs.v }}.bin
+            fisha-hub-${{ steps.ver.outputs.v }}-FULL-flash-0x0.bin
           body: |
             Hub firmware ${{ steps.ver.outputs.v }} for ESP32 Dev Module (Minimal SPIFFS, OTA).
-            Upload the .bin from the app (Settings → Hub firmware) or the hub's /update page.
+            Upload fisha-hub-${{ steps.ver.outputs.v }}.bin from the app (Settings → Hub firmware) or the hub's /update page.
+            New or erased hub: flash fisha-hub-${{ steps.ver.outputs.v }}-FULL-flash-0x0.bin at 0x0 (esptool write_flash 0x0 ...).
 
       # Arabic notes for the app's update center: firmware commits since the last good build of this branch
       - name: Write release notes
