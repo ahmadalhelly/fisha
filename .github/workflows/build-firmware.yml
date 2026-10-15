@@ -125,3 +125,71 @@ jobs:
           files: firmware/strip-fw/comMTTL-W01_F1.0.82.fwr
           body: |
             - تحديث فيرموير المشترك
+
+  # v2.15.38: the 10-strip hub. Same source and Arduino core 3.3.12, with the ESP32 libraries rebuilt by pioarduino
+  # (firmware/platformio.ini: 26 sockets, 4 KB TLS send buffer). The build stops with #error if those settings were not
+  # applied (FISHA_REQUIRE_10). Goes to the private release only, as fisha-hub-<v>-10strips.bin, until tested on the hub.
+  build10:
+    needs: build                 # adds to the release the first job made (no race on the tag)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Build (custom ESP32 libs, 10 strips)
+        id: b
+        run: |
+          set -o pipefail
+          v=$(grep -m1 'FW_VERSION = "' firmware/mttl_hub/mttl_hub.ino | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+          pip install -q platformio
+          pio run -d firmware 2>&1 | tee build10.log
+          B=firmware/.pio/build/hub
+          cp $B/firmware.bin fisha-hub-$v-10strips.bin
+          FW=$(find ~/.platformio/packages -maxdepth 1 -name 'framework-arduinoespressif32' | head -1)
+          python -m pip install -q esptool
+          python -m esptool --chip esp32 merge-bin -o fisha-hub-$v-10strips-FULL-flash-0x0.bin \
+            0x1000 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 $FW/tools/partitions/boot_app0.bin 0x10000 $B/firmware.bin 2>&1 | tee -a build10.log
+          {
+            echo "== sizes"; ls -l fisha-hub-*.bin; sha256sum fisha-hub-*.bin
+            echo "== RAM"; ~/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32-elf-size -A $B/firmware.elf | grep -E "dram0|iram0"
+            echo "== applied sdkconfig"; grep -rhE "^CONFIG_(LWIP_MAX_SOCKETS|LWIP_MAX_ACTIVE_TCP|MBEDTLS_SSL_IN_CONTENT_LEN|MBEDTLS_SSL_OUT_CONTENT_LEN)=" $(find firmware/.pio ~/.platformio/packages/framework-arduinoespressif32-libs -name 'sdkconfig*' 2>/dev/null) | sort | uniq -c
+          } 2>&1 | tee -a build10.log
+
+      - name: Save build log to the ci-logs-fw branch
+        if: always()
+        continue-on-error: true
+        run: |
+          [ -f build10.log ] || echo "no build log" > build10.log
+          tail -c 60000 build10.log > /tmp/build10.log
+          echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > /tmp/STATUS.txt
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git checkout --orphan ci-logs-fw-tmp
+          git rm -rf --cached . > /dev/null 2>&1 || true
+          cp /tmp/build10.log /tmp/STATUS.txt .
+          git add -f build10.log STATUS.txt
+          git commit -m "hub 10-strip build log, run ${{ github.run_number }}"
+          git push -f origin HEAD:ci-logs-fw || true
+
+      - name: Add to the private release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: hub-fw-${{ steps.b.outputs.v }}-run-${{ github.run_number }}
+          name: Fisha Hub firmware ${{ steps.b.outputs.v }} (run ${{ github.run_number }})
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: |
+            fisha-hub-${{ steps.b.outputs.v }}-10strips.bin
+            fisha-hub-${{ steps.b.outputs.v }}-10strips-FULL-flash-0x0.bin

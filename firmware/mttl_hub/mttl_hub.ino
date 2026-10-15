@@ -201,6 +201,12 @@ const uint32_t POLL_MS = 2000, STALE_MS = 45000;
 const float STRIP_MAX_W = 3500;                   // v2.15.9 user rule: 3500 W per strip in total
 // v2.15.38: 10 strips need the hub build with more network sockets (firmware/platformio.ini, CONFIG_LWIP_MAX_SOCKETS=26).
 // The stock Arduino build has 16 sockets: the hub itself uses ~13 at most, so it stays at 6 strips there.
+#if defined(FISHA_REQUIRE_10) && CONFIG_LWIP_MAX_SOCKETS < 26      // platformio.ini sets it: the custom libs must really be in use
+#error "custom ESP32 libs not applied: CONFIG_LWIP_MAX_SOCKETS < 26"
+#endif
+#if defined(FISHA_REQUIRE_10) && (!defined(CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN) || CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN != 4096)
+#error "custom ESP32 libs not applied: TLS send buffer is not 4 KB"
+#endif
 #if CONFIG_LWIP_MAX_SOCKETS >= 26
 const uint8_t  MAX_STRIPS = 10;
 #else
@@ -3344,6 +3350,7 @@ void handleHealth() {
            ",\"alloc_fail_caps\":\"" + String(allocFailCaps, HEX) + "\",\"alloc_fail_free\":" + String(allocFailFree) +
            ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\",\"alloc_fail_task\":\"" + String((const char*)allocFailTask) + "\"" +
            // v2.15.36: "heap"/"max_alloc"/"heap_min" count IRAM too, which Strings and network buffers can't use; these are the real numbers
+           ",\"max_strips\":" + String(MAX_STRIPS) + ",\"sockets\":" + String(CONFIG_LWIP_MAX_SOCKETS) +
            ",\"heap8\":" + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + ",\"heap8_max\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)) +
            ",\"heap8_min\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
