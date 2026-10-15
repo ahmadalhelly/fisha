@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.32";
+const char* FW_VERSION = "2.15.33";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -3166,6 +3166,7 @@ void handleState() {
 }
 
 int sseCount();
+extern uint32_t sseOpened, sseCut, sseGone, sseCutAt, sseStateLen, sseStateMax;
 // v2.15.6: how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
@@ -3179,7 +3180,9 @@ void handleHealth() {
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
-           ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"mqtt_drop\":" + String(mqttOutDropped) + ",\"sse\":" + String(sseCount()) +
+           ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"mqtt_drop\":" + String(mqttOutDropped) + ",\"sse\":" + String(sseCount()) + ",\"sse_open\":" + String(sseOpened) +
+           ",\"sse_cut\":" + String(sseCut) + ",\"sse_cut_ago_s\":" + (sseCut ? String((millis() - sseCutAt) / 1000) : String("-1")) +
+           ",\"sse_gone\":" + String(sseGone) + ",\"state_len\":" + String(sseStateLen) + ",\"state_max\":" + String(sseStateMax) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
@@ -3694,6 +3697,10 @@ struct SseClient { WiFiClient c; bool used = false, ready = false; String req; u
 SseClient sse[MAX_SSE];
 int sseCount() { int n = 0; for (int i = 0; i < MAX_SSE; i++) n += sse[i].used && sse[i].ready; return n; }
 uint32_t lastSsePush = 0, lastSseBeat = 0;
+// v2.15.33 diagnostics (/api/health): live streams opened, closed by the hub because the phone didn't take the data
+// in time (or the send failed), closed by the phone, when the hub last closed one, and the size of the state it sends
+uint32_t sseOpened = 0, sseCut = 0, sseGone = 0, sseCutAt = 0, sseStateLen = 0, sseStateMax = 0;
+void sseCutNow() { sseCut++; sseCutAt = millis(); }
 
 // v2.15.2: the state goes out in three pieces straight from the one copy (it used to be copied twice more per
 // phone, ~3 x the state size in RAM at once) and without blocking, so a push no longer starves the strips.
@@ -3706,12 +3713,13 @@ void sseSend(const char* ev, const String& data) {
   bool isState = !strcmp(ev, "state");
   for (int i = 0; i < MAX_SSE; i++) {
     if (!sse[i].used || !sse[i].ready) continue;
-    if (!sse[i].c.connected()) { sse[i].c.stop(); sse[i] = SseClient(); continue; }
+    if (!sse[i].c.connected()) { sseGone++; sse[i].c.stop(); sse[i] = SseClient(); continue; }
     if (!isState && sse[i].userIdx >= 0 && ownerOnlyEvent(data)) continue;
     bool ok;
     if (isState && sse[i].userIdx >= 0 && sse[i].userIdx < userCount) ok = sseWrite(sse[i].c, ev, userStateJson(users[sse[i].userIdx]));
     else ok = sseWrite(sse[i].c, ev, data);
     if (!ok) {
+      sseCutNow();
       sse[i].c.stop();
       sse[i] = SseClient();
     }
@@ -3772,20 +3780,26 @@ void ssePump() {
         x.userIdx = matchedUser;
         // v2.15.17: the SSE answers no longer wait on a phone that stopped reading (they could freeze the hub ~5-10 s)
         if (!sendStr(x.c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
-                          "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n", 250)) { x.c.stop(); x = SseClient(); continue; }
+                          "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n", 250)) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
         String initData = (x.userIdx >= 0 && x.userIdx < userCount) ? userStateJson(users[x.userIdx]) : buildStateJson();
-        if (!sseWrite(x.c, "state", initData)) { x.c.stop(); x = SseClient(); continue; }
+        if (!sseWrite(x.c, "state", initData)) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
         x.ready = true;
+        sseOpened++;
       } else if (millis() - x.since > 3000) { x.c.stop(); x = SseClient(); continue; }
     }
-    if (x.used && !x.c.connected()) { x.c.stop(); x = SseClient(); }
+    if (x.used && !x.c.connected()) { if (x.ready) sseGone++; x.c.stop(); x = SseClient(); }
   }
   if (stateDirty && millis() - lastSsePush > 250) {
     stateDirty = false;
     lastSsePush = millis();
     bool any = false;
     for (int i = 0; i < MAX_SSE; i++) any |= sse[i].used && sse[i].ready;
-    if (any) sseSend("state", buildStateJson());
+    if (any) {
+      String st = buildStateJson();
+      sseStateLen = st.length();
+      if (sseStateLen > sseStateMax) sseStateMax = sseStateLen;
+      sseSend("state", st);
+    }
   }
   if (millis() - lastSseBeat > 15000) {
     lastSseBeat = millis();
@@ -3793,6 +3807,7 @@ void ssePump() {
       if (sse[i].used && sse[i].ready) {
         SubT st("sse_beat");
         if (!sendNB(sse[i].c, ": hb\n\n", 6, 250)) {
+          sseCutNow();
           sse[i].c.stop();
           sse[i] = SseClient();
         }

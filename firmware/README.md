@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.33
+- Diagnostics only, no behaviour change. /api/health now shows the live stream to the phones (SSE): `sse_open` streams opened, `sse_cut` streams the hub closed because the phone didn't take the data in time (or sending failed), `sse_cut_ago_s` seconds since the last one, `sse_gone` streams the phone closed, `state_len`/`state_max` size of the state the hub sends. Reason: the app keeps saying "not on the same Wi-Fi" while the hub is fine. Suspected (not proven): the state (~6-7 KB) is bigger than the hub's 5.7 KB send buffer, so a phone that answers slowly (power saving) misses the 80 ms send window and the hub closes the stream. These numbers prove or rule it out before any fix.
+- Validation: reviewed every place a stream is closed; compiled; the MQTT queue host test still passes.
+
 ### 2.15.32
 - Corrected the diagnosis of the 2.15.30 crash. The crashing message was not a deliberate empty message: it was a family member's state whose building ran out of memory right after connecting to the server (an Arduino String that runs out of heap comes back empty with no buffer). 2.15.31 would have sent it as an empty retained message, which wipes that member's state on the server. Now such a message is dropped and counted in `mqtt_drop`; a real empty message still goes out.
 - The send queue is 8 KB (was 16 KB) to give the heap back, and retained state copies may use only 6 KB of it, so events and command answers always keep room. One state bigger than that still goes out when nothing else is waiting. Queue length 12 -> 48 (a reconnect sends the state, each member's state and up to 12 saved events per member at once).
