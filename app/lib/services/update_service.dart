@@ -49,14 +49,29 @@ class UpdateService extends ChangeNotifier {
 
   static final _tag = RegExp(r'^(app|hub)-(\d+(?:\.\d+)+)-(?:build|run)-(\d+)$');
 
+  /// 2.0.29: the newest build, by CI build number (always rising), not by version name: the public launch restarts
+  /// the versions at 1.0.0, which must still count as newer than the internal 2.x builds.
   Release? latest(String kind) {
     Release? best;
     for (final r in releases) {
       if (r.kind != kind) continue;
-      if (best == null || compareVersions(r.version, best.version) > 0 || (compareVersions(r.version, best.version) == 0 && r.build > best.build)) best = r;
+      if (best == null || r.build > best.build) best = r;
     }
     return best;
   }
+
+  /// the CI build number of the installed [version], from its release (the highest one if it was built twice)
+  int? buildOf(String kind, String version) {
+    int? b;
+    for (final r in releases) {
+      if (r.kind == kind && compareVersions(r.version, version) == 0 && (b == null || r.build > b)) b = r.build;
+    }
+    return b;
+  }
+
+  /// the internal numbering used before the public launch (app 2.0.x, hub 2.13-2.15). Any launch version counts as
+  /// newer than these. Only matters when that old release is no longer listed (see [newer]).
+  static bool isPreLaunch(String v) => (int.tryParse(v.split('.').first) ?? 0) == 2;
 
   /// 2.0.20: the latest strip firmware we publish. Strip builds aren't on CI yet, so this is kept in sync by hand
   /// with the newest .fwr we've shipped (see the strip-firmware notes).
@@ -68,6 +83,11 @@ class UpdateService extends ChangeNotifier {
   Release? newer(String kind, String? current) {
     final l = latest(kind);
     if (l == null || current == null || current.isEmpty || current == 'dev') return null;
+    if (compareVersions(l.version, current) == 0) return null;
+    final cur = buildOf(kind, current);
+    if (cur != null) return l.build > cur ? l : null;
+    // the installed version isn't listed (an old release that was removed, or a hand-flashed build)
+    if (isPreLaunch(current) && !isPreLaunch(l.version)) return l;
     return compareVersions(l.version, current) > 0 ? l : null;
   }
 
