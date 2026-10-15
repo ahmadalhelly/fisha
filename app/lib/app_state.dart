@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show Color, HSLColor;
 import 'package:home_widget/home_widget.dart';
 import 'package:http/http.dart' as http;
 import 'package:mqtt_client/mqtt_client.dart';
@@ -2529,22 +2530,81 @@ class AppState extends ChangeNotifier {
     _updateWidget();
   }
 
+  // 2.0.25: the home-screen widgets (main "أ" with graph + per-strip "شكل المشترك") are drawn natively from one JSON
+  final List<double> _wHist = [];
+  DateTime? _wEnergyAt;
+  double _wTodayKwh = 0;
+
+  String _hex(Color c) => '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
+
   Future<void> _updateWidget() async {
     _widgetThrottleTimer?.cancel();
     _lastWidgetUpdate = DateTime.now();
     try {
-      final totalW = '${totalPower.toStringAsFixed(0)} W';
-      final outletsOn = '$onCount/$outletCount';
-      final hottest = '$maxTemp°C';
+      _wHist.add(totalPower);
+      if (_wHist.length > 48) _wHist.removeAt(0);
+      if (mode != ConnMode.offline && _strips.isNotEmpty && (_wEnergyAt == null || DateTime.now().difference(_wEnergyAt!) > const Duration(minutes: 10))) {
+        _wEnergyAt = DateTime.now();
+        try {
+          final en = await loadEnergy();
+          _wTodayKwh = en.fold<double>(0, (a, e) => a + e.todayWh.fold<int>(0, (x, y) => x + y) / 1000);
+        } catch (_) {}
+      }
+      final ar = Tr.isAr;
+      const hues = [162.0, 222.0, 36.0, 300.0, 100.0, 0.0];
+      final can = canControl;
+      final strips = <Map<String, dynamic>>[];
+      for (var i = 0; i < _strips.length; i++) {
+        final st = _strips[i];
+        final h = hues[i % hues.length];
+        strips.add({
+          'mac': st.mac,
+          'name': stripName(st),
+          'on': st.online,
+          'w': st.livePower.round(),
+          't': st.maxTemp,
+          'c': _hex(HSLColor.fromAHSL(1, h, .85, .6).toColor()),
+          'o': [
+            for (final o in st.outlets)
+              {
+                'n': o.n,
+                'name': outletName(st, o.n),
+                'w': o.powerW.round(),
+                'on': o.on,
+                'c': _hex(HSLColor.fromAHSL(1, (h + (o.n - 1) * 90) % 360, .85, .6).toColor()),
+                'lock': !can || o.locked || o.protected || requiresBio(st.mac, o.n),
+              }
+          ],
+        });
+      }
       final conn = switch (mode) {
         ConnMode.local => t('mode_local'),
         ConnMode.cloud => t('mode_cloud'),
         ConnMode.offline => t('mode_offline'),
       };
-      await HomeWidget.saveWidgetData<String>('total_w', totalW);
-      await HomeWidget.saveWidgetData<String>('outlets_on', outletsOn);
-      await HomeWidget.saveWidgetData<String>('hottest_temp', hottest);
-      await HomeWidget.saveWidgetData<String>('conn_mode', conn);
+      final j = {
+        'ar': ar,
+        'mode': conn,
+        'total': totalPower.round(),
+        'hot': maxTemp,
+        'hist': [for (final v in _wHist) v.round()],
+        'kwh': _wTodayKwh,
+        'cost': _wTodayKwh * tariff,
+        'on': '$onCount/$outletCount',
+        'strips': strips,
+        'url': mode == ConnMode.local && settings.hasLocal ? _localUri('/api/onoff').toString() : '',
+        'hdr': _localHeaders,
+        'l_now': ar ? 'الاستهلاك دلوقتي' : 'Power now',
+        'l_today': ar ? 'النهارده' : 'Today',
+        'l_cost': ar ? 'تكلفة' : 'Cost',
+        'l_run': ar ? 'شغال' : 'On',
+        'l_total': ar ? 'الإجمالي' : 'Total',
+        'l_none': ar ? 'افتح فيشة وسجّل الدخول' : 'Open Fisha and sign in',
+        't_lock': ar ? 'المخرج ده محمي، افتح التطبيق' : 'Protected outlet, open the app',
+        't_away': ar ? 'التحكم من الويدجت على شبكة البيت بس' : 'Widget control works on the home network only',
+        't_fail': ar ? 'الأمر ماوصلش' : 'The command did not go through',
+      };
+      await HomeWidget.saveWidgetData<String>('widget_json', jsonEncode(j));
       await HomeWidget.updateWidget(
         name: 'FishaWidgetProvider',
         androidName: 'FishaWidgetProvider',

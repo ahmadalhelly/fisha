@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/ota_dialogs.dart';
 import '../services/apk_install.dart';
+import '../services/keep_alive.dart';
 import '../services/update_service.dart';
 import 'settings_screen.dart' show appVersion;
 import 'strip_firmware_screen.dart';
@@ -57,6 +58,16 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       _progress['hub'] = null;
       _status['hub'] = _tr('بينزّل الملف…', 'Downloading…');
     });
+    // 2.0.25: keeps going if you switch to another app
+    await UpdateKeepAlive.start(_tr('تحديث الـ Hub', 'Updating the hub'), _tr('بينزّل الملف…', 'Downloading…'));
+    try {
+      await _updateHubRun(r);
+    } finally {
+      await UpdateKeepAlive.stop();
+    }
+  }
+
+  Future<void> _updateHubRun(Release r) async {
     List<int> bytes;
     try {
       final res = await http.get(Uri.parse(r.url)).timeout(const Duration(seconds: 90));
@@ -72,6 +83,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       _status['hub'] = _tr('بيرفع على الـ Hub…', 'Uploading to the hub…');
     });
     final err = await s.uploadFirmwareAuto(bytes, (p) {
+      UpdateKeepAlive.progress(_tr('تحديث الـ Hub', 'Updating the hub'), _tr('بيرفع على الـ Hub…', 'Uploading to the hub…'), p);
       if (mounted) setState(() => _progress['hub'] = p);
     }, ask: () => askUpdatePassword(context, s));
     if (!mounted) return;
@@ -91,9 +103,12 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       _progress['app'] = 0;
       _status['app'] = _tr('بينزّل التطبيق…', 'Downloading the app…');
     });
+    await UpdateKeepAlive.start(_tr('تحديث فيشة', 'Updating Fisha'), _tr('بينزّل التطبيق…', 'Downloading the app…'));
     final err = await downloadAndInstallApk(r.url, r.size, (p) {
+      UpdateKeepAlive.progress(_tr('تحديث فيشة', 'Updating Fisha'), _tr('بينزّل التطبيق…', 'Downloading the app…'), p);
       if (mounted) setState(() => _progress['app'] = p);
     });
+    await UpdateKeepAlive.stop();
     if (!mounted) return;
     setState(() {
       _progress.remove('app');

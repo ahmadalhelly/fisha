@@ -38,6 +38,32 @@ if "flutter_foreground_task.service.ForegroundService" not in s:
             android:foregroundServiceType="dataSync"
             android:exported="false" />
     </application>''', 1)
+if "KeepAliveService" not in s:
+    s = s.replace("</application>", '''    <service
+            android:name=".KeepAliveService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+    </application>''', 1)
+if "FishaStripWidgetProvider" not in s:
+    s = s.replace("</application>", '''    <receiver
+            android:name=".FishaStripWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/fisha_strip_widget_info" />
+        </receiver>
+        <activity
+            android:name=".StripWidgetConfigActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+    </application>''', 1)
 if "FishaWidgetProvider" not in s:
     s = s.replace("</application>", '''    <receiver
             android:name=".FishaWidgetProvider"
@@ -161,6 +187,9 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/keepalive").setMethodCallHandler { call, result ->
+            KeepAlive.handle(this, call, result)
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/widget").setMethodCallHandler { call, result ->
             if (call.method == "update") {
                 try {
@@ -170,14 +199,7 @@ class MainActivity : FlutterFragmentActivity() {
                         for ((k, v) in args) editor.putString(k.toString(), v?.toString() ?: "")
                     }
                     editor.apply()
-                    val manager = AppWidgetManager.getInstance(this)
-                    val ids = manager.getAppWidgetIds(ComponentName(this, FishaWidgetProvider::class.java))
-                    if (ids.isNotEmpty()) {
-                        val intent = Intent(this, FishaWidgetProvider::class.java)
-                        intent.action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                        intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
-                        sendBroadcast(intent)
-                    }
+                    FishaWidgets.updateAll(this)
                     result.success(true)
                 } catch (e: Exception) {
                     result.success(false)
@@ -190,126 +212,22 @@ class MainActivity : FlutterFragmentActivity() {
 }
 ''')
 
-# home-screen widget. A plain AppWidgetProvider that reads the values saved in the
-# "HomeWidgetPreferences" SharedPreferences.
-open(os.path.join(kt_dir, "FishaWidgetProvider.kt"), "w").write('''package com.mttlhub.mttl_hub
-
-import android.app.PendingIntent
-import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProvider
-import android.content.Context
-import android.content.Intent
-import android.widget.RemoteViews
-
-class FishaWidgetProvider : AppWidgetProvider() {
-    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
-        val widgetData = context.getSharedPreferences("HomeWidgetPreferences", Context.MODE_PRIVATE)
-        for (appWidgetId in appWidgetIds) {
-            val views = RemoteViews(context.packageName, R.layout.widget_layout)
-            views.setTextViewText(R.id.widget_total_w, widgetData.getString("total_w", "0 W"))
-            views.setTextViewText(R.id.widget_outlets_on, widgetData.getString("outlets_on", "0/0"))
-            views.setTextViewText(R.id.widget_hottest_temp, widgetData.getString("hottest_temp", "—"))
-            views.setTextViewText(R.id.widget_conn_mode, widgetData.getString("conn_mode", "—"))
-
-            val intent = Intent(context, MainActivity::class.java)
-            val pendingIntent = PendingIntent.getActivity(
-                context, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            views.setOnClickPendingIntent(R.id.widget_container, pendingIntent)
-
-            appWidgetManager.updateAppWidget(appWidgetId, views)
-        }
-    }
-}
-''')
-
+# home-screen widgets (2.0.25): drawn natively; sources live in tool/widget/
+import shutil
+wsrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "widget")
+for kt in ("FishaWidgets.kt", "StripWidgetConfigActivity.kt", "KeepAlive.kt"):
+    shutil.copy(os.path.join(wsrc, kt), os.path.join(kt_dir, kt))
+old_provider = os.path.join(kt_dir, "FishaWidgetProvider.kt")
+if os.path.exists(old_provider):
+    os.remove(old_provider)
 layout_dir = os.path.join(APP, "android", "app", "src", "main", "res", "layout")
 os.makedirs(layout_dir, exist_ok=True)
-open(os.path.join(layout_dir, "widget_layout.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/widget_container"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="12dp"
-    android:background="@drawable/widget_bg">
-
-    <TextView
-        android:id="@+id/widget_total_w"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="0 W"
-        android:textColor="#2EE6B0"
-        android:textSize="20sp"
-        android:textStyle="bold" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="4dp">
-
-        <TextView
-            android:id="@+id/widget_outlets_on"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="0/0"
-            android:textColor="#C2D1E8"
-            android:textSize="12sp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text=" · "
-            android:textColor="#4D5C77"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/widget_hottest_temp"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="—"
-            android:textColor="#C2D1E8"
-            android:textSize="12sp" />
-    </LinearLayout>
-
-    <TextView
-        android:id="@+id/widget_conn_mode"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:text="—"
-        android:textColor="#8798B3"
-        android:textSize="11sp" />
-
-</LinearLayout>
-''')
-
-drawable_dir = os.path.join(APP, "android", "app", "src", "main", "res", "drawable")
-os.makedirs(drawable_dir, exist_ok=True)
-open(os.path.join(drawable_dir, "widget_bg.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <solid android:color="#0E1628"/>
-    <corners android:radius="18dp"/>
-    <stroke android:width="1dp" android:color="#1F2D48"/>
-</shape>
-''')
-
 xml_dir = os.path.join(APP, "android", "app", "src", "main", "res", "xml")
 os.makedirs(xml_dir, exist_ok=True)
-open(os.path.join(xml_dir, "fisha_widget_info.xml"), "w").write('''<?xml version="1.0" encoding="utf-8"?>
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="140dp"
-    android:minHeight="70dp"
-    android:targetCellWidth="2"
-    android:targetCellHeight="1"
-    android:updatePeriodMillis="0"
-    android:initialLayout="@layout/widget_layout"
-    android:resizeMode="horizontal|vertical"
-    android:widgetCategory="home_screen">
-</appwidget-provider>
-''')
+for f in ("widget_layout.xml", "widget_strip_layout.xml"):
+    shutil.copy(os.path.join(wsrc, f), os.path.join(layout_dir, f))
+for f in ("fisha_widget_info.xml", "fisha_strip_widget_info.xml"):
+    shutil.copy(os.path.join(wsrc, f), os.path.join(xml_dir, f))
 
 # gradle signing and desugaring (needed by flutter_local_notifications)
 kts = os.path.join(APP, "android", "app", "build.gradle.kts")
