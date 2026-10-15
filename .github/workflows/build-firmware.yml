@@ -92,6 +92,18 @@ jobs:
           [ -s PUBLIC_NOTES.md ] || echo "- إصلاح أخطاء وتحسينات" > PUBLIC_NOTES.md
           cat PUBLIC_NOTES.md
 
+      # one draft per version on fisha-app: older unpublished drafts of the same version are removed first (a published
+      # release is never touched). The tag keeps its run/build number: the app's update center reads that format.
+      - name: Remove older drafts of this version on fisha-app
+        if: success() && env.APP_TOKEN != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ env.APP_TOKEN }}
+        run: |
+          gh api --paginate "repos/ahmadalhelly/fisha-app/releases?per_page=100" \
+            --jq '.[] | select(.draft == true and (.tag_name | startswith("hub-${{ steps.ver.outputs.v }}-run-"))) | .id' |
+          while read -r id; do gh api -X DELETE "repos/ahmadalhelly/fisha-app/releases/$id" && echo "removed draft $id"; done
+
       # the public repo fisha-app is where the app's update center looks (this repo is private). Published as a draft:
       # the update center sees it only after the owner presses Publish on github.com/ahmadalhelly/fisha-app/releases.
       # Needs the secret FISHA_APP_TOKEN: a token with Contents read/write on ahmadalhelly/fisha-app.
