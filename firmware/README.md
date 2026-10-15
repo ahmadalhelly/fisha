@@ -4,6 +4,12 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.28
+- Setup from inside the app: while the hub is in setup mode (Wi-Fi `Fisha-Hub-…`, 192.168.4.1) it now answers `GET /api/setup/info` and `POST /api/setup` (Wi-Fi name + password, LAN IP, owner Gmail, optional own update password). Reason: the customer finishes setup in the app without leaving it; the old 192.168.4.1 page still works.
+- First owner can claim only during the first 10 minutes after the hub powers on (`claim_window`). Reason: a hub left unclaimed can't be taken over later by anyone on the network; power-cycling the hub opens the window again.
+- A hub with no saved Wi-Fi (new or erased) goes straight to setup mode at boot. Reason: no waiting on a network that doesn't exist.
+- Setting up an already-owned hub again needs the owner's phone key or the update password.
+
 ### 2.15.27
 - Update password: every hub accepts the fixed `fisha-<MAC>` (12 hex digits, upper case, e.g. `fisha-80F3DA40F674`), plus the owner's own password if they set one. No random password any more (it left the owner locked out). Reason: the owner must always be able to recover the hub.
 - New owner-only API `ota_pass` (`cur`, `new`): reset or change the update password; an empty `new` puts the default back.

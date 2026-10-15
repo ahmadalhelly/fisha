@@ -1370,6 +1370,33 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 2.0.24: after the in-app hub setup: this hub's id and address, and the owner key when this phone claimed it.
+  Future<void> applyHubSetup({required String hub, required String ip, String key = ''}) async {
+    final j = settings.toJson();
+    if (hub.length == 12) j['hubId'] = hub.toUpperCase();
+    if (ip.isNotEmpty) j['localHost'] = ip;
+    if (key.isNotEmpty) {
+      j['ownerKey'] = key;
+      j['sharedUser'] = '';
+      j['sharedName'] = '';
+      j['sharedRole'] = 0;
+    }
+    hubLocked = false;
+    await saveSettings(HubSettings.fromJson(j));
+  }
+
+  /// true once the hub answers on the home network at [ip]
+  Future<bool> hubAnswersAt(String ip) async {
+    try {
+      final r = await http.get(Uri.parse('http://$ip/'), headers: _localHeaders).timeout(const Duration(seconds: 3));
+      return r.statusCode == 200 && r.body.contains('Fisha Hub');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String get phoneModel => _phoneModel;
+
   Future<void> _useOwnerKey(String key) async {
     final j = settings.toJson()
       ..['ownerKey'] = key
@@ -1392,6 +1419,7 @@ class AppState extends ChangeNotifier {
     if (j == null) return t('lock_no_hub');
     if (j['ok'] != true) {
       final e = (j['error'] ?? '').toString();
+      if (e == 'claim_window') return Tr.isAr ? 'تسجيل المالك متاح أول 10 دقايق بعد تشغيل الهاب. افصل الهاب ورجّعه وجرّب تاني.' : 'Claiming is open for 10 minutes after the hub powers on. Power-cycle the hub and try again.';
       return e == 'wrong_password' ? t('lock_wrong_pass') : e == 'wait' ? t('lock_wait') : t('err_failed');
     }
     final key = (j['data'] is Map ? j['data']['key'] : null)?.toString() ?? '';

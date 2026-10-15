@@ -84,6 +84,30 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
     if (mounted) setState(() => _busy = false);
   }
 
+  Widget _langSwitch() {
+    final st = widget.state;
+    return ListenableBuilder(
+      listenable: st,
+      builder: (_, __) => Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(color: C.surface2.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(99), border: Border.all(color: C.border)),
+        child: Row(mainAxisSize: MainAxisSize.min, textDirection: TextDirection.ltr, children: [
+          for (final (m, label) in [(LangPref.system, Tr.isAr ? 'تلقائي' : 'Auto'), (LangPref.ar, 'ع'), (LangPref.en, 'EN')])
+            GestureDetector(
+              onTap: () => st.setLangPref(m),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(color: st.langPref == m ? C.surface2 : Colors.transparent, borderRadius: BorderRadius.circular(99)),
+                child: Text(label,
+                    style: TextStyle(fontSize: 12.5, color: st.langPref == m ? C.text : C.muted, fontWeight: st.langPref == m ? FontWeight.w700 : FontWeight.w400)),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final intro = CurvedAnimation(parent: _intro, curve: Curves.easeOutCubic);
@@ -96,6 +120,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                // 2.0.24: language follows the phone by default; this switch flips it right here
+                Align(alignment: AlignmentDirectional.topStart, child: _langSwitch()),
                 // logo: a socket face whose ring is drawn in, then current runs along the wire under it
                 Center(
                   child: AnimatedBuilder(

@@ -25,7 +25,10 @@ if "usesCleartextTraffic" not in s:
 s = re.sub(r'android:label="[^"]*"', f'android:label="{NAME}"', s, count=1)
 # native notifications: foreground service + notification + biometric permissions
 for perm in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_DATA_SYNC", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED",
-             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", "USE_BIOMETRIC", "REQUEST_INSTALL_PACKAGES"):
+             "WAKE_LOCK", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", "USE_BIOMETRIC", "REQUEST_INSTALL_PACKAGES",
+             # 2.0.24 hub setup: read the phone's Wi-Fi name, find Fisha-Hub-XXXX and join it from inside the app
+             "ACCESS_FINE_LOCATION", "ACCESS_WIFI_STATE", "CHANGE_WIFI_STATE", "ACCESS_NETWORK_STATE",
+             "CHANGE_NETWORK_STATE", "NEARBY_WIFI_DEVICES"):
     tag = f'<uses-permission android:name="android.permission.{perm}"/>'
     if tag not in s:
         s = s.replace("<application", tag + "\n    <application", 1)
@@ -57,17 +60,107 @@ for ma in __import__("glob").glob(os.path.join(APP, "android", "app", "src", "ma
     os.remove(ma)
 open(os.path.join(kt_dir, "MainActivity.kt"), "w").write('''package com.mttlhub.mttl_hub
 
+import android.Manifest
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiManager
+import android.net.wifi.WifiNetworkSpecifier
+import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
+    private var hubCb: ConnectivityManager.NetworkCallback? = null
+    private var permResult: MethodChannel.Result? = null
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 7301) {
+            permResult?.success(grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })
+            permResult = null
+        }
+    }
+
+    private fun releaseHub() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.bindProcessToNetwork(null)
+        hubCb?.let { try { cm.unregisterNetworkCallback(it) } catch (e: Exception) {} }
+        hubCb = null
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // 2.0.24: hub setup without leaving the app (find Fisha-Hub-XXXX, join it, talk to 192.168.4.1, go back)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/wifi").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "permission" -> {
+                    val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+                    if (Build.VERSION.SDK_INT >= 33) perms.add("android.permission.NEARBY_WIFI_DEVICES")
+                    val missing = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+                    if (missing.isEmpty() || call.argument<Boolean>("ask") != true) {
+                        result.success(missing.isEmpty())
+                    } else {
+                        permResult = result
+                        ActivityCompat.requestPermissions(this, missing.toTypedArray(), 7301)
+                    }
+                }
+                "currentSsid" -> {
+                    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    @Suppress("DEPRECATION")
+                    val raw = try { wm.connectionInfo?.ssid ?: "" } catch (e: Exception) { "" }
+                    val ssid = raw.trim('"')
+                    result.success(if (ssid == "<unknown ssid>") "" else ssid)
+                }
+                "scanHubs" -> {
+                    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    val list = try {
+                        @Suppress("DEPRECATION")
+                        wm.startScan()
+                        wm.scanResults.mapNotNull { it.SSID }.filter { it.startsWith("Fisha-Hub-") }.distinct()
+                    } catch (e: Exception) { emptyList<String>() }
+                    result.success(list)
+                }
+                "joinHub" -> {
+                    val ssid = call.argument<String>("ssid") ?: ""
+                    if (Build.VERSION.SDK_INT < 29 || ssid.isEmpty()) {
+                        result.success("manual")
+                    } else {
+                        releaseHub()
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                        val spec = WifiNetworkSpecifier.Builder().setSsid(ssid).build()
+                        val req = NetworkRequest.Builder()
+                            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                            .setNetworkSpecifier(spec)
+                            .build()
+                        var done = false
+                        val cb = object : ConnectivityManager.NetworkCallback() {
+                            override fun onAvailable(network: Network) {
+                                cm.bindProcessToNetwork(network)
+                                runOnUiThread { if (!done) { done = true; result.success("ok") } }
+                            }
+                            override fun onUnavailable() {
+                                runOnUiThread { if (!done) { done = true; result.success("fail") } }
+                            }
+                        }
+                        hubCb = cb
+                        try { cm.requestNetwork(req, cb, 60000) } catch (e: Exception) { if (!done) { done = true; result.success("fail") } }
+                    }
+                }
+                "releaseHub" -> { releaseHub(); result.success(true) }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fisha/widget").setMethodCallHandler { call, result ->
             if (call.method == "update") {
                 try {

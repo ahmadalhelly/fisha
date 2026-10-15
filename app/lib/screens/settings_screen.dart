@@ -5,7 +5,9 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../models.dart';
+import '../services/hub_setup.dart';
 import '../widgets/common.dart';
+import '../widgets/hub_setup_sheet.dart';
 import 'about_screen.dart';
 import 'account_screen.dart';
 import 'sync_screen.dart';
@@ -111,6 +113,10 @@ class SettingsScreen extends StatelessWidget {
                 if (!kIsWeb && st.can(Perm.wifi))
                   _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
                     () => _open(context, WifiScreen(state: st))),
+                // 2.0.24: set up a new hub (or one whose Wi-Fi changed) from inside the app
+                if (HubSetup.supported && st.isOwner)
+                  _row(context, Icons.add_circle_outline, C.accent, _tr('إضافة هاب', 'Add a hub'), _tr('هاب جديد أو اتغيّرت شبكته', 'New hub, or its Wi-Fi changed'),
+                      () => showHubSetup(context, st)),
                 _row(context, Icons.link, C.accent, _tr('الاتصال', 'Connection'), conn, () => _open(context, ConnectionScreen(state: st)),
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),

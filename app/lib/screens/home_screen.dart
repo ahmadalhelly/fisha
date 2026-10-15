@@ -9,6 +9,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/hub_setup_sheet.dart';
 import '../widgets/strip_card.dart';
 import '../widgets/strip_mini.dart';
 import '../widgets/notion_icon_picker.dart';
@@ -43,6 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     UpdateService.instance.check(); // at most every 6 hours
+    // 2.0.24: a hub in setup mode nearby gets the pairing card
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) HubSetupWatcher.start(context, s); });
     s.addListener(_checkPairs);
     _scroll.addListener(() {
       final c = _scroll.hasClients && _scroll.offset > 230;
@@ -56,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     s.removeListener(_checkPairs);
+    HubSetupWatcher.stop();
     _tick?.cancel();
     _scroll.dispose();
     super.dispose();

@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.27";
+const char* FW_VERSION = "2.15.28";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -354,6 +354,7 @@ struct PairReq { uint32_t id = 0, at = 0; uint8_t code = 0, ch[3] = {0, 0, 0}, s
                  String email, model, result; };   // state: 0 free · 1 waiting for the owner · 2 approved · 3 refused
 PairReq pairs[MAX_PAIRS];
 uint32_t pairJobId = 0, claimLockUntil = 0, cloudTodoAt = 0;
+const uint32_t CLAIM_WINDOW_MS = 600000;          // v2.15.28: the first owner can claim only in the first 10 min after power-on
 String cloudTodoId, cloudTodoPw;                   // v2.15.14: an approved phone's server login, made in the background
 uint8_t claimFails = 0;
 uint8_t userCount = 0;
@@ -2170,6 +2171,7 @@ void authRoute(const String& uri, const String& b) {
     String email = cleanEmail(jsonValue(b, "email"));
     if (!email.length()) return out(400, "{\"ok\":false,\"error\":\"email\"}");
     if (ownerCount) return out(409, "{\"ok\":false,\"error\":\"claimed\"}");   // later phones are added through pairing
+    if (millis() >= CLAIM_WINDOW_MS) return out(403, "{\"ok\":false,\"error\":\"claim_window\"}");
     String key = addOwner(email, cleanModel(jsonValue(b, "model")));
     addEvent("owner", "", 0, email);
     return out(200, "{\"ok\":true,\"data\":{\"key\":\"" + key + "\"}}");
@@ -4422,6 +4424,42 @@ void setupPortal() {
     portal.send(200, "text/plain", "Saved. The hub restarts and joins " + ns + ".");
     saved = true;
   });
+  // v2.15.28: the Fisha app sets the hub up from here in one step (Wi-Fi, address, owner, update password) so the
+  // customer never leaves the app. GET /api/setup/info -> hub id and state; POST /api/setup {ssid,pass,ip,email,model,ota,key}
+  portal.on("/api/setup/info", HTTP_GET, [&]() {
+    portal.send(200, "application/json", "{\"ok\":true,\"data\":{\"hub\":\"" + defOta().substring(6) + "\",\"fw\":\"" + String(FW_VERSION) +
+                "\",\"claimed\":" + (ownerCount ? "true" : "false") + ",\"claim_open\":" + (millis() < CLAIM_WINDOW_MS ? "true" : "false") +
+                ",\"ip\":\"" + secLocalIp.toString() + "\",\"gw\":\"" + GATEWAY.toString() + "\"}}");
+  });
+  portal.on("/api/setup", HTTP_POST, [&]() {
+    auto bad = [&](int code, const char* e) { portal.send(code, "application/json", String("{\"ok\":false,\"error\":\"") + e + "\"}"); };
+    String b = portal.arg("plain");
+    String ns = jsonValue(b, "ssid"), np = jsonValue(b, "pass"), ipS = jsonValue(b, "ip"), ota = jsonValue(b, "ota");
+    String email = cleanEmail(jsonValue(b, "email"));
+    ns.trim(); ipS.trim();
+    if (!ns.length() || ns.length() > 32 || np.length() > 63 || ns.indexOf(':') >= 0 || np.indexOf(':') >= 0) return bad(400, "wifi");
+    if (np.length() && np.length() < 8) return bad(400, "wifi_pass");
+    IPAddress ip = secLocalIp;
+    if (ipS.length() && !(ip.fromString(ipS) && ip[0] == GATEWAY[0] && ip[1] == GATEWAY[1] && ip[2] == GATEWAY[2] && ip[3] > 1 && ip[3] < 255 && ip != GATEWAY)) return bad(400, "ip");
+    if (ota.length() && (ota.length() < 8 || ota.length() > 40)) return bad(400, "ota");
+    String key;
+    if (!ownerCount) {                           // first owner: no password, but only soon after the hub was powered
+      if (millis() >= CLAIM_WINDOW_MS) return bad(403, "claim_window");
+      if (!email.length()) return bad(400, "email");
+      key = addOwner(email, cleanModel(jsonValue(b, "model")));
+      addEvent("owner", "", 0, email);
+    } else {                                     // already has an owner: their phone key or the update password
+      String k = jsonValue(b, "key"), c = jsonValue(b, "cur");
+      if (!isOwnerKey(k) && c != defOta() && c != secOta) return bad(401, "owner");
+    }
+    saveWifi(ns, np);
+    Preferences sp; sp.begin("sec", false);
+    sp.putString("lip", ip.toString());
+    if (ota.length() && ota != defOta()) { sp.putString("ota", ota); secOta = ota; }
+    sp.end();
+    portal.send(200, "application/json", "{\"ok\":true,\"data\":{\"key\":\"" + key + "\",\"hub\":\"" + defOta().substring(6) + "\",\"ip\":\"" + ip.toString() + "\"}}");
+    saved = true;
+  });
   portal.begin();
   uint32_t lastTry = millis();
   while (true) {
@@ -4440,6 +4478,7 @@ void setupPortal() {
 }
 
 void connectWiFi() {
+  if (!secSsid.length()) setupPortal();          // v2.15.28: a new (or erased) hub goes straight to setup
   for (int attempt = 0; attempt < 3; attempt++) {
     if (tryWiFi(secSsid, secWifi, 20000)) {
       Serial.printf("WiFi OK  IP=%s  RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
