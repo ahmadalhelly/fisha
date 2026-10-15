@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 2.15.30
+- Sending to the server (MQTT) no longer runs on the main loop: messages go into a small queue and a separate task hands them to the MQTT client. Reason: when the internet or the server was slow, one send waited 19-21 s for the MQTT client (log: "mqtt_pub 20748 ms"), the whole hub froze, every strip dropped and came back again and again, and the app showed the hub as not on the same Wi-Fi.
+- The queue is capped at 16 KB; anything past that is dropped (counted in /api/health as `mqtt_drop`) so a stuck server can't use up the memory.
+
 ### 2.15.29
 - Strip-level child lock now locks every button on the strip (master + all 4 outlets), not only the master button. The per-outlet locks stay saved and come back when the strip lock is turned off. Reason: with the strip locked, a child could still switch the outlets from their own buttons.
 

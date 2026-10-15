@@ -164,7 +164,7 @@ volatile uint32_t lipCheckAt = 0;               // when to test the saved addres
 // Wi-Fi change requested from the app (tested before it is kept)
 volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
-const char* FW_VERSION = "2.15.29";
+const char* FW_VERSION = "2.15.30";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -664,6 +664,9 @@ void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
 }
 
 void mqttPub(const String& topic, const String& payload, int qos, bool retain);
+void mqttLock();
+void mqttUnlock();
+extern uint32_t mqttOutDropped;
 void sseSend(const char* ev, const String& data);
 void sseEvent(const String& data, const String& mac);
 
@@ -2268,7 +2271,9 @@ static void exTask(void*) {
   ExJob& j = exJob;
   tlsBusy = true;
   bool paused = false;
+  mqttLock();
   if (mqtt) { esp_mqtt_client_stop(mqtt); mqttUp = false; paused = true; }   // two TLS sessions don't fit in RAM
+  mqttUnlock();
   vTaskDelay(pdMS_TO_TICKS(300));
   if (j.kind == 1 || j.kind == 4) {
     j.c1 = emqxCall("POST", EX_AUTHN, "{\"user_id\":\"" + String(j.u.id) + "\",\"password\":\"" + j.pw + "\"}");
@@ -3174,7 +3179,7 @@ void handleHealth() {
   web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
-           ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"sse\":" + String(sseCount()) +
+           ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"mqtt_drop\":" + String(mqttOutDropped) + ",\"sse\":" + String(sseCount()) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
@@ -3846,6 +3851,7 @@ void mqttStart() {
   tStatus = base + "status"; tInfo = base + "info"; tState = base + "state"; tEvent = base + "event"; tCmd = base + "cmd"; tAck = base + "cmd/ack";
   snprintf(mqttClientId, sizeof mqttClientId, "hub-%s", id);
   if (!mqttQ) mqttQ = xQueueCreate(6, sizeof(MqttCmd));
+  mqttOutInit();
   esp_mqtt_client_config_t cfgm = {};
 #if ESP_IDF_VERSION_MAJOR >= 5
   cfgm.broker.address.uri = secMqttUri.c_str();
@@ -3872,10 +3878,63 @@ void mqttStart() {
   Serial.printf("MQTT    : %s  hub=%s\n", secMqttUri.c_str(), id);
 }
 
+// v2.15.30: esp_mqtt_client_enqueue waits for the MQTT client's lock, which the MQTT task holds for the whole of a
+// slow network write or a TLS reconnect (seen: 19-21 s, "mqtt_pub" stalls). The main loop then froze and every strip
+// dropped. Publishes now go through a small queue to their own task; the main loop never waits on the MQTT client.
+struct MqttOut { char* topic; char* data; int len; uint8_t qos; uint8_t retain; };
+static QueueHandle_t mqttOutQ = nullptr;
+static SemaphoreHandle_t mqttMx = nullptr;          // held while the publisher task uses the client (stop/destroy wait on it)
+static volatile uint32_t mqttOutBytes = 0;          // bytes waiting in the queue, capped so a stuck server can't eat the heap
+static portMUX_TYPE mqttOutMux = portMUX_INITIALIZER_UNLOCKED;
+const uint32_t MQTT_OUT_MAX_BYTES = 16384;
+uint32_t mqttOutDropped = 0;
+
+static void mqttOutTask(void*) {
+  MqttOut m;
+  for (;;) {
+    if (xQueueReceive(mqttOutQ, &m, portMAX_DELAY) != pdTRUE) continue;
+    xSemaphoreTake(mqttMx, portMAX_DELAY);
+    if (mqtt && mqttUp) esp_mqtt_client_enqueue(mqtt, m.topic, m.data, m.len, m.qos, m.retain, true);
+    xSemaphoreGive(mqttMx);
+    portENTER_CRITICAL(&mqttOutMux);
+    mqttOutBytes -= m.len;
+    portEXIT_CRITICAL(&mqttOutMux);
+    free(m.topic);
+    free(m.data);
+  }
+}
+
+void mqttOutInit() {
+  if (mqttOutQ) return;
+  mqttMx = xSemaphoreCreateMutex();
+  mqttOutQ = xQueueCreate(12, sizeof(MqttOut));
+  xTaskCreatePinnedToCore(mqttOutTask, "mqtt_out", 4096, nullptr, 1, nullptr, 0);
+}
+
+// stop/destroy the client only while the publisher task isn't inside it
+void mqttLock() { if (mqttMx) xSemaphoreTake(mqttMx, portMAX_DELAY); }
+void mqttUnlock() { if (mqttMx) xSemaphoreGive(mqttMx); }
+
 void mqttPub(const String& topic, const String& payload, int qos, bool retain) {
-  if (!mqtt || !mqttUp || !topic.length()) return;
+  if (!mqtt || !mqttUp || !topic.length() || !mqttOutQ) return;
   SubT st("mqtt_pub");
-  esp_mqtt_client_enqueue(mqtt, topic.c_str(), payload.c_str(), payload.length(), qos, retain ? 1 : 0, true);
+  int len = payload.length();
+  if (mqttOutBytes + len > MQTT_OUT_MAX_BYTES) { mqttOutDropped++; return; }
+  MqttOut m;
+  m.topic = strdup(topic.c_str());
+  m.data = (char*)malloc(len + 1);
+  if (!m.topic || !m.data) { free(m.topic); free(m.data); mqttOutDropped++; return; }
+  memcpy(m.data, payload.c_str(), len + 1);
+  m.len = len; m.qos = qos; m.retain = retain ? 1 : 0;
+  portENTER_CRITICAL(&mqttOutMux);
+  mqttOutBytes += len;
+  portEXIT_CRITICAL(&mqttOutMux);
+  if (xQueueSend(mqttOutQ, &m, 0) != pdTRUE) {
+    portENTER_CRITICAL(&mqttOutMux);
+    mqttOutBytes -= len;
+    portEXIT_CRITICAL(&mqttOutMux);
+    free(m.topic); free(m.data); mqttOutDropped++;
+  }
 }
 
 String relaySignature() {
@@ -3901,8 +3960,10 @@ void publishUserState(const HubUser& u) {
   mqttPub("mttl/" + hubId + "/u/" + u.id + "/state", userStateJson(u), 0, true);
 }
 void mqttRestart() {
+  mqttLock();
   if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = nullptr; }
   mqttUp = false; mqttErrKind = 0; mqttErr = "";
+  mqttUnlock();
   mqttStart();
 }
 void mqttHealth() {
