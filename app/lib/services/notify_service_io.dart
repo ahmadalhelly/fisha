@@ -117,6 +117,7 @@ class _NotifyHandler extends TaskHandler {
   MqttServerClient? _client;
   String _base = '';
   Map<String, dynamic> _state = {};
+  final Map<String, Map<String, dynamic>> _strips = {}; // hub 2.15.38: mttl/<hub>/s/<MAC>
   int _id = 1;
   Map<String, dynamic>? _filter; // the app's copy of the user's choices (prefs 'notifyFilter'), when the hub state is missing
   final _seen = <String>[]; // recent events, so one held back by the hub and sent on reconnect never shows twice
@@ -194,6 +195,7 @@ class _NotifyHandler extends TaskHandler {
         }
       });
       c.subscribe('$_base/state', MqttQos.atMostOnce);
+      c.subscribe('$_base/s/+', MqttQos.atMostOnce); // hub 2.15.38: each strip on its own topic
       c.subscribe('$_base/event', MqttQos.atLeastOnce);
     } catch (_) {
       // no internet right now; the repeat event retries
@@ -205,6 +207,15 @@ class _NotifyHandler extends TaskHandler {
   void _onMessage(String topic, String text) {
     _lastMsgAt = DateTime.now().millisecondsSinceEpoch;
     if (_lastMsgAt - _statusAt > 30000) _saveStatus();
+    if (topic.startsWith('$_base/s/')) {
+      final mac = topic.substring('$_base/s/'.length).toUpperCase();
+      try {
+        _strips[mac] = jsonDecode(text) as Map<String, dynamic>;
+      } catch (_) {
+        _strips.remove(mac); // "" = wiped by the hub
+      }
+      return;
+    }
     try {
       final j = jsonDecode(text) as Map<String, dynamic>;
       if (topic == '$_base/state') {
@@ -216,6 +227,8 @@ class _NotifyHandler extends TaskHandler {
   }
 
   Map<String, dynamic>? _strip(String mac) {
+    final one = _strips[mac];
+    if (one != null) return one;
     final devs = _state['devices'];
     if (devs is! List) return null;
     for (final d in devs) {

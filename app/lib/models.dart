@@ -69,6 +69,24 @@ class Outlet {
         hasRule: hasRule,
         ampLimit: ampLimit ?? this.ampLimit,
       );
+
+  // hub 2.15.38 "live": only the numbers that change with every strip report
+  Outlet withLive({required bool on, required double powerW, required double energyKwh, required int tempC, required int autoOffInS}) => Outlet(
+        n: n,
+        on: on,
+        powerW: powerW,
+        energyKwh: energyKwh,
+        tempC: tempC,
+        label: label,
+        locked: locked,
+        protected: protected,
+        keepOn: keepOn,
+        autoOffMin: autoOffMin,
+        autoOffInS: autoOffInS,
+        hasSchedule: hasSchedule,
+        hasRule: hasRule,
+        ampLimit: ampLimit,
+      );
 }
 
 class Strip {
@@ -157,6 +175,37 @@ class Strip {
       _with(outlets: outlets.map((o) => overrides.containsKey(o.n) ? o.copyWith(on: overrides[o.n]) : o).toList());
 
   Strip withMasterLock(bool v) => _with(masterLock: v);
+
+  // hub 2.15.38 "live" event: {"mac","v","r","up","o":[[on,W,kWh,°C,auto_off_in_s] x4]}; names, locks etc. stay as they are
+  Strip withLive(Map<String, dynamic> j) {
+    final o = j['o'];
+    final outs = <Outlet>[];
+    for (final x in outlets) {
+      final i = x.n - 1;
+      final v = o is List && i >= 0 && i < o.length ? o[i] : null;
+      if (v is List && v.length >= 5) {
+        outs.add(x.withLive(
+            on: v[0] == 1 || v[0] == true, powerW: _d(v[1]), energyKwh: _d(v[2]), tempC: _i(v[3]), autoOffInS: _i(v[4], -1)));
+      } else {
+        outs.add(x);
+      }
+    }
+    return Strip(
+      mac: mac,
+      fw: fw,
+      online: online,
+      voltage: (j['v'] as num?)?.toDouble(),
+      rssi: (j['r'] as num?)?.toInt(),
+      upS: (j['up'] as num?)?.toInt() ?? upS,
+      ip: ip,
+      label: label,
+      outlets: outs,
+      notifyMask: notifyMask,
+      hasSchedule: hasSchedule,
+      hasRule: hasRule,
+      masterLock: masterLock,
+    );
+  }
 
   Strip withLabel(int n, String value) =>
       n == 0 ? _with(label: value) : _with(outlets: outlets.map((o) => o.n == n ? o.copyWith(label: value) : o).toList());

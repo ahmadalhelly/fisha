@@ -217,6 +217,9 @@ class AppState extends ChangeNotifier {
 
   // internals
   final Map<String, Map<int, bool>> _pending = {};
+  // hub 2.15.38 cloud state: a small head (mttl/<hub>/state with "strips":[MACs]) and one retained message per strip
+  Map<String, dynamic>? _cloudHead;
+  final Map<String, Map<String, dynamic>> _cloudStrips = {};
   final Map<String, Completer<Map<String, dynamic>>> _acks = {};
   Timer? _pollTimer;
   Timer? _mqttRetry;
@@ -966,6 +969,8 @@ class AppState extends ChangeNotifier {
   void _onSse(String event, String data) {
     if (event == 'state') {
       _applyState(data, fromLocal: true);
+    } else if (event == 'live') {
+      _applyLive(data);
     } else if (event == 'event') {
       _addEventJson(data);
     }
@@ -1033,8 +1038,13 @@ class AppState extends ChangeNotifier {
         _onMqtt(m.topic.toString(), text);
       }
     });
-    c.subscribe('$_base/#', MqttQos.atLeastOnce);
-    if (settings.isShared) c.subscribe(_statusTopic, MqttQos.atLeastOnce);
+    _cloudHead = null;
+    _cloudStrips.clear();
+    // only what the app reads: '#' also brought every family member's copies to the owner's phone (EMQX traffic)
+    for (final t in ['state', 's/+', 'event', 'info', 'cmd/ack']) {
+      c.subscribe('$_base/$t', MqttQos.atLeastOnce);
+    }
+    c.subscribe(_statusTopic, MqttQos.atLeastOnce);
   }
 
   void _stopMqtt() {
@@ -1053,7 +1063,9 @@ class AppState extends ChangeNotifier {
 
   void _onMqtt(String topic, String text) {
     if (topic == '$_base/state') {
-      _applyState(text, fromLocal: false);
+      _onCloudHead(text);
+    } else if (topic.startsWith('$_base/s/')) {
+      _onCloudStrip(topic.substring('$_base/s/'.length).toUpperCase(), text);
     } else if (topic == _statusTopic) {
       hubOnline = text.trim() == 'online';
       _updateMode();
@@ -1075,11 +1087,101 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // hub 2.15.38+: the head lists the strips and each strip comes on its own topic; older hubs send "devices" in the head
+  void _onCloudHead(String text) {
+    Map<String, dynamic> j;
+    try {
+      j = jsonDecode(text) as Map<String, dynamic>;
+    } catch (_) {
+      return; // "" = cleared retained copy
+    }
+    if (j['strips'] is! List) {
+      _cloudHead = null;
+      _applyStateMap(j, fromLocal: false);
+      return;
+    }
+    _cloudHead = j;
+    _applyCloud();
+  }
+
+  void _onCloudStrip(String mac, String text) {
+    if (mac.length != 12) return;
+    if (text.trim().isEmpty) {
+      _cloudStrips.remove(mac); // the hub wiped it: strip removed, or no longer shared with this member
+    } else {
+      try {
+        _cloudStrips[mac] = jsonDecode(text) as Map<String, dynamic>;
+      } catch (_) {
+        return;
+      }
+    }
+    if (_cloudHead != null) _applyCloud();
+  }
+
+  void _applyCloud() {
+    final head = _cloudHead;
+    if (head == null) return;
+    final order = (head['strips'] as List).map((m) => m.toString().toUpperCase());
+    final j = Map<String, dynamic>.from(head);
+    j['devices'] = [for (final m in order) if (_cloudStrips[m] != null) _cloudStrips[m]];
+    _applyStateMap(j, fromLocal: false);
+  }
+
+  // hub 2.15.38 SSE "live": the numbers of each online strip once a second, merged into the strips from the last "state"
+  void _applyLive(String data) {
+    try {
+      final j = jsonDecode(data) as Map<String, dynamic>;
+      final d = j['d'];
+      if (d is! List || _strips.isEmpty) return;
+      final byMac = <String, Map<String, dynamic>>{};
+      for (final x in d) {
+        if (x is Map<String, dynamic>) byMac[(x['mac'] ?? '').toString().toUpperCase()] = x;
+      }
+      var changed = false;
+      final list = <Strip>[];
+      for (final s0 in _strips) {
+        final lv = byMac[s0.mac];
+        if (lv == null || !s0.online) {
+          list.add(s0);
+          continue;
+        }
+        var s = s0.withLive(lv);
+        final p = _pending[s.mac];
+        if (p != null && p.isNotEmpty) s = s.withOutletState(p);
+        list.add(s);
+        changed = true;
+      }
+      if (!changed) return;
+      _strips = list;
+      OutletHistory.instance.sample(list);
+      lastUpdate = DateTime.now();
+      _localBadAt = null;
+      notifyListeners();
+      updateWidgetThrottled();
+    } catch (_) {
+      // a bad "live" changes nothing; the next full state (at most 15 s) brings everything
+    }
+  }
+
   // ---------- state ----------
   void _applyState(String body, {required bool fromLocal}) {
     if (!fromLocal && _localFresh) return; // local data is fresher and authoritative
+    Map<String, dynamic> j;
     try {
-      final j = jsonDecode(body) as Map<String, dynamic>;
+      j = jsonDecode(body) as Map<String, dynamic>;
+    } catch (_) {
+      if (fromLocal) {
+        _localBadAt = DateTime.now();
+        _updateMode();
+      }
+      return;
+    }
+    _applyStateMap(j, fromLocal: fromLocal);
+  }
+
+  void _applyStateMap(Map<String, dynamic> j, {required bool fromLocal}) {
+    if (!fromLocal && _localFresh) return;
+    try {
       final fw = j['hub_fw'];
       if (fw != null) hubFw = fw.toString();
       hubTimeOk = j['time_ok'] == true;
