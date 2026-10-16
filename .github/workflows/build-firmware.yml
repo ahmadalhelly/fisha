@@ -46,6 +46,13 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
 
+      # the ESP32 libraries pioarduino rebuilds for our settings land in firmware/.pio (~13 min to build from scratch)
+      - uses: actions/cache@v4
+        with:
+          path: firmware/.pio
+          key: pio-build-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}-${{ github.run_number }}
+          restore-keys: pio-build-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}-
+
       - name: Compile (10 strips, Minimal SPIFFS with OTA)
         run: |
           set -o pipefail

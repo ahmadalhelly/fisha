@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### 1.0.0 (public launch)
+- Same code as 2.15.39; the version restarts at 1.0.0 for the public launch (MAJOR.MINOR.PATCH from here on). Phones must run app 2.0.29 or newer first: its update center orders by build number, so 1.0.0 counts as newer than 2.x, and it treats a three-number 1.x hub as a current hub (older apps hide automations/schedules/energy for any hub starting with "1.").
+- CI: also caches `firmware/.pio` (the rebuilt ESP32 libraries took ~13 of the 14 build minutes).
+
 ### 2.15.39
 - Same code as 2.15.38; only the version changed. The 10-strip build is now the only hub build (CI `build` job compiles `platformio.ini`; the old arduino-cli 6-strip build was removed to save CI minutes). Reason: 2.15.38-10strips held on the device for 11 minutes with the app open: heap8_min 23.2 KB (was ~600 B), alloc_fail 0, sse_cut 0, state_bad 0, mqtt on, no Wi-Fi drops; only one 3.4 s stall at boot ("provision").
 - Published bin names stay `fisha-hub-<v>.bin` / `-FULL-flash-0x0.bin`.
