@@ -1,4 +1,4 @@
-/// Data models matching the hub's JSON (GET /api/state, SSE "state", mttl/<hub>/state).
+/// Data models matching the hub's JSON (GET /api/state, SSE "state", `mttl/<hub>/state`).
 int _i(Object? v, [int d = 0]) => (v as num?)?.toInt() ?? d;
 double _d(Object? v, [double d = 0]) => (v as num?)?.toDouble() ?? d;
 String _s(Object? v) => (v ?? '').toString();

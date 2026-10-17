@@ -31,7 +31,7 @@ Future<String?> askUpdatePassword(BuildContext context, AppState s) {
 }
 
 /// Owner: reset / change the update password. Needs the default (or current) password, then the new one twice.
-/// Leaving the new password empty puts the default fisha-<MAC> back.
+/// Leaving the new password empty puts the default `fisha-<MAC>` back.
 Future<void> changeUpdatePasswordDialog(BuildContext context, AppState s) async {
   final cur = TextEditingController(), n1 = TextEditingController(), n2 = TextEditingController();
   String? err;
