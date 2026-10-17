@@ -66,3 +66,9 @@ flutter_native_splash:
     color: "#070D19"
     image: assets/brand/splash.png
     branding: assets/brand/branding.png
+
+# shared_preferences_android 2.5.0 (2026-10-17) switched to Pigeon JNI without R8 keep rules: in release builds R8
+# renames kotlin.coroutines.Continuation, the JNI method lookup fails, SharedPreferences.getInstance() throws,
+# AppState.init() fails and the app never leaves the splash. Keep the MethodChannel version that 1.0.0 shipped.
+dependency_overrides:
+  shared_preferences_android: 2.4.28
