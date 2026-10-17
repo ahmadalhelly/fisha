@@ -2289,6 +2289,15 @@ void pairsExpire() {
     if (millis() - p.at > (p.state == 1 ? 300000UL : 600000UL)) { if (p.state == 1) stateDirty = true; p = PairReq(); }
   }
 }
+// the update password as text: the owner's own one, or the fixed fisha-<MAC> (same set otaPassOk accepts)
+bool otaTextOk(const String& p) {
+  if (p.length() < 8) return false;
+  if (secOta.length() && p == secOta) return true;
+  String d = defOta();
+  if (p == d) return true;
+  d.setCharAt(0, 'F');
+  return p == d;
+}
 int pairFind(uint32_t id) { for (int i = 0; i < MAX_PAIRS; i++) if (pairs[i].state && pairs[i].id == id) return i; return -1; }
 String authJson() {
   pairsExpire();
@@ -2320,7 +2329,18 @@ void authRoute(const String& uri, const String& b) {
     if (claimLockUntil && (int32_t)(millis() - claimLockUntil) < 0) return out(429, "{\"ok\":false,\"error\":\"wait\"}");
     String email = cleanEmail(jsonValue(b, "email"));
     if (!email.length()) return out(400, "{\"ok\":false,\"error\":\"email\"}");
-    if (ownerCount) return out(409, "{\"ok\":false,\"error\":\"claimed\"}");   // later phones are added through pairing
+    if (ownerCount) {                            // later phones are added through pairing; the same owner email may win its key back
+      String ota = jsonValue(b, "ota");
+      if (ownerByEmail(email) < 0 || !ota.length()) return out(409, "{\"ok\":false,\"error\":\"claimed\"}");
+      if (!otaTextOk(ota)) {                     // the update password is the proof: slow guessing down
+        if (++claimFails >= 5) { claimFails = 0; claimLockUntil = (millis() + 300000UL) | 1; }
+        return out(401, "{\"ok\":false,\"error\":\"wrong_password\"}");
+      }
+      claimFails = 0;
+      String key = addOwner(email, cleanModel(jsonValue(b, "model")));   // replaces the old key of this email
+      addEvent("owner", "", 0, email);
+      return out(200, "{\"ok\":true,\"data\":{\"key\":\"" + key + "\"}}");
+    }
     if (millis() >= CLAIM_WINDOW_MS) return out(403, "{\"ok\":false,\"error\":\"claim_window\"}");
     String key = addOwner(email, cleanModel(jsonValue(b, "model")));
     addEvent("owner", "", 0, email);

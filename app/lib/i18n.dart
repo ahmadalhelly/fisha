@@ -567,6 +567,7 @@ const Map<String, List<String>> _s = {
   'err_busy': ['الـ Hub مشغول بأمر تاني، جرب كمان شوية', 'The hub is busy with another task; try again shortly'],
   'lock_need_google': ['سجّل بحساب جوجل الأول', 'Sign in with Google first'],
   'lock_no_hub': ['مش لاقي الـ Hub. اتأكد إنك على واي فاي البيت', 'Can\'t reach the hub. Make sure you are on the home Wi-Fi'],
+  'lock_claimed': ['الهاب ليه مالك بالفعل. لو ده إيميلك اكتب باسورد تحديث الهاب (fisha-ثم رقم الهاب) عشان ترجّع ملكيتك.', 'This hub already has an owner. If this is your email, enter the hub update password to take ownership back.'],
   'lock_wrong_pass': ['باسورد تحديث الهاب مش مظبوط', 'Wrong hub update password'],
   'lock_wait': ['محاولات كتير غلط. استنى 5 دقايق وجرّب تاني', 'Too many wrong tries. Wait 5 minutes and try again'],
   'lock_not_claimed': ['الـ Hub لسه مالوش صاحب', 'The hub has no owner yet'],

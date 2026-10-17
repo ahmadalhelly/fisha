@@ -78,6 +78,7 @@ extension AppStateHubLock on AppState {
     if (j['ok'] != true) {
       final e = (j['error'] ?? '').toString();
       if (e == 'claim_window') return Tr.isAr ? 'تسجيل المالك متاح أول 10 دقايق بعد تشغيل الهاب. افصل الهاب ورجّعه وجرّب تاني.' : 'Claiming is open for 10 minutes after the hub powers on. Power-cycle the hub and try again.';
+      if (e == 'claimed') return t('lock_claimed');
       return e == 'wrong_password' ? t('lock_wrong_pass') : e == 'wait' ? t('lock_wait') : t('err_failed');
     }
     final key = (j['data'] is Map ? j['data']['key'] : null)?.toString() ?? '';

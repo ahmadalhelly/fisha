@@ -203,6 +203,14 @@ class ClaimForm extends StatefulWidget {
 class _ClaimFormState extends State<ClaimForm> {
   bool _busy = false;
   String? _err;
+  bool _needPass = false;                       // the hub already has an owner: the update password wins ownership back
+  final _pass = TextEditingController();
+
+  @override
+  void dispose() {
+    _pass.dispose();
+    super.dispose();
+  }
 
   Future<void> _go() async {
     if (_busy) return;
@@ -210,11 +218,12 @@ class _ClaimFormState extends State<ClaimForm> {
       _busy = true;
       _err = null;
     });
-    final e = await widget.state.claimHub('');
+    final e = await widget.state.claimHub(_pass.text.trim());
     if (!mounted) return;
     setState(() {
       _busy = false;
       _err = e;
+      if (e == t('lock_claimed')) _needPass = true;
     });
     if (e == null) {
       _snack(context, _tr('الـ Hub اتقفل. أي تليفون تاني محتاج موافقتك.', 'Hub locked. Any other phone now needs your approval.'));
@@ -227,6 +236,14 @@ class _ClaimFormState extends State<ClaimForm> {
         if (_err != null) ...[
           Text(_err!, style: TextStyle(color: C.danger, fontSize: 12.5)),
           const SizedBox(height: 8),
+        ],
+        if (_needPass) ...[
+          TextField(
+              controller: _pass,
+              textDirection: TextDirection.ltr,
+              autocorrect: false,
+              decoration: InputDecoration(labelText: _tr('باسورد تحديث الهاب', 'Hub update password'))),
+          const SizedBox(height: 10),
         ],
         primaryButton(_tr('اقفل الهاب على التليفون ده', 'Lock the hub to this phone'), _busy ? null : _go, icon: Icons.lock_outline),
       ]);
