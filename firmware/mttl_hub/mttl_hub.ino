@@ -14,7 +14,7 @@ struct OwnerDev;
 struct PairReq;
 
 /*
-  Fisha Hub v2.13.2 — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
+  Fisha Hub — ESP32 local controller + cloud relay for LG U+ MTTL-W01 smart strips
   Board: ESP32 Dev Module (ESP32-WROOM-32) | Core: esp32 by Espressif 3.x | Partition: Minimal SPIFFS (1.9MB APP with OTA)
   No external libraries.  By: @ahmadalhelly
 
@@ -27,78 +27,9 @@ struct PairReq;
 
   POST actions: onoff, refresh, label, lock, protect, autooff, timer, timer_cancel, provision,
                 schedules, schedule_save, schedule_delete, automations, automation_save, automation_delete,
-                events, energy, config, amplimit (v2.11), local_key (v2.11, shared users)
-
-  v2.11: the loop never blocks on a phone/strip that stopped reading (asleep, out of range, unplugged):
-         every socket write is non-blocking and a stuck peer is dropped instead of freezing the hub for
-         10 s per write. Phone notifications (ntfy) run in their own task. Wi-Fi loss no longer reboots
-         the hub after 60 s. Under-voltage limit, per-outlet current limit, near-limit warnings,
-         current (A) automations, and shared users can talk to the hub directly on the home Wi-Fi.
-  v2.13.1: also listens on TCP 21197 (strips after the Oct 2026 OTA), default IP 192.168.1.100.
-  v2.13.2: no passwords in the source (placeholders; the hub keeps the stored ones, the app pushes the
-           server password), SSE matches shared users by exact u=/t= before treating a client as owner.
-  v2.14.0: over-voltage protection is always on and cuts the whole strip, protected outlets included;
-           the protection switch now only turns the under-voltage cut on/off (limit 170..260 V).
-  v2.14.1: the "strip offline" event keeps why it dropped (disconnected / stale); schedules and automations
-           are only saved for a strip the hub knows, with thresholds kept in a sane range.
-  v2.14.13: strip firmware flashing from the hub (/stripfw): the .fwr is kept in the spare OTA slot, the hub joins
-            the strip's setup network, sends up:ota:192.168.1.2 and serves GET /ota.bin on port 80 itself
-            (a Windows PC with Bitdefender dropped the strip's inbound connection).
-  v2.14.14: /stripfw only auto-refreshes while a flash runs (it cleared the chosen file).
-  v2.15.0: automations are armed as soon as they are saved and after every reboot (a load already past the
-           limit never tripped before); the hub reports a storage id ("nvs") that changes when its saved data
-           is erased, so the app can put family members, schedules and rules back; family members can be
-           exported and restored with their own passwords (users_export / user_restore, owner only).
-  v2.15.4: events made while the cloud link is down are kept (newest 12) and sent when it is back, so phone
-           notifications are no longer lost on a Wi-Fi blip or an MQTT reconnect.
-  v2.15.3: diagnostics only: each loss of the home Wi-Fi is logged as a "wifi" event (ESP-IDF reason code and
-           seconds offline); /api/health adds wifi_drops and wifi_reason. Nothing else changes.
-  v2.15.8: strips can be updated over their normal hub connection (stock 1.0.66 accepts up:ota there): pick strips
-           (or all) on /stripfw or POST /api/stripfw/start; the hub serves the stored .fwr on :80, one strip at a
-           time, waits for it to come back and checks the version in bootinfo, and stops at the first failure.
-           An uploaded .fwr is checked (16-byte header, load address 0x10006000, length, checksum) and refused if bad.
-           The watchdog is armed at the very start of boot (a hang while booting needed the reset button).
-           A loop step that blocks 5 s or more is logged as a "stall" event (step name + seconds); /api/health adds
-           stall_max_ms / stall_where. Every home Wi-Fi drop is logged even when the hub reconnects between two loop
-           passes (counted from the Wi-Fi driver, not from the loop). A failed NVS save is logged ("save_fail").
-  v2.15.7: energy and peak history moved from NVS to files (LittleFS on the unused SPIFFS partition); old data is
-           moved over on first boot and its NVS entries freed. NVS was 500/630 full and saves had started to fail.
-  v2.15.6: Wi-Fi settings are kept in RAM, not NVS (with NVS full the strip join failed: ESP_ERR_NVS_NOT_ENOUGH_SPACE);
-           the strip's setup network is also recognised by its BSSID; /api/health adds nvs_used/nvs_free/nvs_total.
-  v2.15.5: the strip flasher listens on port 80 before sending up:ota (the strip dials it ~0.1 s after ota_ok).
-  v2.15.2: a strip is no longer dropped when one send is slow for a moment: unsent bytes wait (same bytes, same
-           order, no protocol change) and the strip is dropped only after 3 s stuck; that drop is now logged as an
-           "offline" event too ("socket stuck"). Live push (SSE) sends the state without extra copies and without
-           blocking. Saving or deleting a schedule/automation pushes the state at once (outlet badges were stale).
-           /api/health adds heap_min and sse (connected live clients).
-  v2.15.1: a schedule can skip just its next run (schedule_skip, kept under its own NVS key so saved
-           schedules keep their layout); a skipped run is logged as a "skipped" event.
-           The strip protocol (ports 10086/21197, setup AP flow) is unchanged.
+                events, energy, config, amplimit, local_key
 */
-// v2.15.23: a master "all on/off" no longer touches a child-locked outlet at all (lockSkip) - it used to race
-// with the lock's own enforcement resend and could keep the OTHER outlets from responding to the master switch too.
-// v2.15.26: roles as the owner set them: view sees all, control switches outlets (not overload-protected ones),
-//           admin also gets Wi-Fi, strip updates, reboot, automations and protections. The owner can grant a member
-//           extra permissions (automations, protections, strip updates, Wi-Fi) kept in HubUser.rsv. Members' Google
-//           email + photo are kept in NVS "uprof" and shown on the family page (api profile).
-// v2.15.25: changing the hub's Wi-Fi from the app hands the new network to every online strip first (up:connect on
-//           its normal link, up:reboot:0 after connect_ok), so strips move with the hub. api strip_wifi_test tries it
-//           on one strip with the current network. Logged as "wifipush" events.
-// v2.15.24: the strip's master button with a child-locked outlet on: a press now turns the free outlets on instead
-//           of doing nothing (the strip's "all off" was undone for the locked one and the rest were already off).
-// v2.15.23: the hub scans for a known strip's own setup network (TONLY_TAP_...) every 90 s while any known strip
-// is offline, and re-links it automatically once seen. The strip only opens that network after its button is held
-// ~10 s (stock firmware has no automatic fallback we could find), so after a router change the user still presses
-// the button, but no longer needs the phone or "Add strip". See autoResyncScan(). Logged as a "resync" event.
-// v2.15.22: automations go from 10 to 40 (MAX_AUTO); NVS blobs saved under the old cap migrate on first boot.
-// v2.15.22: the hub can fetch a strip .fwr itself over HTTP(S) (POST /api/stripfw/fetch {"url":...}) and flash it
-// the same way as an uploaded file — the bytes never pass through the phone. Manual upload still works unchanged.
-// v2.15.20: the owner sets the hub address in the app (cloud settings "lip"; stored in NVS, the hub restarts to use it).
-// If the router does not answer on that address within a minute of boot, the hub goes back to the default address.
-// The hub server user defaults to ESP_hub.
-// v2.15.19: no secrets in the firmware. Update password is random per hub (NVS). Server address and user come from the app
-// (cloud settings). The first owner claim needs no password; later phones pair. The setup Wi-Fi network is open. BETA.
-// v2.15.18: the web library waits (with the whole hub stopped) for a request's line and headers to arrive.
+// The web library waits (with the whole hub stopped) for a request's line and headers to arrive.
 // Its default allows 10 s, long enough for the strips to give up on the silent hub and drop. 1.5 s is ample
 // for a real request; a body (firmware upload) is not covered by this limit. The library is compiled on its
 // own, so the limit must come from the build: compiler.cpp.extra_flags=-DWEBSERVER_MAX_HEADER_WAIT=1500
@@ -152,10 +83,10 @@ const char* MQTT_USER = "ESP_hub";        // the hub's own server user (not a se
 const char* MQTT_PASS = "YOUR_MQTT_PASSWORD";
 const char* TZ_INFO   = "EET-2EEST,M4.5.5/0,M10.5.4/24";   // Africa/Cairo with DST
 // ============================================
-// From v2.3 the three passwords are also kept in the hub's memory. A firmware built with the placeholders
+// The three passwords are also kept in the hub's memory. A firmware built with the placeholders
 // above keeps using the stored ones, so later updates can be installed from the app without editing the code.
 String secSsid, secWifi, secMqtt, secOta, secMqttUri, secMqttUser;
-// v2.15.27: the fixed update password every hub accepts: fisha-<MAC>. The owner may also set one of their own.
+// the fixed update password every hub accepts: fisha-<MAC>. The owner may also set one of their own.
 String defOta() {
   uint8_t m[6];
   esp_read_mac(m, ESP_MAC_WIFI_STA);
@@ -198,8 +129,8 @@ MrY=
 
 const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
-const float STRIP_MAX_W = 3500;                   // v2.15.9 user rule: 3500 W per strip in total
-// v2.15.38: 10 strips need the hub build with more network sockets (firmware/platformio.ini, CONFIG_LWIP_MAX_SOCKETS=26).
+const float STRIP_MAX_W = 3500;                   // user rule: 3500 W per strip in total
+// 10 strips need the hub build with more network sockets (firmware/platformio.ini, CONFIG_LWIP_MAX_SOCKETS=26).
 // The stock Arduino build has 16 sockets: the hub itself uses ~13 at most, so it stays at 6 strips there.
 #if defined(FISHA_REQUIRE_10) && CONFIG_LWIP_MAX_SOCKETS < 26      // platformio.ini sets it: the custom libs must really be in use
 #error "custom ESP32 libs not applied: CONFIG_LWIP_MAX_SOCKETS < 26"
@@ -213,7 +144,7 @@ const uint8_t  MAX_STRIPS = 10;
 const uint8_t  MAX_STRIPS = 6;
 #endif
 const uint8_t  DIAG_EVERY = 3, MAX_TIMERS = 12, MAX_SCHED = 20, MAX_AUTO = 40, MAX_EVENTS = 40, MAX_SSE = 4;
-const uint8_t  OLD_MAX_AUTO = 10;   // v2.15.22 raised MAX_AUTO 10 -> 40; NVS blobs saved before that are this size
+const uint8_t  OLD_MAX_AUTO = 10;   // raised MAX_AUTO 10 -> 40; NVS blobs saved before that are this size
 const int      ELOG_DAYS = 90;
 
 // ---------- data ----------
@@ -234,7 +165,7 @@ struct PeakLog {                                 // per-strip daily highest tota
   uint16_t pk[ELOG_DAYS];
   int32_t dayOf[ELOG_DAYS];
 };
-// v2.15.38: RAM keeps only the running day of each log (the first fields of ELog / PeakLog); the 90-day history stays in
+// RAM keeps only the running day of each log (the first fields of ELog / PeakLog); the 90-day history stays in
 // its file and is read into a short-lived buffer when it changes (once a day) or the app asks for it. Frees ~2.3 KB
 // of RAM per strip, which 10 strips need.
 struct ElogHead { uint32_t magic = 0; int32_t day = 0; uint32_t base[4] = {0, 0, 0, 0}; };
@@ -246,29 +177,29 @@ struct Strip {
   String mac, model, fw, ip, rx, pendingInfo, lastLine;
   String label, olabel[4];
   uint8_t lockMask = 0, lockState = 0, protMask = 0, notifyMask = 0x1F;
-  bool masterLock = false;                       // v2.15.27: strip-level child lock: the strip's own master button does nothing (F1.0.82)
+  bool masterLock = false;                       // strip-level child lock: the strip's own master button does nothing (F1.0.82)
   uint8_t infoOn = 0;                            // outlets on in the last full report (state before a button press)
-  uint8_t keepMask = 0, keepHold = 0;            // v2.8 keep always on · hold = a safety cut is in force
+  uint8_t keepMask = 0, keepHold = 0;            // keep always on · hold = a safety cut is in force
   uint32_t keepEvAt[4] = {0, 0, 0, 0};
   uint16_t autoOffMin[4] = {0, 0, 0, 0};
   uint32_t autoOffAt[4] = {0, 0, 0, 0};
   uint32_t hotSince[4] = {0, 0, 0, 0};
   uint32_t loadEventAt = 0, voltEventAt = 0;
-  uint32_t ocSince = 0, vOkSince = 0;            // v2.10 over-current timer · voltage back to normal since
+  uint32_t ocSince = 0, vOkSince = 0;            // over-current timer · voltage back to normal since
   uint8_t ovCount = 0, vCutMask = 0;             // consecutive high readings · outlets cut for over-voltage
-  uint8_t ampX2[4] = {0, 0, 0, 0};               // v2.11 per-outlet current limit in 0.5 A steps (0 = none)
+  uint8_t ampX2[4] = {0, 0, 0, 0};               // per-outlet current limit in 0.5 A steps (0 = none)
   uint32_t ocoSince[4] = {0, 0, 0, 0};           // per-outlet over-current timer
   uint8_t warnA = 0, warnT = 0;                  // near-limit warning already sent (bit per outlet): current · temperature
-  uint8_t tripMask = 0, tripTries[4] = {0, 0, 0, 0}; // v2.15.9 safety cuts still waiting for the strip to report "off"
+  uint8_t tripMask = 0, tripTries[4] = {0, 0, 0, 0}; // safety cuts still waiting for the strip to report "off"
   uint32_t tripAt = 0, tripSeq = 0, olSince = 0; // last safety cut sent (time, infoSeq) · over 3500 W since
   bool dead = false;                             // a write could not go out: dropped on the next pump
-  String txq;                                    // v2.15.2: bytes still waiting to go out to the strip (same bytes, same order)
+  String txq;                                    // bytes still waiting to go out to the strip (same bytes, same order)
   uint32_t txSince = 0;                          // when txq started waiting
   float voltage = NAN;
   int rssi = 0;
   Outlet o[4];
   uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
-  bool connOk = false;                           // v2.15.25: strip answered connect_ok to a network handed over on its link
+  bool connOk = false;                           // strip answered connect_ok to a network handed over on its link
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
 };
 
@@ -283,16 +214,16 @@ struct Sched { uint32_t id; char mac[13]; uint8_t outlet, on, days, hh, mm, enab
 struct AutomV2 { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; };
 struct Autom { uint32_t id; char mac[13]; uint8_t outlet, above, act, enabled; float watts; uint16_t holdS; char label[40]; uint8_t metric; float limit2; };
 // metric 2 = watts OR temperature: "watts" is the W limit and "limit2" the °C limit
-// outlet 0 = whole strip (total W / hottest outlet) · metric 0 = power (W), 1 = temperature (°C), 3 = current (A, v2.11) · "watts" holds the threshold
+// outlet 0 = whole strip (total W / hottest outlet) · metric 0 = power (W), 1 = temperature (°C), 3 = current (A, · "watts" holds the threshold
 // act: 1 notify, 2 switch off, 3 both
 struct Ev { uint32_t ts = 0; String type, mac, msg; int outlet = 0; };
 struct ApiRes { bool ok; String err; String data; };
 struct Note { String type, mac, msg; int outlet; };   // queued phone notification (defined early for Arduino auto-prototypes)
 struct NoteMsg { char topic[68]; char title[200]; char body[160]; uint8_t high; };   // handed to the notification task
-// v2.9 shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
-struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[10][13]; char pw[20]; };   // v2.15.38: 10 strips (was 6)
-struct HubUserV1 { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };   // saved before v2.15.38
-// v2.15.26: HubUser.rsv holds extra permissions the owner grants on top of the role (admins have them all)
+// shared users (hub-managed, EMQX built-in auth + ACL). role 0 view · 1 control · 2 admin
+struct HubUser { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[10][13]; char pw[20]; };   // 10 strips (was 6)
+struct HubUserV1 { char id[8]; char name[24]; uint8_t role, all, n, rsv; char strips[6][13]; char pw[20]; };   // saved before
+// HubUser.rsv holds extra permissions the owner grants on top of the role (admins have them all)
 const uint8_t P_AUTO = 1, P_PROT = 2, P_SFW = 4, P_WIFI = 8, P_HUBFW = 16, P_EXPORT = 32;
 struct UsersNV { uint32_t magic; uint8_t count; HubUser u[10]; };
 struct UsersNVV1 { uint32_t magic; uint8_t count; HubUserV1 u[10]; };
@@ -304,22 +235,22 @@ PeakHead peaks[MAX_STRIPS];
 uint32_t peakSavedAt[MAX_STRIPS];
 Timer timers[MAX_TIMERS];
 Sched scheds[MAX_SCHED];
-uint32_t schedSkip[MAX_SCHED];                    // v2.15.0: ids whose next run is skipped once (own NVS key, Sched layout unchanged)
+uint32_t schedSkip[MAX_SCHED];                    // ids whose next run is skipped once (own NVS key, Sched layout unchanged)
 uint8_t schedCount = 0;
 Autom autos[MAX_AUTO];
 uint8_t autoCount = 0;
 bool autoArmed[MAX_AUTO];
-bool autoWarned[MAX_AUTO];                         // v2.11 near-limit warning sent for this crossing
+bool autoWarned[MAX_AUTO];                         // near-limit warning sent for this crossing
 uint32_t autoSince[MAX_AUTO];
 Ev events[MAX_EVENTS];
 uint8_t evHead = 0, evCount = 0;
 uint32_t nextTimerId = 1;
 uint8_t tempMax = 70;
 bool tempProtect = true;
-// v2.10 whole-strip protections
+// whole-strip protections
 bool vProt = true, vRestore = true, aProt = true;
 uint16_t vMax = 250;
-uint16_t vMin = 190;                               // v2.11 under-voltage limit (170..260)
+uint16_t vMin = 190;                               // under-voltage limit (170..260)
 float aMax = 16.0f;
 volatile uint32_t rebootAt = 0;
 
@@ -331,17 +262,17 @@ Preferences cfg;
 bool webRoutesReady = false;
 bool stripListenerReady = false;
 bool wifiWasConnected = false;
-volatile uint8_t wifiLastReason = 0;    // v2.15.3: why the hub last lost the home Wi-Fi (ESP-IDF reason code)
-volatile uint32_t wifiDiscCount = 0;    // v2.15.3: home Wi-Fi disconnects since boot (outside provisioning)
-volatile uint32_t wifiDiscAt = 0;       // v2.15.8: millis() of the last of those disconnects
-uint32_t stallMaxMs = 0;                // v2.15.8: longest single loop step since boot, and which one
+volatile uint8_t wifiLastReason = 0;    // why the hub last lost the home Wi-Fi (ESP-IDF reason code)
+volatile uint32_t wifiDiscCount = 0;    // home Wi-Fi disconnects since boot (outside provisioning)
+volatile uint32_t wifiDiscAt = 0;       // millis() of the last of those disconnects
+uint32_t stallMaxMs = 0;                // longest single loop step since boot, and which one
 const char* stallWhere = "";
-// v2.15.15: the slowest blocking call inside the current loop step (named in the "stall" event) and since boot (health)
+// the slowest blocking call inside the current loop step (named in the "stall" event) and since boot (health)
 uint32_t subMax = 0, subWorst = 0;
 const char* subWhere = "";
 const char* subWorstWhere = "";
-String webUri;                          // v2.15.16: the request the web step was answering (named in a "web" stall)
-uint32_t webSlow = 0;                   // v2.15.16: answers cut short because the phone stopped reading
+String webUri;                          // the request the web step was answering (named in a "web" stall)
+uint32_t webSlow = 0;                   // answers cut short because the phone stopped reading
 struct SubT {
   const char* n; uint32_t t;
   SubT(const char* n_) : n(n_), t(millis()) {}
@@ -353,25 +284,25 @@ struct SubT {
 };
 uint32_t lastPoll = 0, pollCount = 0;
 volatile bool stateDirty = true;
-volatile bool liveDirty = false;               // v2.15.38: only report numbers changed (see ssePump)
-volatile bool mqttHeadDirty = true;            // v2.15.38: something besides numbers changed: the cloud head follows
+volatile bool liveDirty = false;               // only report numbers changed (see ssePump)
+volatile bool mqttHeadDirty = true;            // something besides numbers changed: the cloud head follows
 
 // MQTT
 struct MqttCmd { char payload[640]; char topic[96]; };
 esp_mqtt_client_handle_t mqtt = nullptr;
 QueueHandle_t mqttQ = nullptr;
 volatile bool mqttUp = false, mqttFreshConnect = false;
-String nvsId;                                     // v2.15.0: changes only when the saved data is erased
+String nvsId;                                     // changes only when the saved data is erased
 String hubId, tStatus, tInfo, tState, tEvent, tCmd, tAck;
 char mqttClientId[32];
-// v2.9: why the cloud link is down, and who sent the command being handled
+// why the cloud link is down, and who sent the command being handled
 volatile int mqttErrKind = 0, mqttErrCode = 0, mqttErrTls = 0;   // written by the MQTT task
 String mqttErr = "";                                               // "" | no_pass | auth | refused | tls | net
 volatile bool mqttRestartReq = false;
 uint8_t apiSrc = 0;                                                // 0 local HTTP · 1 owner MQTT · 2 shared user
 const uint8_t MAX_USERS = 10;
 HubUser users[MAX_USERS];
-// v2.15.13: hub lock. Owner phones hold a secret key; with no owner the hub stays open as before, so older apps keep
+// hub lock. Owner phones hold a secret key; with no owner the hub stays open as before, so older apps keep
 // working until the owner locks it from the app. A new phone asks for access and the owner approves by picking the
 // number shown on that phone (one of 3), so a stranger on the Wi-Fi can't slip in by accident.
 struct OwnerDev { char key[33]; char email[48]; char model[32]; uint32_t ts; };
@@ -382,8 +313,8 @@ struct PairReq { uint32_t id = 0, at = 0; uint8_t code = 0, ch[3] = {0, 0, 0}, s
                  String email, model, result; };   // state: 0 free · 1 waiting for the owner · 2 approved · 3 refused
 PairReq pairs[MAX_PAIRS];
 uint32_t pairJobId = 0, claimLockUntil = 0, cloudTodoAt = 0;
-const uint32_t CLAIM_WINDOW_MS = 600000;          // v2.15.28: the first owner can claim only in the first 10 min after power-on
-String cloudTodoId, cloudTodoPw;                   // v2.15.14: an approved phone's server login, made in the background
+const uint32_t CLAIM_WINDOW_MS = 600000;          // the first owner can claim only in the first 10 min after power-on
+String cloudTodoId, cloudTodoPw;                   // an approved phone's server login, made in the background
 uint8_t claimFails = 0;
 uint8_t userCount = 0;
 String exUrl, exKey, exSec, exLast;                                // EMQX management API (NVS "sec"), never returned
@@ -392,12 +323,12 @@ String exUrl, exKey, exSec, exLast;                                // EMQX manag
 volatile bool provRequested = false;
 uint32_t provAt = 0;
 String provState = "idle", provMsg = "", provSsid = "", provTarget = "";   // provTarget = last 7 hex of the new strip's MAC
-// v2.14.13: strip firmware (.fwr) kept raw in the spare OTA app slot, served to a strip in setup mode
+// strip firmware (.fwr) kept raw in the spare OTA app slot, served to a strip in setup mode
 bool provOta = false;                  // this provisioning run flashes the strip instead of pointing it at the hub
 uint32_t stripFwSize = 0;              // bytes of the stored .fwr (0 = none), also in NVS "stripfw"/"size"
 const uint32_t STRIP_FW_MAX = 0x60000; // 384 KB; stock .fwr files are ~320 KB
 String stripOtaLog = "";               // last flash run, shown on /stripfw
-bool stripFwOk = false;                // v2.15.8: the stored file passed stripFwCheck
+bool stripFwOk = false;                // the stored file passed stripFwCheck
 String stripFwWhy = "";
 struct SuItem { String mac, from, to, state, msg; };   // state: queued, sending, transfer, rebooting, ok, failed, skipped
 SuItem suList[MAX_STRIPS];
@@ -596,7 +527,7 @@ int firstStrip() {
 }
 int stripFor(const String& mac) { return mac.length() ? findStrip(mac) : firstStrip(); }
 
-// ---------- non-blocking socket writes (v2.11) ----------
+// ---------- non-blocking socket writes ---------
 // WiFiClient::write() waits up to 10 x 1 s for room in the send buffer. A phone that went to sleep with the
 // live page open, or a strip that lost power, never drains it, so every write froze the whole hub for seconds:
 // strips went stale and dropped, keep-on/lock reverts and schedules were late. These writes give up quickly.
@@ -613,7 +544,7 @@ bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   return true;
 }
 bool sendStr(WiFiClient& c, const String& s, uint32_t maxMs) { return sendNB(c, s.c_str(), s.length(), maxMs); }
-// v2.15.2: like sendNB but reports how much went out (-1 = the socket is broken), so the rest can wait
+// like sendNB but reports how much went out (-1 = the socket is broken), so the rest can wait
 int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   int fd = c.fd();
   if (fd < 0 || !c.connected()) return -1;
@@ -643,7 +574,7 @@ void tcpKeepAlive(WiFiClient& c) {
   lwip_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
 }
 
-// v2.15.2: a send that is slow for a moment (hub busy, Wi-Fi retry, low memory) no longer drops the strip.
+// a send that is slow for a moment (hub busy, Wi-Fi retry, low memory) no longer drops the strip.
 // What did not go out waits in txq and is sent from pumpStrips(); the strip is dropped only if it stays
 // stuck for TX_STUCK_MS or the backlog grows past TX_MAX. The bytes on the wire are unchanged.
 const uint32_t TX_STUCK_MS = 3000;
@@ -675,11 +606,11 @@ void sendLine(Strip& s, const String& line) {
   Serial.printf("[tx %s] %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), line.c_str());
 }
 
-// v2.15.25: like sendLine, but the serial log shows only the network name, never the password
-// v2.15.27: F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
+// like sendLine, but the serial log shows only the network name, never the password
+// F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
 void sendChildLock(Strip& s) {
   if (s.fw.indexOf("F1.0.82") < 0) return;
-  // v2.15.29: the strip-level lock locks EVERY button on the strip (master + 4 outlets); the per-outlet locks stay saved
+  // the strip-level lock locks EVERY button on the strip (master + 4 outlets); the per-outlet locks stay saved
   // and come back when it is turned off
   sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));
 }
@@ -718,7 +649,7 @@ int typeBit(const String& t) { for (int i = 0; i < EV_COUNT; i++) if (t == EV_TY
 void queueNotify(const String& type, const String& mac, int outlet, const String& msg) {
   if (!ntfyTopic.length()) return;
   int bit = typeBit(type);
-  // v2.15.9: a safety cut always reaches the phone. These types have no switch in the app, and an old app could save
+  // a safety cut always reaches the phone. These types have no switch in the app, and an old app could save
   // notifyTypes without their bits, so they were never sent.
   bool safety = type == "overvolt" || type == "undervolt" || type == "overcurrent" || type == "overload" || type == "trip_fail" || type == "pair";
   if (!safety && type != "test" && (bit < 0 || !(notifyTypes & (1UL << bit)))) return;
@@ -754,7 +685,7 @@ String noteTitle(const Note& n) {
   return who.length() ? String(t) + " | " + who : String(t);
 }
 
-// v2.11: the HTTPS call runs in its own task. On the loop it froze switching for 1-3 s per notification,
+// the HTTPS call runs in its own task. On the loop it froze switching for 1-3 s per notification,
 // and up to 2 minutes when the internet was slow (no handshake timeout).
 QueueHandle_t noteQ = nullptr;
 static void noteTask(void*) {
@@ -806,12 +737,12 @@ void sendNotes() {
   xQueueSend(noteQ, &m, 0);
 }
 
-// v2.15.4: an event made while the cloud link is down (Wi-Fi blip, MQTT reconnecting) used to be lost, so the phone
+// an event made while the cloud link is down (Wi-Fi blip, MQTT reconnecting) used to be lost, so the phone
 // never got its notification although the app's log showed it. It now waits here and goes out on reconnect.
 const uint8_t EV_OUTBOX = 12;
 String evOutJ[EV_OUTBOX], evOutMac[EV_OUTBOX];
 uint8_t evOutN = 0;
-// v2.15.13: access requests are the owner's business only, not shown to family members
+// access requests are the owner's business only, not shown to family members
 bool ownerOnlyEvent(const String& j) { return j.indexOf("\"type\":\"pair") >= 0 || j.indexOf("\"type\":\"owner\"") >= 0; }
 void publishEvent(const String& j, const String& mac) {
   mqttPub(tEvent, j, 1, false);
@@ -851,7 +782,7 @@ void saveLocks(Strip& s) {
   cfg.putUChar(("l" + s.mac).c_str(), s.lockMask);
   cfg.putUChar(("s" + s.mac).c_str(), s.lockState);
 }
-// v2.15.7: the energy/peak history (~2.4 KB per strip, rewritten every few minutes) lives in files on the unused
+// the energy/peak history (~2.4 KB per strip, rewritten every few minutes) lives in files on the unused
 // SPIFFS partition (LittleFS), not in NVS: it filled NVS (500/630 entries) and saves started to fail.
 bool fsOk = false;
 bool fileSave(const String& path, const void* d, size_t n) {
@@ -887,7 +818,7 @@ bool loadBlob(const String& key, void* d, size_t n) {
   if (fileSave("/" + key, d, n)) cfg.remove(key.c_str());
   return true;
 }
-// v2.15.38: full log in a temporary buffer (caller hands it to elogPut or deletes it). null = no memory right now, or the
+// full log in a temporary buffer (caller hands it to elogPut or deletes it). null = no memory right now, or the
 // file is there but could not be read (never overwritten then). The running day in RAM wins over the file.
 ELog* elogGet(int i) {
   ELog* el = new (std::nothrow) ELog();
@@ -995,7 +926,7 @@ void peakUpdate(int i, float watts) {
   }
 }
 
-// v2.15.8: a save that NVS refused (full) shows up in the event log instead of vanishing (once a minute per item)
+// a save that NVS refused (full) shows up in the event log instead of vanishing (once a minute per item)
 void saveFailed(const char* what) {
   static uint32_t lastAt = 0;
   static String lastWhat;
@@ -1007,8 +938,8 @@ void saveFailed(const char* what) {
 void saveScheds() {
   cfg.putUChar("schN", schedCount);
   if (!cfg.putBytes("sch", scheds, sizeof(Sched) * MAX_SCHED)) saveFailed("schedules");
-  stateDirty = true;   // v2.15.2: badges follow at once
-}   // v2.15.2: badges follow at once
+  stateDirty = true;   // badges follow at once
+}   // badges follow at once
 void saveSkips() { cfg.putBytes("schsk", schedSkip, sizeof(schedSkip)); }
 bool schedSkipped(uint32_t id) { for (int i = 0; i < MAX_SCHED; i++) if (id && schedSkip[i] == id) return true; return false; }
 void setSchedSkip(uint32_t id, bool on) {
@@ -1043,11 +974,11 @@ void loadGlobals() {
   if (cfg.getBytesLength("aut") == sizeof(Autom) * MAX_AUTO) {
     cfg.getBytes("aut", autos, sizeof(Autom) * MAX_AUTO);
     autoCount = min((int)cfg.getUChar("autN", 0), (int)MAX_AUTO);
-  } else if (cfg.getBytesLength("aut") == sizeof(Autom) * OLD_MAX_AUTO) {   // v2.15.22 raised the cap 10 -> 40
+  } else if (cfg.getBytesLength("aut") == sizeof(Autom) * OLD_MAX_AUTO) {   // raised the cap 10 -> 40
     cfg.getBytes("aut", autos, sizeof(Autom) * OLD_MAX_AUTO);
     autoCount = min((int)cfg.getUChar("autN", 0), (int)OLD_MAX_AUTO);
     saveAutos();
-  } else if (cfg.getBytesLength("aut") == sizeof(AutomV2) * OLD_MAX_AUTO) {   // migrate rules saved by v2.0 .. v2.2
+  } else if (cfg.getBytesLength("aut") == sizeof(AutomV2) * OLD_MAX_AUTO) {   // migrate rules saved by ..
     static AutomV2 old[OLD_MAX_AUTO];
     cfg.getBytes("aut", old, sizeof(old));
     autoCount = min((int)cfg.getUChar("autN", 0), (int)OLD_MAX_AUTO);
@@ -1068,7 +999,7 @@ const int MAX_KNOWN = 16;
 Known known[MAX_KNOWN];
 int knownCount = 0;
 
-// v2.14.1: a rule or schedule must point at a strip the hub has seen (online now or remembered)
+// a rule or schedule must point at a strip the hub has seen (online now or remembered)
 bool macKnown(String m) {
   m.toUpperCase();
   if (m.length() != 12) return false;
@@ -1161,7 +1092,7 @@ void dropStrip(Strip& s, const char* why) {
     s = Strip();
     stateDirty = true;
     linkDrop(mac);
-    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send, v2.15.2)
+    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send,
     return;
   }
   { SubT st("sock_close"); s.c.stop(); }
@@ -1188,7 +1119,7 @@ bool keepSkip(Strip& s, int ch, bool on, bool force) {
   return false;
 }
 
-// v2.15.23 fix: a master "all on/off" (outlet == 0) used to also re-command a child-locked outlet, which raced
+// fix: a master "all on/off" (outlet == 0) used to also re-command a child-locked outlet, which raced
 // with the "keep a locked outlet where it belongs" resend (the lock enforcement loop) and could stall or confuse
 // the whole batch for the strip, so the other (free) outlets did not respond properly either. A direct command to
 // that one outlet (outlet == ch, from its own tile) still goes through — only the whole-strip master command skips
@@ -1208,7 +1139,7 @@ void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
 }
 void sendOnOff(Strip& s, int outlet, bool on) { sendOnOffF(s, outlet, on, false); }
 
-// v2.15.9 safety cut: switch the outlet off and keep checking the strip's next reports. If it still says "on", send
+// safety cut: switch the outlet off and keep checking the strip's next reports. If it still says "on", send
 // the off again (up to 4 more times), then raise "trip_fail" so the user knows the cut did not take.
 void protectCut(Strip& s, int k) {
   sendOnOffF(s, k + 1, false, true);
@@ -1295,11 +1226,11 @@ void energyUpdate(int i) {
 }
 
 
-// v2.10 over-voltage + v2.11 under-voltage protection for the whole strip
+// over-voltage + under-voltage protection for the whole strip
 void voltCheck(Strip& s) {
   if (isnan(s.voltage)) return;
   uint32_t now = millis();
-  // over-voltage is always enforced (v2.14); vProt only switches the under-voltage cut
+  // over-voltage is always enforced ; vProt only switches the under-voltage cut
   bool underOn = vProt && vMin > 0;
   bool badV = s.voltage > vMax || (underOn && s.voltage < vMin);
   if (badV) {
@@ -1342,8 +1273,8 @@ void evalStrip(int i) {
     total += o.on ? o.powerW : 0;
     float oAmps = o.on ? (o.powerW / volts) : 0;
 
-    // over-temperature protection & near-limit warning (v2.11)
-    // v2.15.9: 10 °C past the limit cuts on the first reading instead of waiting 30 s
+    // over-temperature protection & near-limit warning
+    // 10 °C past the limit cuts on the first reading instead of waiting 30 s
     if (tempProtect && o.on && o.tempC >= tempMax) {
       if (!s.hotSince[k]) s.hotSince[k] = now ? now : 1;
       if (o.tempC >= tempMax + 10 || now - s.hotSince[k] > 30000) {
@@ -1359,12 +1290,12 @@ void evalStrip(int i) {
       if (!(s.warnT & (1 << k))) { s.warnT |= (1 << k); addEvent("warn", s.mac, k + 1, String(o.tempC) + "°C (near " + String(tempMax) + "°C)"); }
     } else if (!o.on || o.tempC < tempMax - 8) s.warnT &= ~(1 << k);
 
-    // v2.11 per-outlet current limit (ampX2 in 0.5 A steps) & near-limit warning
+    // per-outlet current limit (ampX2 in 0.5 A steps) & near-limit warning
     float oMaxA = s.ampX2[k] ? (s.ampX2[k] * 0.5f) : 0;
     if (oMaxA > 0 && o.on) {
       if (oAmps >= oMaxA) {
         if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
-        if (oAmps >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // v2.15.9: 25 % over cuts at once
+        if (oAmps >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // 25 % over cuts at once
           protectCut(s, k);
           addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
           s.ocoSince[k] = 0;
@@ -1386,18 +1317,18 @@ void evalStrip(int i) {
     }
   }
 
-  // v2.10 over-current on the whole strip
+  // over-current on the whole strip
   float amps = total / volts;
   if (aProt && amps > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
-    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // v2.15.9: 15 % over cuts at once
+    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // 15 % over cuts at once
       for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) protectCut(s, k);
       addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
       s.ocSince = 0;
     }
   } else s.ocSince = 0;
 
-  // v2.15.9 strip load limit: one strip never carries more than 3500 W (the stock firmware only warns at 3000 W and
+  // strip load limit: one strip never carries more than 3500 W (the stock firmware only warns at 3000 W and
   // cuts at 16 A). After 3 s over (at once when 15 % over), the biggest unprotected loads go first until the rest
   // fits; protected outlets are cut only if they alone keep the strip over the limit.
   if (total > STRIP_MAX_W) {
@@ -1426,7 +1357,7 @@ void evalStrip(int i) {
   bool anyOn = false;
   for (int k = 0; k < 4; k++) { hottest = max(hottest, s.o[k].tempC); anyOn |= s.o[k].on; }
 
-  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A (v2.11)
+  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A
   for (int a = 0; a < autoCount; a++) {
     Autom& r = autos[a];
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
@@ -1435,7 +1366,7 @@ void evalStrip(int i) {
     if (r.outlet == 0) { pw = total; tc = hottest; cur = amps; on = anyOn; }
     else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = o.on ? (o.powerW / volts) : 0; on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
-    // v2.15.0: a rule is armed from the moment it is saved (and after every reboot), so a load that is already
+    // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
     // Before, it only armed after the load crossed back first: a heater already above, or an outlet already in
     // standby, never tripped, and every hub reboot (firmware update) disarmed all rules.
@@ -1444,7 +1375,7 @@ void evalStrip(int i) {
     else clear = r.above ? p < r.watts : p > r.watts;
     if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
     bool cond = autoArmed[a];
-    // near-threshold warning (color-code alert) before the countdown trips (v2.11)
+    // near-threshold warning (color-code alert) before the countdown trips
     if (r.above && autoArmed[a] && on && !autoWarned[a]) {
       float warnAt = r.watts * 0.85f;
       if (r.metric == 1) warnAt = max(r.watts - 5.0f, 40.0f);
@@ -1534,7 +1465,7 @@ bool tryParseInfo(int i) {
   energyUpdate(i);
   peakUpdate(i, total);
   evalStrip(i);
-  liveDirty = true;                              // v2.15.38: numbers only; anything else that changed sets stateDirty itself
+  liveDirty = true;                              // numbers only; anything else that changed sets stateDirty itself
   return true;
 }
 
@@ -1589,7 +1520,7 @@ void handleLine(int i, const String& line) {
     }
     return;
   }
-  if (line.indexOf("connect_ok") >= 0) {          // v2.15.25: reply to a Wi-Fi handover sent on the normal link
+  if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover sent on the normal link
     s.connOk = true;
     addEvent("wifipush", s.mac, 0, "connect_ok");
     return;
@@ -1624,7 +1555,7 @@ void handleLine(int i, const String& line) {
       stateDirty = true;
     }
   } else if (isEvent && ch == 0) {
-    // v2.15.24: the strip's own master button turns everything off while any outlet is on. With a child-locked outlet
+    // the strip's own master button turns everything off while any outlet is on. With a child-locked outlet
     // left on, every press meant "all off": the hub put the locked one back and the free ones (already off) never came
     // on. So a press that switched off while every free outlet was already off is taken as "turn the free ones on".
     uint8_t freeM = 0x0F & ~s.lockMask;
@@ -1839,7 +1770,7 @@ void tickSchedules() {
     if (!c.enabled || c.hh != t.tm_hour || c.mm != t.tm_min) continue;
     bool match = c.days ? (c.days & (1 << t.tm_wday)) : (c.date == today);
     if (!match) continue;
-    if (schedSkipped(c.id)) {                      // v2.15.0: skipped once, runs again next time
+    if (schedSkipped(c.id)) {                      // skipped once, runs again next time
       setSchedSkip(c.id, false);
       addEvent("skipped", c.mac, c.outlet, String(c.label));
       if (!c.days) { c.enabled = 0; save = true; }
@@ -1915,7 +1846,7 @@ String timersJson() {
   return j + "]";
 }
 
-// v2.15.36: room for the devices part of the state, so it is reserved once instead of growing piece by piece
+// room for the devices part of the state, so it is reserved once instead of growing piece by piece
 // (each growth can need the old and the new copy at once). A low guess only means one more growth later.
 uint32_t stateDevicesBytes(const HubUser* u) {
   uint32_t n = 0;
@@ -1926,7 +1857,7 @@ uint32_t stateDevicesBytes(const HubUser* u) {
   return n;
 }
 
-// v2.15.38: everything in the owner's state up to the strips ("devices":[ included)
+// everything in the owner's state up to the strips ("devices":[ included)
 String stateHeadJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
              "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
@@ -1945,7 +1876,7 @@ String stateHeadJson() {
              ",\"timers\":" + timersJson() + ",\"devices\":[";
   return j;
 }
-// v2.15.38: the state goes out piece by piece (head, then one strip at a time, then "]}") to whatever "put" sends it to.
+// the state goes out piece by piece (head, then one strip at a time, then "]}") to whatever "put" sends it to.
 // With 10 strips the whole state in one String is ~13 KB, more than the hub often has free in one block; this way the
 // biggest piece is the head or one strip. put returns false to stop (send failed); an empty piece also stops (no memory).
 bool stateStream(const HubUser* u, const std::function<bool(const String&)>& put) {
@@ -1990,7 +1921,7 @@ String autoJson(const Autom& r) {
          ",\"watts\":" + String(r.watts, 1) + ",\"hold_s\":" + String(r.holdS) + ",\"act\":" + String(r.act) +
          ",\"enabled\":" + (r.enabled ? "true" : "false") + ",\"metric\":" + String(r.metric) + ",\"limit2\":" + String(r.limit2, 0) + ",\"label\":\"" + jsonEsc(String(r.label)) + "\"}";
 }
-// ---------- v2.15.10 link history per strip (the app's "network & connection" card) ----------
+// ---------- link history per strip (the app's "network & connection" card) ----------
 // Per strip and per day (7 days): seconds the hub was on Wi-Fi, seconds the strip was connected in that time, drops,
 // the longest drop, and the lowest/average RSSI. Drops while the hub itself is off Wi-Fi are not counted: that is the
 // hub's link, not the strip's. Kept in RAM and written to /links every 10 minutes.
@@ -2153,7 +2084,7 @@ String energyJson(int i) {                        // "" = not enough memory righ
 }
 
 
-// ---------- v2.9 shared users ----------
+// ---------- shared users ----------
 ApiRes api(String path, const String& b);
 ApiRes okRes(const String& data);
 ApiRes okRes();
@@ -2163,12 +2094,12 @@ const uint32_t USERS_MAGIC = 0x55535231;
 // one buffer for loading and saving the users blob (both run on the main loop only)
 union UsersBuf { UsersNV v2; UsersNVV1 v1; };
 static UsersBuf usersBuf;
-const uint32_t USERS_MAGIC2 = 0x55535232;          // v2.15.38 layout: 10 strips per member
+const uint32_t USERS_MAGIC2 = 0x55535232;          // layout: 10 strips per member
 void loadUsers() {
   Preferences up; up.begin("users", true);
   UsersBuf& b = usersBuf;
   memset(&b, 0, sizeof b);
-  // v2.15.38 saves to "list2" and leaves the old "list" as it was, so going back to an older firmware keeps its members
+  // saves to "list2" and leaves the old "list" as it was, so going back to an older firmware keeps its members
   size_t len = up.getBytesLength("list2");
   if (len == sizeof(UsersNV)) up.getBytes("list2", &b, len);
   else if ((len = up.getBytesLength("list")) == sizeof(UsersNVV1)) up.getBytes("list", &b, len);
@@ -2176,7 +2107,7 @@ void loadUsers() {
   userCount = 0;
   if (len == sizeof(UsersNV) && b.v2.magic == USERS_MAGIC2) {
     for (int i = 0; i < b.v2.count && i < MAX_USERS; i++) if (b.v2.u[i].id[0]) users[userCount++] = b.v2.u[i];
-  } else if (len == sizeof(UsersNVV1) && b.v1.magic == USERS_MAGIC) {    // saved by v2.15: same fields, 6 strips
+  } else if (len == sizeof(UsersNVV1) && b.v1.magic == USERS_MAGIC) {    // saved by same fields, 6 strips
     for (int i = 0; i < b.v1.count && i < MAX_USERS; i++) {
       const HubUserV1& o = b.v1.u[i];
       if (!o.id[0]) continue;
@@ -2218,7 +2149,7 @@ void parseStrips(HubUser& u, const String& list) {
     if (p.length() == 12 && isHex(p) && u.n < USER_STRIPS) strlcpy(u.strips[u.n++], p.c_str(), 13);
   }
 }
-// v2.15.26: each member's Google email and photo link, kept apart from the users blob so its layout stays the same
+// each member's Google email and photo link, kept apart from the users blob so its layout stays the same
 String profGet(const char* id, char k) {
   Preferences pp; pp.begin("uprof", true);
   String v = pp.getString((String(k) + id).c_str(), "");
@@ -2238,7 +2169,7 @@ String userJson(const HubUser& u) {
   return j + "]}";
 }
 
-// ---------- v2.15.13 hub lock ----------
+// ---------- hub lock ----------
 void loadOwners() {
   Preferences ap; ap.begin("auth", true);
   size_t n = ap.getBytesLength("owners");
@@ -2482,10 +2413,10 @@ void exCollect() {
       users[userCount++] = j.u;
       saveUsers();
       publishUserState(j.u);
-      pubMarksReset();                           // v2.15.38: the new member gets its strips too
+      pubMarksReset();                           // the new member gets its strips too
       String code = inviteCode(j.u, j.pw);
       j.data = "{\"code\":\"" + code + "\",\"user\":" + userJson(j.u) + "}";
-      int pi = pairJobId ? pairFind(pairJobId) : -1;   // v2.15.13: an approved phone gets its invite on its next poll
+      int pi = pairJobId ? pairFind(pairJobId) : -1;   // an approved phone gets its invite on its next poll
       if (pi >= 0) { pairs[pi].result = "\"code\":\"" + code + "\""; pairs[pi].state = 2; pairs[pi].job = false; pairs[pi].at = millis(); }
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) ? j.c2 : j.c1);
     if (pairJobId) { int pi = pairFind(pairJobId); if (pi >= 0 && pairs[pi].job) { pairs[pi].state = 3; pairs[pi].job = false; pairs[pi].at = millis(); } }
@@ -2499,7 +2430,7 @@ void exCollect() {
       clearUserStrips(j.u, true);
       if (i >= 0) { for (int k = i; k < userCount - 1; k++) users[k] = users[k + 1]; userCount--; saveUsers(); }
     } else j.err = "emqx " + exCodeText(http2xx(j.c1) || j.c1 == 404 ? j.c2 : j.c1);
-  } else if (j.kind == 4) {                      // v2.15.14: server login for a phone that is already in
+  } else if (j.kind == 4) {                      // server login for a phone that is already in
     j.ok = http2xx(j.c1) && http2xx(j.c2);
     if (j.ok && cloudTodoId == j.u.id) { cloudTodoId = ""; cloudTodoPw = ""; }
     else cloudTodoAt = millis();                 // try again later
@@ -2514,7 +2445,7 @@ void exCollect() {
   stateDirty = true;
 }
 
-// v2.15.14: makes the server login of an approved phone when the server worker is free (every 10 min on failure)
+// makes the server login of an approved phone when the server worker is free (every 10 min on failure)
 void cloudTodoPump() {
   if (!cloudTodoId.length() || exJob.state == 1 || tlsBusy || !emqxReady()) return;
   if (cloudTodoAt && millis() - cloudTodoAt < 600000UL) return;
@@ -2543,7 +2474,7 @@ int needRole(const String& p) {
   if (p == "wifi" || p == "strip_wifi_test" || p == "reboot") return 2;
   return -1;
 }
-// v2.15.26: the extra permission that lets a lower role do an admin action anyway (0 = none)
+// the extra permission that lets a lower role do an admin action anyway (0 = none)
 uint8_t grantFor(const String& p) {
   if (p == "automation_save" || p == "automation_delete") return P_AUTO;
   if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit") return P_PROT;
@@ -2576,7 +2507,7 @@ String actionMac(const String& p, const String& b) {
   }
   return jsonValue(b, "mac");
 }
-// v2.15.38: a member's state up to its strips ("devices":[ included); the strips follow through stateStream
+// a member's state up to its strips ("devices":[ included); the strips follow through stateStream
 String userStateHeadJson(const HubUser& u) {
   String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
              ",\"lip\":\"" + WiFi.localIP().toString() + "\",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
@@ -2632,7 +2563,7 @@ ApiRes userApi(const HubUser& u, String path, const String& b) {
   if (need < 0 || (u.role < need && !(g && (u.rsv & g)))) return errRes("forbidden");
   ApiRes r;
   if (userList(u, path, r)) return r;
-  if (path == "profile") {                        // v2.15.26 {"email","photo"}: a member's own Google email and photo
+  if (path == "profile") {                        // {"email","photo"}: a member's own Google email and photo
     String e = jsonValue(b, "email"), ph = jsonValue(b, "photo");
     if (e.length() > 64 || ph.length() > 300 || (ph.length() && !ph.startsWith("https://"))) return errRes("bad profile");
     profSet(u.id, 'e', e);
@@ -2648,7 +2579,7 @@ ApiRes userApi(const HubUser& u, String path, const String& b) {
     return ar;
   }
   String m = actionMac(path, b);
-  // v2.15.26: control members switch outlets but not overload-protected ones, unless allowed to change protections
+  // control members switch outlets but not overload-protected ones, unless allowed to change protections
   if (path == "onoff" && u.role < 2 && !(u.rsv & P_PROT)) {
     int si = findStrip(m);
     int o = jsonValue(b, "outlet").toInt();
@@ -2701,7 +2632,7 @@ ApiRes api(String path, const String& b) {
       if (label.length()) cfg.putString(key.c_str(), label); else cfg.remove(key.c_str());
       if (outlet == 0) s.label = label; else s.olabel[outlet - 1] = label;
     } else {
-      if (path == "lock" && outlet == 0) {         // v2.15.27 strip-level child lock: blocks the strip's physical master button
+      if (path == "lock" && outlet == 0) {         // strip-level child lock: blocks the strip's physical master button
         s.masterLock = jsonBool(b, "locked");
         cfg.putUChar(("ml" + s.mac).c_str(), s.masterLock ? 1 : 0);
         sendChildLock(s);
@@ -2739,7 +2670,7 @@ ApiRes api(String path, const String& b) {
     stateDirty = true;
     return okRes();
   }
-  // ---- v2.9: cloud password + shared users (owner only) ----
+  // ---- cloud password + shared users (owner only) ----
   if (path == "cloud") {                          // {"host","user","pass"} local network only
     if (apiSrc != 0) return errRes("local_only");
     bool changed = false;
@@ -2834,11 +2765,11 @@ ApiRes api(String path, const String& b) {
     users[i] = u;
     saveUsers();
     publishUserState(u);
-    clearUserStrips(u, false);                   // v2.15.38: strips taken away can no longer be read
+    clearUserStrips(u, false);                   // strips taken away can no longer be read
     pubMarksReset();                             // and strips given are sent
     return okRes();
   }
-  if (path == "users_export") {                   // v2.15.0: family members with their passwords, for the owner's backup
+  if (path == "users_export") {                   // family members with their passwords, for the owner's backup
     if (apiSrc == 2) return errRes("forbidden");
     String j = "{\"users\":[";
     for (int i = 0; i < userCount; i++) {
@@ -2848,7 +2779,7 @@ ApiRes api(String path, const String& b) {
     }
     return okRes(j + "]}");
   }
-  if (path == "user_restore") {                   // v2.15.0: {"id","name","role","all","strips","pw"} puts a backed-up member back
+  if (path == "user_restore") {                   // {"id","name","role","all","strips","pw"} puts a backed-up member back
     if (apiSrc == 2) return errRes("forbidden");  // (the cloud login stays on the server, so the member's phone keeps working)
     String id = jsonValue(b, "id"), pw = jsonValue(b, "pw"), nm = jsonValue(b, "name");
     nm.trim();
@@ -2904,7 +2835,7 @@ ApiRes api(String path, const String& b) {
     exJob.data = "";
     return okRes(d);
   }
-  if (path == "pair_answer") {                    // v2.15.13 {"id","pick","role"}: role -1 refuses; a wrong pick refuses too
+  if (path == "pair_answer") {                    // {"id","pick","role"}: role -1 refuses; a wrong pick refuses too
     if (apiSrc == 2) return errRes("forbidden");
     pairsExpire();
     int i = pairFind((uint32_t)strtoul(jsonValue(b, "id").c_str(), nullptr, 10));
@@ -2928,21 +2859,21 @@ ApiRes api(String path, const String& b) {
     u.all = 1;
     do { snprintf(u.id, sizeof u.id, "u%06lx", (unsigned long)(esp_random() & 0xFFFFFF)); } while (findUser(u.id) >= 0);
     addEvent("pair_ok", "", 0, p.email);
-    // v2.15.14: the phone gets in at once (2.15.13 waited for the server login and answered "busy" when that worker
+    // the phone gets in at once waited for the server login and answered "busy" when that worker
     // was taken); its server login for use away from home is made right after, in the background
     String pw = randText(18);
     strlcpy(u.pw, pw.c_str(), sizeof u.pw);
     if (emqxReady()) { cloudTodoId = u.id; cloudTodoPw = pw; cloudTodoAt = 0; }
     users[userCount++] = u;
     saveUsers();
-    profSet(u.id, 'e', p.email);                  // v2.15.26: the family page shows each member's email
+    profSet(u.id, 'e', p.email);                  // the family page shows each member's email
     publishUserState(u);
     pubMarksReset();
     p.result = "\"code\":\"" + inviteCode(u, pw) + "\"";
     p.state = 2; p.at = millis();
     return okRes();
   }
-  if (path == "owner_remove") {                   // v2.15.13 {"email"}: takes an owner phone off; with none left the hub is open again
+  if (path == "owner_remove") {                   // {"email"}: takes an owner phone off; with none left the hub is open again
     if (apiSrc != 0) return errRes("local_only");
     int i = ownerByEmail(cleanEmail(jsonValue(b, "email")));
     if (i < 0) return errRes("no such phone");
@@ -2959,7 +2890,7 @@ ApiRes api(String path, const String& b) {
     return okRes();
   }
 
-  if (path == "ota_pass") {                       // v2.15.27 {"cur","new"}: owner only. cur = fisha-<MAC> or the current own password; new "" = back to the default
+  if (path == "ota_pass") {                       // {"cur","new"}: owner only. cur = fisha-<MAC> or the current own password; new "" = back to the default
     if (apiSrc == 2) return errRes("forbidden");
     String cur = jsonValue(b, "cur"), nw = jsonValue(b, "new");
     String d = defOta();
@@ -2974,7 +2905,7 @@ ApiRes api(String path, const String& b) {
     addEvent("owner", "", 0, "update password changed");
     return okRes();
   }
-  if (path == "strip_wifi_test") {                // v2.15.25 {"mac"}: hand the CURRENT network to one strip on its normal link
+  if (path == "strip_wifi_test") {                // {"mac"}: hand the CURRENT network to one strip on its normal link
     String m = jsonValue(b, "mac"); m.toUpperCase();   // (safe: it rejoins the same Wi-Fi); a connect_ok reply proves handover works
     int k = findStrip(m);
     if (k < 0) return errRes("strip not connected");
@@ -3086,7 +3017,7 @@ ApiRes api(String path, const String& b) {
     saveScheds();
     return okRes("{\"sid\":" + String(c.id) + "}");
   }
-  if (path == "schedule_skip") {                 // v2.15.0: {"sid","skip":true|false} skip only the next run
+  if (path == "schedule_skip") {                 // {"sid","skip":true|false} skip only the next run
     uint32_t id = (uint32_t)jsonValue(b, "sid").toInt();
     for (int i = 0; i < schedCount; i++) {
       if (scheds[i].id != id) continue;
@@ -3161,7 +3092,7 @@ ApiRes api(String path, const String& b) {
     return errRes("no such automation");
   }
   if (path == "events") return okRes(eventsJson());
-  if (path == "link") {                            // v2.15.10 link history of one strip (?mac= or "mac" in the body)
+  if (path == "link") {                            // link history of one strip (?mac= or "mac" in the body)
     String m = mac; m.toUpperCase();
     if (m.length() != 12) return errRes("mac required");
     return okRes(linkJson(m));
@@ -3173,7 +3104,7 @@ ApiRes api(String path, const String& b) {
     if (!ej.length()) return errRes("busy, try again");
     return okRes(ej);
   }
-  if (path == "energy_restore") {                // v2.15.27 owner only {"mac","d":"yyyymmdd:w0:w1:w2:w3:peak;..."}: put saved daily history back
+  if (path == "energy_restore") {                // owner only {"mac","d":"yyyymmdd:w0:w1:w2:w3:peak;..."}: put saved daily history back
     if (apiSrc == 2) return errRes("forbidden");
     int idx = stripFor(mac);
     if (idx < 0) return errRes("device offline");
@@ -3297,7 +3228,7 @@ bool authorized() {
     }
   }
 
-  // 2. Owner check. v2.15.13: once the hub is locked only an owner phone's key (or, in a browser, admin + the update
+  // 2. Owner check. once the hub is locked only an owner phone's key (or, in a browser, admin + the update
   // password) gets in; before that it stays open as it always was.
   if (ownerCount) {
     if (isOwnerKey(tok)) return true;
@@ -3318,7 +3249,7 @@ bool guard() {
   return false;
 }
 
-// v2.15.16: the state goes out without blocking. A phone that stops reading (screen off, app paused) could hold
+// the state goes out without blocking. A phone that stops reading (screen off, app paused) could hold
 // the whole hub inside the web send for seconds, and every strip was then dropped as "socket stuck".
 void webJsonNB(const String& body) {
   NetworkClient& c = web.client();
@@ -3328,7 +3259,7 @@ void webJsonNB(const String& body) {
   if (!sendStr(c, h, 300) || !sendStr(c, body, 1500)) { webSlow++; c.stop(); }
 }
 void stateBadDiag(uint32_t gotLen);
-// v2.15.38: streamed piece by piece (see stateStream), so no Content-Length: the body ends when the hub closes the link
+// streamed piece by piece (see stateStream), so no Content-Length: the body ends when the hub closes the link
 void handleState() {
   if (!guard()) return;
   const HubUser* u = (apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount) ? &users[apiUserIdx] : nullptr;
@@ -3347,7 +3278,7 @@ extern char stateBadBuf[];
 extern volatile uint32_t allocFailN, allocFailAt, allocFailSize, allocFailCaps, allocFailFree, allocFailLargest, allocFailMaxSize;
 extern const char* volatile allocFailFn;
 extern const char* volatile allocFailTask;
-// v2.15.6: how full the settings storage is (a full NVS silently loses saves)
+// how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
   if (nvs_get_stats(NULL, &st) != ESP_OK) return "";
@@ -3369,7 +3300,7 @@ void handleHealth() {
            ",\"alloc_fail_size\":" + String(allocFailSize) + ",\"alloc_fail_max_size\":" + String(allocFailMaxSize) +
            ",\"alloc_fail_caps\":\"" + String(allocFailCaps, HEX) + "\",\"alloc_fail_free\":" + String(allocFailFree) +
            ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\",\"alloc_fail_task\":\"" + String((const char*)allocFailTask) + "\"" +
-           // v2.15.36: "heap"/"max_alloc"/"heap_min" count IRAM too, which Strings and network buffers can't use; these are the real numbers
+           // "heap"/"max_alloc"/"heap_min" count IRAM too, which Strings and network buffers can't use; these are the real numbers
            ",\"max_strips\":" + String(MAX_STRIPS) + ",\"sockets\":" + String(CONFIG_LWIP_MAX_SOCKETS) +
            ",\"heap8\":" + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + ",\"heap8_max\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)) +
            ",\"heap8_min\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)) +
@@ -3409,7 +3340,7 @@ void handleOther() {
   web.send(404, "application/json", "{\"ok\":false,\"error\":\"not found\"}");
 }
 
-// v2.15.21: the built-in browser page and the web-app launcher are gone; the Fisha app is the only client.
+// the built-in browser page and the web-app launcher are gone; the Fisha app is the only client.
 // "/" answers with one plain line (no data), so a browser pointed at the hub's IP still gets a sane reply.
 void handleRoot() { web.send(200, "text/plain; charset=utf-8", "Fisha Hub v" + String(FW_VERSION) + " - open the Fisha app"); }
 
@@ -3424,7 +3355,7 @@ bool otaPassOk() {
 }
 bool otaAuth() {
   if (otaPassOk()) return true;
-  // v2.15.26: admins and members allowed to update the hub use their phone key instead of the update password
+  // admins and members allowed to update the hub use their phone key instead of the update password
   return authorized() && apiSrc == 2 && apiUserIdx >= 0 && apiUserIdx < userCount &&
          (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_HUBFW));
 }
@@ -3457,7 +3388,7 @@ void handleUpdateUpload() {
   }
 }
 
-// ---------- v2.14.13: strip firmware flashing (/stripfw) ----------
+// ---------- strip firmware flashing (/stripfw) ----------
 uint32_t stripFwWritten = 0;
 bool stripFwErr = false;
 void handleStripFwPage() {
@@ -3474,7 +3405,7 @@ void handleStripFwPage() {
              "<button style='padding:10px 16px'>2) Flash</button></form>"
              "<p>State: <b>" + provState + "</b> " + provMsg + "</p><pre style='white-space:pre-wrap'>" + stripOtaLog + "</pre>"
              + String((provState == "running" || provState == "queued" || suRunning()) ? "<script>setTimeout(()=>location.reload(),5000)</script>" : "");
-  // v2.15.8: connected strips, updated over their normal connection (no button press)
+  // connected strips, updated over their normal connection (no button press)
   h += "<hr><h4>Update connected strips</h4><form method=POST action=/stripfw/live>"
        "<label><input type=checkbox onclick=\"for(const c of document.querySelectorAll('.sm'))c.checked=this.checked\"> <b>Select all</b></label><br>";
   for (int i = 0; i < MAX_STRIPS; i++) {
@@ -3490,7 +3421,7 @@ void handleStripFwPage() {
   h += "</pre></body>";
   web.send(200, "text/html; charset=utf-8", h);
 }
-// v2.15.8: an MTTL-W01 .fwr is a 16-byte plain header (body length, load address 0x10006000) and a body XOR'd
+// an MTTL-W01 .fwr is a 16-byte plain header (body length, load address 0x10006000) and a body XOR'd
 // with a 16-byte key (the padding rows give it away); the last 4 decoded bytes are the sum of everything before.
 bool stripFwCheck(uint32_t size, String& why) {
   const esp_partition_t* part = stripFwPart();
@@ -3591,7 +3522,7 @@ void handleStripFwFlash() {
   web.send(303, "text/plain", "started: the hub leaves the home Wi-Fi for up to 2 minutes\n");
 }
 
-// ---------- v2.15.8: update strips over their normal hub connection ----------
+// ---------- update strips over their normal hub connection ----------
 // Stock 1.0.66 takes "up:ota:<host>" on the hub connection too (verified 2026-10-10): it answers ota_ok, fetches
 // http://<host>/ota.bin on port 80, flashes and reboots. Same command as the setup-mode flasher, no protocol change.
 // One strip at a time: wait for its GET, stream the stored .fwr without blocking the loop, wait for it to dial
@@ -3758,7 +3689,7 @@ String suJson() {
   return j + "]}";
 }
 
-// v2.15.26: strip updates are open to admins and members the owner allowed to update strips
+// strip updates are open to admins and members the owner allowed to update strips
 bool sfwOnly() {
   if (!guard()) return false;
   if (apiSrc == 2 && !(apiUserIdx >= 0 && apiUserIdx < userCount && users[apiUserIdx].all &&
@@ -3816,7 +3747,7 @@ void handleSuUploadDone() {
   if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
   web.send(200, "application/json", suJson());
 }
-// v2.15.22: the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
+// the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
 // same spare slot and validation (stripFwCheck) as a phone upload — only where the bytes come from differs.
 bool stripFwFetch(const String& url, String& why) {
   const esp_partition_t* part = stripFwPart();
@@ -3887,11 +3818,11 @@ struct SseClient { WiFiClient c; bool used = false, ready = false; String req; u
 SseClient sse[MAX_SSE];
 int sseCount() { int n = 0; for (int i = 0; i < MAX_SSE; i++) n += sse[i].used && sse[i].ready; return n; }
 uint32_t lastSsePush = 0, lastSseBeat = 0, lastSseFull = 0;
-// v2.15.33 diagnostics (/api/health): live streams opened, closed by the hub because the phone didn't take the data
+// diagnostics (/api/health): live streams opened, closed by the hub because the phone didn't take the data
 // in time (or the send failed), closed by the phone, when the hub last closed one, and the size of the state it sends
 uint32_t sseOpened = 0, sseCut = 0, sseGone = 0, sseCutAt = 0, sseStateLen = 0, sseStateMax = 0;
 void sseCutNow() { sseCut++; sseCutAt = millis(); }
-// v2.15.35 diagnostics: 2.15.34 showed every piece of the state builds fine on its own and the heap looks fine, yet the
+// diagnostics: showed every piece of the state builds fine on its own and the heap looks fine, yet the
 // whole state comes out empty, so some memory request is being refused. ESP-IDF calls this whenever any allocation in
 // the hub fails (Strings, network buffers, ...): it records the size asked, what was free at that instant and who asked.
 // No allocation and no logging in here, only plain variables.
@@ -3909,7 +3840,7 @@ static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
   allocFailFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   allocFailLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 }
-// v2.15.34 diagnostics: on 2.15.33 the state the hub built came out empty (state_len 0), which matches the app's "not on
+// diagnostics: on the state the hub built came out empty (state_len 0), which matches the app's "not on
 // the same Wi-Fi" (an empty /api/state can't be read). When that happens, record the heap and the size of every piece of
 // the state, built one by one, in a plain char buffer (no String, so the record itself can't fail) for /api/health.
 uint32_t stateBadN = 0, stateBadAt = 0;
@@ -3929,7 +3860,7 @@ void stateBadDiag(uint32_t gotLen) {
     if (findStrip(known[k].mac) < 0) n += snprintf(stateBadBuf + n, sizeof stateBadBuf - n, " k%d %u", k, (unsigned)offlineStripJson(known[k]).length());
 }
 
-// v2.15.2: the state goes out in three pieces straight from the one copy (it used to be copied twice more per
+// the state goes out in three pieces straight from the one copy (it used to be copied twice more per
 // phone, ~3 x the state size in RAM at once) and without blocking, so a push no longer starves the strips.
 bool sseWrite(WiFiClient& c, const char* ev, const String& body) {
   String head = String("event: ") + ev + "\ndata: ";
@@ -3949,7 +3880,7 @@ void sseSend(const char* ev, const String& data) {
   }
 }
 const HubUser* sseUser(const SseClient& x) { return x.userIdx >= 0 && x.userIdx < userCount ? &users[x.userIdx] : nullptr; }
-// v2.15.38: one "state" event, streamed straight into the phone's socket a piece at a time (see stateStream)
+// one "state" event, streamed straight into the phone's socket a piece at a time (see stateStream)
 bool sseWriteState(WiFiClient& c, const HubUser* u) {
   uint32_t t0 = millis(), len = 0;              // 250 ms for the whole event (the old three pieces had 80 ms each)
   auto put = [&](const char* p, size_t n) { uint32_t used = millis() - t0; return used < 250 && sendNB(c, p, n, 250 - used); };
@@ -3959,7 +3890,7 @@ bool sseWriteState(WiFiClient& c, const HubUser* u) {
   if (len > sseStateMax) sseStateMax = len;
   return ok;
 }
-// v2.15.38: between full states the phones get only the numbers that change every report, per online strip (~170 bytes
+// between full states the phones get only the numbers that change every report, per online strip (~170 bytes
 // a strip instead of ~1.2 KB): {"ts":..,"d":[{"mac":"..","v":230.1,"r":-60,"up":123,"o":[[on,W,kWh,°C,auto_off_in_s],..]}]}
 // The app merges them into the strips it got with the last "state".
 String liveJson(const HubUser* u) {
@@ -4059,7 +3990,7 @@ void ssePump() {
     if (!x.ready) {
       while (x.c.available() && x.req.length() < 1024) x.req += (char)x.c.read();
       if (x.req.indexOf("\r\n\r\n") >= 0) {
-        // v2.13.2: a shared user is matched first (exact u=/t= values) so it gets only its own strips,
+        // a shared user is matched first (exact u=/t= values) so it gets only its own strips,
         // even when API_TOKEN is empty; before, an empty token made every SSE client the owner.
         String line0 = x.req.substring(0, x.req.indexOf('\r'));
         String qu = queryArg(line0, "u"), qt = queryArg(line0, "t");
@@ -4077,7 +4008,7 @@ void ssePump() {
           x.c.stop(); x = SseClient(); continue;
         }
         x.userIdx = matchedUser;
-        // v2.15.17: the SSE answers no longer wait on a phone that stopped reading (they could freeze the hub ~5-10 s)
+        // the SSE answers no longer wait on a phone that stopped reading (they could freeze the hub ~5-10 s)
         if (!sendStr(x.c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
                           "Access-Control-Allow-Origin: *\r\n\r\nretry: 3000\n\n", 250)) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
         if (!sseWriteState(x.c, sseUser(x))) { sseCutNow(); x.c.stop(); x = SseClient(); continue; }
@@ -4087,10 +4018,10 @@ void ssePump() {
     }
     if (x.used && !x.c.connected()) { if (x.ready) sseGone++; x.c.stop(); x = SseClient(); }
   }
-  // v2.15.37: at most one state per second to the phones (was every 250 ms). Each push builds ~4 KB and copies it into
-  // every phone's socket; four times a second that used up the hub's memory (2.15.36: ~25 refused requests a second,
+  // at most one state per second to the phones (was every 250 ms). Each push builds ~4 KB and copies it into
+  // every phone's socket; four times a second that used up the hub's memory ~25 refused requests a second,
   // network buffers among them) and nearly every live stream got cut.
-  // v2.15.38: a strip report only changes numbers, so it sends "live" (~170 bytes a strip); the full state goes out when
+  // a strip report only changes numbers, so it sends "live" (~170 bytes a strip); the full state goes out when
   // anything else changed (names, locks, settings, a strip came or went, ...) and every 15 s as a safety net.
   if ((stateDirty || liveDirty) && millis() - lastSsePush > 1000) {
     bool full = stateDirty || millis() - lastSseFull > 15000;
@@ -4181,7 +4112,7 @@ void mqttStart() {
   cfgm.session.last_will.retain = 1;
   cfgm.session.keepalive = 30;
   cfgm.network.reconnect_timeout_ms = 5000;
-  cfgm.buffer.size = 2048;      // v2.15.36: receive only (was 8192); commands are under 1 KB and bigger ones are refused anyway
+  cfgm.buffer.size = 2048;      // receive only (was 8192); commands are under 1 KB and bigger ones are refused anyway
   cfgm.buffer.out_size = 8192;
 #else
   cfgm.uri = secMqttUri.c_str(); cfgm.cert_pem = MQTT_CA; cfgm.username = secMqttUser.c_str(); cfgm.client_id = mqttClientId; cfgm.password = secMqtt.c_str();
@@ -4194,7 +4125,7 @@ void mqttStart() {
   Serial.printf("MQTT    : %s  hub=%s\n", secMqttUri.c_str(), id);
 }
 
-// v2.15.30: esp_mqtt_client_enqueue waits for the MQTT client's lock, which the MQTT task holds for the whole of a
+// esp_mqtt_client_enqueue waits for the MQTT client's lock, which the MQTT task holds for the whole of a
 // slow network write or a TLS reconnect (seen: 19-21 s, "mqtt_pub" stalls). The main loop then froze and every strip
 // dropped. Publishes now go through a small queue to their own task; the main loop never waits on the MQTT client.
 struct MqttOut { char* topic; char* data; int len; uint8_t qos; uint8_t retain; };
@@ -4202,9 +4133,9 @@ static QueueHandle_t mqttOutQ = nullptr;
 static SemaphoreHandle_t mqttMx = nullptr;          // held while the publisher task uses the client (stop/destroy wait on it)
 static volatile uint32_t mqttOutBytes = 0;          // bytes waiting in the queue, capped so a stuck server can't eat the heap
 static portMUX_TYPE mqttOutMux = portMUX_INITIALIZER_UNLOCKED;
-// v2.15.32: 8 KB (was 16 KB): the extra copies right after connecting ran the heap out (see mqttPub). Retained state
+// 8 KB (was 16 KB): the extra copies right after connecting ran the heap out (see mqttPub). Retained state
 // copies may fill only MQTT_OUT_STATE_BYTES, so events and command answers keep room (the state is re-sent every 30 s).
-const uint32_t MQTT_OUT_MAX_BYTES = 6144;          // v2.15.36: 8 KB -> 6 KB, retained 6 KB -> 4.5 KB (one state at a time)
+const uint32_t MQTT_OUT_MAX_BYTES = 6144;          // 8 KB -> 6 KB, retained 6 KB -> 4.5 KB (one state at a time)
 const uint32_t MQTT_OUT_STATE_BYTES = 4608;
 uint32_t mqttOutDropped = 0;
 
@@ -4226,7 +4157,7 @@ static void mqttOutTask(void*) {
 void mqttOutInit() {
   if (mqttOutQ) return;
   mqttMx = xSemaphoreCreateMutex();
-  mqttOutQ = xQueueCreate(48, sizeof(MqttOut));   // v2.15.32: 12 was too few for a reconnect burst (state + user states + 12 saved events per user)
+  mqttOutQ = xQueueCreate(48, sizeof(MqttOut));   // 12 was too few for a reconnect burst (state + user states + 12 saved events per user)
   xTaskCreatePinnedToCore(mqttOutTask, "mqtt_out", 4096, nullptr, 1, nullptr, 0);
 }
 
@@ -4234,11 +4165,11 @@ void mqttOutInit() {
 void mqttLock() { if (mqttMx) xSemaphoreTake(mqttMx, portMAX_DELAY); }
 void mqttUnlock() { if (mqttMx) xSemaphoreGive(mqttMx); }
 
-// true = queued (v2.15.38 reports it, so the per-strip publisher can try a refused copy again later)
+// true = queued reports it, so the per-strip publisher can try a refused copy again later)
 bool mqttPub(const String& topic, const String& payload, int qos, bool retain) {
   if (!mqtt || !mqttUp || !topic.length() || !mqttOutQ) return false;
-  // v2.15.32: a String whose building ran out of memory comes back empty with no buffer (c_str() == nullptr). That is
-  // what crashed 2.15.30 (a user state right after connecting). Publishing it as "" would also wipe the retained state
+  // a String whose building ran out of memory comes back empty with no buffer (c_str() == nullptr). That is
+  // what crashed (a user state right after connecting). Publishing it as "" would also wipe the retained state
   // on the server, so it is dropped; a real empty message ("") always has a buffer and still goes out.
   if (!payload.c_str()) { mqttOutDropped++; return false; }
   SubT st("mqtt_pub");
@@ -4284,7 +4215,7 @@ float totalPower() {
   return p;
 }
 
-// v2.15.38: the cloud state is split. mttl/<hub>/state (members: mttl/<hub>/u/<id>/state) is a small head: everything but
+// the cloud state is split. mttl/<hub>/state (members: mttl/<hub>/u/<id>/state) is a small head: everything but
 // the strips, plus "strips":[MACs in order]. Each strip is its own retained message on mttl/<hub>/s/<MAC> (members:
 // mttl/<hub>/u/<id>/s/<MAC>), sent only when that strip changed. With 10 strips the old single state was ~13 KB, more
 // than the hub could build or queue, and it went out whole every 30 s and on every load change: far more EMQX traffic.
@@ -4471,7 +4402,7 @@ void mqttProcess() {
     mqttPub(tStatus, "online", 1, true);
     mqttPub(tInfo, "{\"hub\":\"" + hubId + "\",\"fw\":\"" + FW_VERSION + "\",\"ip\":\"" + WiFi.localIP().toString() +
             "\",\"web_port\":" + String(WEB_PORT) + ",\"sse_port\":" + String(SSE_PORT) + "}", 1, true);
-    pubMarksReset();                              // v2.15.38: every strip again after a reconnect
+    pubMarksReset();                              // every strip again after a reconnect
     publishState();
     publishStrips();
     flushEventOutbox();
@@ -4509,7 +4440,7 @@ void mqttProcess() {
   }
   if (!mqttUp) return;
   static uint32_t lastStripScan = 0;
-  if (millis() - lastStripScan >= 500) {          // v2.15.38: each strip on its own, when it changed (checked twice a second)
+  if (millis() - lastStripScan >= 500) {          // each strip on its own, when it changed (checked twice a second)
     lastStripScan = millis();
     publishStrips();
   }
@@ -4552,7 +4483,7 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
       if (ch == '\n') return true;
       if (ch != '\r' && ch != 0) reply += ch;
     }
-    // v2.14.8: the strip may send its answer slowly and without a newline: stop on a complete ..._ok / fail
+    // the strip may send its answer slowly and without a newline: stop on a complete ..._ok / fail
     if (reply.endsWith("_ok") || reply.indexOf("fail") >= 0) { delay(150); while (c.available()) { char ch = c.read(); if (ch != '\r' && ch != '\n' && ch != 0) reply += ch; } return true; }
     if (!c.connected()) return reply.length() > 0;
     esp_task_wdt_reset();
@@ -4561,9 +4492,9 @@ bool readSetupLine(WiFiClient& c, String& reply, uint32_t ms) {
   return reply.length() > 0;
 }
 
-// Same as FG Link / mttl_local.py and hub 2.10.1, which provisioned strips successfully:
+// Same as FG Link / mttl_local.py and hub which provisioned strips successfully:
 // ONE TCP session -> up:ip, up:connect, up:reboot:0
-// v2.14.8: the home router and the strip's setup AP are BOTH 192.168.1.1. After switching networks the ARP cache
+// the home router and the strip's setup AP are BOTH 192.168.1.1. After switching networks the ARP cache
 // still maps .1 to the other side's MAC, so TCP to the strip went to the router's MAC (no answer on 30300) and,
 // back home, DNS/MQTT went to the strip's MAC for minutes. Drop the cached entries on every switch.
 static void flushArpCb(void*) {
@@ -4577,7 +4508,7 @@ void flushArp() {
   delay(100);
 }
 
-// v2.14.9: link diagnostics on the strip's setup network (does the strip answer ARP for .1 at all?)
+// link diagnostics on the strip's setup network (does the strip answer ARP for .1 at all?)
 static volatile int provArpState = -1;
 static uint8_t provArpMac[6];
 static volatile int provLinkUp = -1, provNetifUp = -1;
@@ -4627,7 +4558,7 @@ void provLinkReport() {
 }
 
 bool setupSession(const String& hubIp, String& r) {
-  // v2.14.4: the setup service is on the strip AP's gateway (192.168.1.1 on older firmware); try the gateway
+  // the setup service is on the strip AP's gateway (192.168.1.1 on older firmware); try the gateway
   // DHCP gave us first, then the usual addresses, a few rounds while the strip's service comes up
   WiFiClient c;
   IPAddress gw = WiFi.gatewayIP();
@@ -4674,14 +4605,14 @@ bool setupSession(const String& hubIp, String& r) {
   return true;
 }
 
-// v2.14.13: flash a strip in setup mode. Same TCP 30300 service as provisioning: "up:ota:<our ip>" makes the strip
+// flash a strip in setup mode. Same TCP 30300 service as provisioning: "up:ota:<our ip>" makes the strip
 // (fw 1.0.141 too, seen in Wireshark) fetch http://<our ip>:80/ota.bin, which the hub answers from the spare OTA slot.
 const esp_partition_t* stripFwPart() { return esp_ota_get_next_update_partition(nullptr); }
 
 void otaLog(const String& m) { Serial.println("[strip-ota] " + m); stripOtaLog += m + "\n"; }
 
 // srv must already be listening before "up:ota" goes out: the strip dials :80 about 0.1 s after ota_ok,
-// and a reset on that first SYN makes it give up (2.14.13-2.15.4 opened the port only afterwards).
+// and a reset on that first SYN makes it give up opened the port only afterwards).
 bool serveStripFw(WiFiServer& srv, uint32_t waitMs) {
   const esp_partition_t* part = stripFwPart();
   if (!part || !stripFwSize) { otaLog("no firmware stored"); srv.end(); return false; }
@@ -4803,20 +4734,20 @@ void runProvision() {
   Serial.printf("[prov] joining %s (%d dBm, ch %d, auth %d)\n", ap.c_str(), best, apCh, apEnc);
 
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used) dropStrip(strips[i], "provisioning");
-  // v2.14.3: no auto-reconnect to the home Wi-Fi meanwhile, pin the strip's channel + BSSID, two tries,
+  // no auto-reconnect to the home Wi-Fi meanwhile, pin the strip's channel + BSSID, two tries,
   // and report why the join failed (wrong password vs AP gone) instead of a bare join_failed
   WiFi.setAutoReconnect(false);
-  // v2.14.11: Arduino-ESP32 3.x refuses APs weaker than WPA2-PSK by default (2.x accepted anything). The strip's
+  // Arduino-ESP32 3.x refuses APs weaker than WPA2-PSK by default (2.x accepted anything). The strip's
   // setup AP is older WPA, so the join silently never happened (join_failed, no disconnect reason). Allow it here.
   WiFi.setMinSecurity(WIFI_AUTH_OPEN);
-  // v2.14.10: the loop below used to start with "status != CONNECTED" while the hub was still on the home Wi-Fi, so it
+  // the loop below used to start with "status != CONNECTED" while the hub was still on the home Wi-Fi, so it
   // never ran and the hub "joined" YAYA (BSSID = router). Now: leave home first, forget the stored home AP, and only
   // count the join when the BSSID we are on is the strip's.
   bool onStrip = false;
   for (int attempt = 0; attempt < 3 && !onStrip; attempt++) {
     WiFi.disconnect(false, true);                    // leave + erase the stored (home) AP config
     for (int i = 0; i < 20 && WiFi.status() == WL_CONNECTED; i++) delay(100);
-    // v2.14.12: join through ESP-IDF directly, like a laptop does: any security, no PMF, full scan, no BSSID pin,
+    // join through ESP-IDF directly, like a laptop does: any security, no PMF, full scan, no BSSID pin,
     // and every step's result in the log (the Arduino WiFi.begin wrapper failed silently with reason 0)
     provDiscReason = 0;
     provStaEvents = 0;
@@ -4846,7 +4777,7 @@ void runProvision() {
                     (int)WiFi.status(), provDiscReason, provStaEvents, apCh);
       continue;
     }
-    // v2.15.6: the strip is also recognised by its BSSID (its MAC): rec.ssid came back empty although the hub was on it
+    // the strip is also recognised by its BSSID (its MAC): rec.ssid came back empty although the hub was on it
     onStrip = strcmp((const char*)rec.ssid, ap.c_str()) == 0 || ((apBssid[0] | apBssid[1] | apBssid[2]) && memcmp(rec.bssid, apBssid, 6) == 0);
     Serial.printf("[prov] join try %d: on %s (%02X:%02X:%02X:%02X:%02X:%02X)%s\n", attempt + 1, (const char*)rec.ssid,
                   rec.bssid[0], rec.bssid[1], rec.bssid[2], rec.bssid[3], rec.bssid[4], rec.bssid[5],
@@ -4903,7 +4834,7 @@ void runProvision() {
 void saveWifi(const String& ssid, const String& pass);
 
 bool tryWiFi(const String& ssid, const String& pass, uint32_t ms) {
-  // v2.15.6: Wi-Fi settings stay in RAM (the hub keeps its own copy in "sec"); with NVS full, writing them failed
+  // Wi-Fi settings stay in RAM (the hub keeps its own copy in "sec"); with NVS full, writing them failed
   // (ESP_ERR_NVS_NOT_ENOUGH_SPACE) and the join to a strip's setup network never got its SSID
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
@@ -4971,7 +4902,7 @@ void setupPortal() {
     portal.send(200, "text/plain", "Saved. The hub restarts and joins " + ns + ".");
     saved = true;
   });
-  // v2.15.28: the Fisha app sets the hub up from here in one step (Wi-Fi, address, owner, update password) so the
+  // the Fisha app sets the hub up from here in one step (Wi-Fi, address, owner, update password) so the
   // customer never leaves the app. GET /api/setup/info -> hub id and state; POST /api/setup {ssid,pass,ip,email,model,ota,key}
   portal.on("/api/setup/info", HTTP_GET, [&]() {
     portal.send(200, "application/json", "{\"ok\":true,\"data\":{\"hub\":\"" + defOta().substring(6) + "\",\"fw\":\"" + String(FW_VERSION) +
@@ -5025,7 +4956,7 @@ void setupPortal() {
 }
 
 void connectWiFi() {
-  if (!secSsid.length()) setupPortal();          // v2.15.28: a new (or erased) hub goes straight to setup
+  if (!secSsid.length()) setupPortal();          // a new (or erased) hub goes straight to setup
   for (int attempt = 0; attempt < 3; attempt++) {
     if (tryWiFi(secSsid, secWifi, 20000)) {
       Serial.printf("WiFi OK  IP=%s  RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
@@ -5053,7 +4984,7 @@ void runWifiTest() {
   delay(300);
   if (tryWiFi(wifiTestSsid, wifiTestPass, 20000)) {
     if (hadN) {
-      // v2.15.25: the new network works. Go back, wait for the strips to re-dial, hand each one the new network on its
+      // the new network works. Go back, wait for the strips to re-dial, hand each one the new network on its
       // normal link (up:connect, then up:reboot:0 once it answers connect_ok, as in "Add strip"), then move for good.
       // A strip that misses it stays on the old network; holding its button 10 s lets autoResyncScan() relink it.
       wifiTestState = "moving";
@@ -5080,7 +5011,7 @@ void runWifiTest() {
         if (all) break;
         pump(300);
       }
-      // v2.15.27: move only if EVERY strip took the new network. A strip that answered while another did not would be
+      // move only if EVERY strip took the new network. A strip that answered while another did not would be
       // stranded on the wrong network (all offline), so in that case the old network is handed back to the ones that answered.
       int missed = 0;
       for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k < 0 || !strips[k].connOk) { missed++; addEvent("wifipush", had[h], 0, "missed"); } }
@@ -5162,14 +5093,14 @@ void loadSecrets() {
   secLocalIp = LOCAL_IP;
   String lip = sp.getString("lip", "");
   if (lip.length() && secLocalIp.fromString(lip)) { lipCheckAt = millis() + 60000; if (!lipCheckAt) lipCheckAt = 1; }
-  if (!secOta.length()) secOta = defOta();   // v2.15.27: fixed fallback fisha-<MAC>, never random
+  if (!secOta.length()) secOta = defOta();   // fixed fallback fisha-<MAC>, never random
   sp.end();
 }
 
 void setup() {
   Serial.begin(115200);
-  heap_caps_register_failed_alloc_callback(allocFailCb);   // v2.15.35 diagnostics, see allocFailCb
-  // v2.15.8: armed first thing (it used to be armed only at the end of setup, so a hang while booting
+  heap_caps_register_failed_alloc_callback(allocFailCb);   // diagnostics, see allocFailCb
+  // armed first thing (it used to be armed only at the end of setup, so a hang while booting
   // needed the reset button); 90 s covers a first-boot LittleFS format and the Wi-Fi join
   esp_task_wdt_config_t wc = {};
   wc.timeout_ms = 90000;
@@ -5184,7 +5115,7 @@ void setup() {
   loadUsers();
   loadOwners();
   cfg.begin("mttl", false);
-  fsOk = LittleFS.begin(true);                   // v2.15.7: formats the unused SPIFFS partition on first boot
+  fsOk = LittleFS.begin(true);                   // formats the unused SPIFFS partition on first boot
   esp_task_wdt_reset();
   Serial.printf("[fs] %s\n", fsOk ? "LittleFS ok" : "LittleFS FAILED, history stays in NVS");
   loadGlobals();
@@ -5193,7 +5124,7 @@ void setup() {
   loadTimers();
   nvsId = cfg.getString("nvsid", "");
   if (!nvsId.length()) { nvsId = randText(8); cfg.putString("nvsid", nvsId); }
-  if (cfg.getUChar("nver", 0) < 2) {             // v2.6: every event, every outlet by default
+  if (cfg.getUChar("nver", 0) < 2) {             // every event, every outlet by default
     notifyTypes = 0xFFFFFFFF;
     cfg.putUInt("ntypes", notifyTypes);
     for (int i = 0; i < knownCount; i++) { cfg.remove(("m" + known[i].mac).c_str()); refreshKnown(known[i].mac); }
@@ -5240,14 +5171,14 @@ void setup() {
   Serial.printf("Web UI  : http://%s:%u  · live: http://%s:%u/events\n", WiFi.localIP().toString().c_str(), WEB_PORT,
                 WiFi.localIP().toString().c_str(), SSE_PORT);
   mqttStart();
-  // v2.10: a frozen loop reboots the hub after 90 s instead of hanging forever (armed at the top of setup since 2.15.8)
+  // a frozen loop reboots the hub after 90 s instead of hanging forever (armed at the top of setup since
   esp_task_wdt_reset();
   Serial.printf("[hub] last reset: %s\n", resetText().c_str());
 }
 
 uint32_t wifiLostAt = 0;
 
-// v2.15.8: times each loop step; one that blocks 5 s or more is logged as a "stall" event once it returns
+// times each loop step; one that blocks 5 s or more is logged as a "stall" event once it returns
 const char* stgName = "boot";
 uint32_t stgAt = 0;
 void stg(const char* next) {
@@ -5257,7 +5188,7 @@ void stg(const char* next) {
   if (d > stallMaxMs) { stallMaxMs = d; stallWhere = was; }
   uint32_t sm = subMax; const char* sw = subWhere;
   subMax = 0; subWhere = "";
-  // v2.15.16: time the hub itself stood still is not the strip's fault: a send that was waiting restarts its
+  // time the hub itself stood still is not the strip's fault: a send that was waiting restarts its
   // "stuck" clock, so one slow step no longer drops every strip at once
   if (d >= 1000) for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].txSince) strips[i].txSince = now;
   if (d >= 5000 && strcmp(was, "boot") && strcmp(was, "wifi_down") && strcmp(was, "provision"))
@@ -5267,7 +5198,7 @@ void stg(const char* next) {
   subMax = 0; subWhere = "";
 }
 
-// ---------- v2.15.23: re-link known strips after a Wi-Fi/router change, with no "Add strip" tap needed ----------
+// ---------- re-link known strips after a Wi-Fi/router change, with no "Add strip" tap needed ----------
 // A strip keeps its own Wi-Fi credentials; when the router's name or password changes, the strip can't reconnect
 // and used to just sit offline until the user ran "Add strip" on it again by hand. Stock firmware keeps retrying
 // the old network ("auto reconnect" in its strings) and opens its setup network (TONLY_TAP_<id>) only after the
@@ -5342,7 +5273,7 @@ void loop() {
     startStripListener();
   }
   wifiLostAt = 0;
-  // v2.15.3/2.15.8: every home Wi-Fi loss goes to the event log with its reason code and how long it lasted,
+  // every home Wi-Fi loss goes to the event log with its reason code and how long it lasted,
   // counted from the driver so a drop that heals between two loop passes (a stalled loop) is not missed
   static uint32_t wifiDiscSeen = 0;
   if (wifiDiscCount != wifiDiscSeen) {

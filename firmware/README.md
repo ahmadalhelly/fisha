@@ -4,6 +4,12 @@ Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
 
 ## Changelog
 
+### Owner recovery (unreleased, not yet flashed by the owner's CI build)
+- Owner can take the hub back on a new phone: `/api/auth/claim` accepts a phone whose email already owns the hub when the update password is also sent (`ota`). The phone gets a new key and the old key of that email is replaced.
+- Wrong update passwords on that route: 5 misses lock it for 5 minutes (`wait`, HTTP 429). Other emails still get `claimed` (409).
+- Source comments: version notes from 2.11 to 2.15.x moved out of the file (this changelog holds them). Code is byte-for-byte the same apart from the recovery route.
+- Not verified on the device yet. Host test of the route: `firmware/tests/owner_recovery` is not in the repo; the test used during the change lived outside the repo.
+
 ### 1.0.1
 - Same source and build settings as 2.15.38 (commit 633a68c). Only the version string is new, so the hub version follows the app's 1.x line.
 - Left out of this build: `board_build.flash_mode = qio`, `board_build.f_flash = 80000000L`, `board_build.f_cpu = 240000000L` (present in 46c8fa1 and 1.0.0).
