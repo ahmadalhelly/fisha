@@ -178,6 +178,28 @@ void voltCheck(Strip& s) {
   stateDirty = true;
 }
 
+// ---------- real per-outlet current ----------
+// A real reading (mA from the strip) counts only while it is fresh and the load has not changed since it was read.
+// Without one the estimate (W / V) is used, as before.
+bool curValid(const Strip& s, int k, uint32_t now) {
+  const Outlet& o = s.o[k];
+  if (!o.on || !s.curAt[k] || (int32_t)(now - s.curAt[k]) > 45000) return false;
+  float d = o.powerW - s.curPw[k];
+  if (d < 0) d = -d;
+  return d <= s.curPw[k] * 0.15f + 10.0f;
+}
+// shown to the user and used by rules: the real current when there is one, else the estimate
+float outletAmps(const Strip& s, int k, float volts, uint32_t now) {
+  if (!s.o[k].on) return 0;
+  return curValid(s, k, now) ? s.curA[k] : s.o[k].powerW / volts;
+}
+// used by the protections: never lower than the estimate
+float outletAmpsMax(const Strip& s, int k, float volts, uint32_t now) {
+  if (!s.o[k].on) return 0;
+  float est = s.o[k].powerW / volts;
+  return curValid(s, k, now) && s.curA[k] > est ? s.curA[k] : est;
+}
+
 // ---------- automations / protections (evaluated after every poll) ----------
 void evalStrip(int i) {
   Strip& s = strips[i];
@@ -188,7 +210,8 @@ void evalStrip(int i) {
   for (int k = 0; k < 4; k++) {
     Outlet& o = s.o[k];
     total += o.on ? o.powerW : 0;
-    float oAmps = o.on ? (o.powerW / volts) : 0;
+    float oAmpsEst = o.on ? (o.powerW / volts) : 0;
+    float oAmps = o.on ? outletAmpsMax(s, k, volts, now) : 0;        // protections: the real current counts only when it is higher
 
     // over-temperature protection & near-limit warning
     // 10 °C past the limit cuts on the first reading instead of waiting 30 s
@@ -212,7 +235,7 @@ void evalStrip(int i) {
     if (oMaxA > 0 && o.on) {
       if (oAmps >= oMaxA) {
         if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
-        if (oAmps >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // 25 % over cuts at once
+        if (oAmpsEst >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // 25 % over cuts at once (estimate only: one reading never cuts alone)
           protectCut(s, k);
           addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
           s.ocoSince[k] = 0;
@@ -236,11 +259,14 @@ void evalStrip(int i) {
 
   // over-current on the whole strip
   float amps = total / volts;
-  if (aProt && amps > aMax) {
+  float ampsHold = amps, ampsShown = 0;
+  { float sumMax = 0; for (int k = 0; k < 4; k++) { sumMax += outletAmpsMax(s, k, volts, now); ampsShown += outletAmps(s, k, volts, now); }
+    if (sumMax > ampsHold) ampsHold = sumMax; }
+  if (aProt && ampsHold > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
-    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // 15 % over cuts at once
+    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // 15 % over cuts at once (estimate only)
       for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) protectCut(s, k);
-      addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
+      addEvent("overcurrent", s.mac, 0, String(ampsHold, 1) + " A");
       s.ocSince = 0;
     }
   } else s.ocSince = 0;
@@ -280,8 +306,8 @@ void evalStrip(int i) {
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
     float pw, tc, cur;
     bool on;
-    if (r.outlet == 0) { pw = total; tc = hottest; cur = amps; on = anyOn; }
-    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = o.on ? (o.powerW / volts) : 0; on = o.on; }
+    if (r.outlet == 0) { pw = total; tc = hottest; cur = ampsShown; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
     // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.

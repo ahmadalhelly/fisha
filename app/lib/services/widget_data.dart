@@ -75,7 +75,7 @@ Map<String, dynamic> stripWidgetJson(AppState state, Strip s) {
     'v': online && s.voltage != null ? '${s.voltage!.toStringAsFixed(0)} V' : '',
     'vc': hexOf(s.voltage != null ? voltColor(s.voltage!) : C.faint),
     'wc': hexOf(online ? loadColor(s.livePower, kStripMaxW) : C.faint),
-    'amps': online && s.voltage != null && s.voltage! > 0 ? '${(s.livePower / s.voltage!).toStringAsFixed(2)}A' : '',
+    'amps': online && s.voltage != null && s.voltage! > 0 ? '${s.liveAmps(s.voltage!).toStringAsFixed(2)}A' : '',
     'pwr': Icons.power_settings_new.codePoint,
     'm': {
       'on': mOn,
@@ -95,7 +95,7 @@ Map<String, dynamic> stripWidgetJson(AppState state, Strip s) {
 
 Map<String, dynamic> _outlet(AppState state, Strip s, Outlet o, bool can, bool canProt) {
   final on = s.online && o.on;
-  final amps = o.powerW / (s.voltage ?? 220.0);
+  final amps = o.amps(s.voltage);
   final ampWarn = o.ampLimit > 0 && amps >= o.ampLimit * 0.85;
   final tempWarn = o.tempC >= 55;
   final base = loadLevel(o.powerW, kOutletMaxW);

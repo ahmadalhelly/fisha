@@ -18,6 +18,7 @@ class Outlet {
   final bool hasSchedule; // an enabled schedule targets this outlet (or the whole strip)
   final bool hasRule; // an enabled watts/temperature rule watches it
   final double ampLimit; // per-outlet current limit (0 = disabled)
+  final double currentA; // current measured by the strip (hub 1.0.2+); -1 = none, use power / voltage
 
   const Outlet({
     required this.n,
@@ -34,6 +35,7 @@ class Outlet {
     this.hasSchedule = false,
     this.hasRule = false,
     this.ampLimit = 0.0,
+    this.currentA = -1,
   });
 
   factory Outlet.fromJson(Map<String, dynamic> j) => Outlet(
@@ -51,6 +53,7 @@ class Outlet {
         hasSchedule: j['sched'] == true,
         hasRule: j['rule'] == true,
         ampLimit: _d(j['amp_limit'], 0.0),
+        currentA: j['cur_real'] == true ? _d(j['current_a'], -1) : -1,
       );
 
   Outlet copyWith({bool? on, String? label, bool? locked, bool? protected, bool? keepOn, int? autoOffMin, double? ampLimit}) => Outlet(
@@ -68,10 +71,11 @@ class Outlet {
         hasSchedule: hasSchedule,
         hasRule: hasRule,
         ampLimit: ampLimit ?? this.ampLimit,
+        currentA: currentA,
       );
 
   // hub 2.15.38 "live": only the numbers that change with every strip report
-  Outlet withLive({required bool on, required double powerW, required double energyKwh, required int tempC, required int autoOffInS}) => Outlet(
+  Outlet withLive({required bool on, required double powerW, required double energyKwh, required int tempC, required int autoOffInS, double currentA = -1}) => Outlet(
         n: n,
         on: on,
         powerW: powerW,
@@ -86,7 +90,11 @@ class Outlet {
         hasSchedule: hasSchedule,
         hasRule: hasRule,
         ampLimit: ampLimit,
+        currentA: currentA,
       );
+
+  /// amps for display and warnings: the strip's own measurement when the hub sent one, else power / voltage
+  double amps(double? volts) => currentA >= 0 ? currentA : powerW / ((volts ?? 0) > 0 ? volts! : 220.0);
 }
 
 class Strip {
@@ -150,6 +158,8 @@ class Strip {
   int get lockedCount => outlets.where((o) => o.locked).length;
   int get maxTemp => outlets.isEmpty ? 0 : outlets.map((o) => o.tempC).reduce((a, b) => a > b ? a : b);
   double get livePower => outlets.fold(0.0, (sum, o) => sum + (o.on ? o.powerW : 0));
+  /// total amps of the outlets that are on (measured where the strip reported it, else power / voltage)
+  double liveAmps(double volts) => outlets.fold(0.0, (sum, o) => sum + (o.on ? o.amps(volts) : 0));
   bool get anyProtectedOn => outlets.any((o) => o.protected && o.on);
 
   Strip _with({List<Outlet>? outlets, String? label, bool? masterLock}) => Strip(
@@ -185,7 +195,7 @@ class Strip {
       final v = o is List && i >= 0 && i < o.length ? o[i] : null;
       if (v is List && v.length >= 5) {
         outs.add(x.withLive(
-            on: v[0] == 1 || v[0] == true, powerW: _d(v[1]), energyKwh: _d(v[2]), tempC: _i(v[3]), autoOffInS: _i(v[4], -1)));
+            on: v[0] == 1 || v[0] == true, powerW: _d(v[1]), energyKwh: _d(v[2]), tempC: _i(v[3]), autoOffInS: _i(v[4], -1), currentA: v.length > 5 && v[5] is num && (v[5] as num) >= 0 ? (v[5] as num).toDouble() : -1));
       } else {
         outs.add(x);
       }

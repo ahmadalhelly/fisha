@@ -9,7 +9,7 @@ cp "$CORE/WString.cpp" "$CORE/WString.h" "$CORE/stdlib_noniso.h" "$CORE/stdlib_n
 INO=$B/flat.ino; python3 ../flatten.py > $INO
 python3 extract.py $INO "struct Outlet" "struct ELog" "struct PeakLog" "struct ElogHead" "struct PeakHead" "struct Strip" "struct Known" \
   "struct HubUser" "struct HubUserV1" "struct UsersNV" "struct UsersNVV1" "line:const uint8_t USER_STRIPS" "struct PubMark" > $B/types.inc
-python3 extract.py $INO split isHex jsonEsc civilFromDays findStrip macKnown userHas parseStrips stripJson offlineStripJson \
+python3 extract.py $INO split curValid outletAmps isHex jsonEsc civilFromDays findStrip macKnown userHas parseStrips stripJson offlineStripJson \
   stateDevicesBytes stateStream stateJsonFor liveJson mqttHead sigMix sigStr stripSig pubMarksReset stripPower pubMark publishStrips \
   findUser clearUserStrips elogGet elogPut peakGet peakPut histHeads energyUpdate peakUpdate energyJson \
   "line:const uint32_t USERS_MAGIC =" "union UsersBuf" "line:static UsersBuf usersBuf" "line:const uint32_t USERS_MAGIC2" loadUsers saveUsers > $B/code.inc

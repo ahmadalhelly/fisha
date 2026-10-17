@@ -67,6 +67,39 @@ bool tryParseInfo(int i) {
   return true;
 }
 
+// the answer to up:power_report:<ch>:vol (mV) or :current (mA), told apart by what was asked (moved out of handleLine so the host test can run it)
+void handlePowerReport(Strip& s, const String& line) {
+  std::vector<String> f = split(line.substring(16), ':');
+  // the answer to a :current request (mA). It is told apart from a voltage (mV, >= 50000) by what was asked, and
+  // a value in mV range is never taken as a voltage here: a strip that answered :current in another unit would
+  // otherwise look like an under-voltage and cut its outlets.
+  if (s.pwrKind == 2 && f.size() == 2 && f[0].toInt() == s.pwrCh) {
+    s.pwrKind = 0;
+    bool num = f[1].length() > 0 && f[1].length() <= 6;
+    for (unsigned c = 0; num && c < f[1].length(); c++) if (f[1][c] < '0' || f[1][c] > '9') num = false;
+    long mA = num ? f[1].toInt() : -1;
+    if (mA >= 50000) { if (++s.curBadN >= 3) s.curBad = true; }
+    else if (mA >= 0 && mA <= 20000 && s.pwrCh >= 1 && s.pwrCh <= 4) {
+      int k = s.pwrCh - 1;
+      s.curBadN = 0;
+      s.curA[k] = mA / 1000.0f;
+      s.curPw[k] = s.o[k].powerW;
+      s.curAt[k] = millis() | 1;
+      liveDirty = true;                      // numbers only
+    }
+    return;
+  }
+  if (f.size() == 2 && f[1].toInt() >= 50000) {
+    if (s.pwrKind == 1) s.pwrKind = 0;
+    s.voltage = f[1].toInt() / 1000.0f;
+    if ((s.voltage < 200 || s.voltage > 250) && (!s.voltEventAt || millis() - s.voltEventAt > 600000)) {
+      s.voltEventAt = millis();
+      addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V");
+    }
+    voltCheck(s);
+  }
+}
+
 void handleLine(int i, const String& line) {
   Strip& s = strips[i];
   s.lastLine = line;
@@ -106,20 +139,10 @@ void handleLine(int i, const String& line) {
     return;
   }
   if (line.startsWith("up:getinfo:")) { s.pendingInfo = line; tryParseInfo(i); return; }
-  if (line.startsWith("up:power_report:")) {
-    std::vector<String> f = split(line.substring(16), ':');
-    if (f.size() == 2 && f[1].toInt() >= 50000) {
-      s.voltage = f[1].toInt() / 1000.0f;
-      if ((s.voltage < 200 || s.voltage > 250) && (!s.voltEventAt || millis() - s.voltEventAt > 600000)) {
-        s.voltEventAt = millis();
-        addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V");
-      }
-      voltCheck(s);
-    }
-    return;
-  }
+  if (line.startsWith("up:power_report:")) { handlePowerReport(s, line); return; }
   if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover sent on the normal link
     s.connOk = true;
+    if (wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
     addEvent("wifipush", s.mac, 0, "connect_ok");
     return;
   }
@@ -215,6 +238,20 @@ void pumpStrips() {
   }
 }
 
+// asks for the real current of the next outlet that is on (one request in flight per strip; never :power, its answer is in mW)
+void askCurrent(Strip& s) {
+  uint32_t now = millis();
+  if (s.curBad || (s.pwrKind && now - s.pwrAt < 3000)) return;
+  for (int n = 0; n < 4; n++) {
+    int k = (s.curNext + n) & 3;
+    if (!s.o[k].on) continue;
+    s.curNext = (k + 1) & 3;
+    s.pwrKind = 2; s.pwrCh = k + 1; s.pwrAt = now;
+    sendLine(s, "up:power_report:" + String(k + 1) + ":current");
+    return;
+  }
+}
+
 void pollStrips() {
   if (millis() - lastPoll < POLL_MS) return;
   lastPoll = millis();
@@ -223,7 +260,8 @@ void pollStrips() {
     Strip& s = strips[i];
     if (!s.used || !s.identified) continue;
     sendLine(s, "up:getinfo:all");
-    if (pollCount % DIAG_EVERY == 0) { sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
+    if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
+    else if (pollCount % DIAG_EVERY == 1) askCurrent(s);
   }
 }
 

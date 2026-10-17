@@ -77,13 +77,13 @@ bool sseWriteState(WiFiClient& c, const HubUser* u) {
   return ok;
 }
 // between full states the phones get only the numbers that change every report, per online strip (~170 bytes
-// a strip instead of ~1.2 KB): {"ts":..,"d":[{"mac":"..","v":230.1,"r":-60,"up":123,"o":[[on,W,kWh,°C,auto_off_in_s],..]}]}
+// a strip instead of ~1.2 KB): {"ts":..,"d":[{"mac":"..","v":230.1,"r":-60,"up":123,"o":[[on,W,kWh,°C,auto_off_in_s,real_A_or_-1],..]}]}
 // The app merges them into the strips it got with the last "state".
 String liveJson(const HubUser* u) {
   uint32_t n = 0;
   for (int i = 0; i < MAX_STRIPS; i++) n += strips[i].used && strips[i].identified && (!u || userHas(*u, strips[i].mac));
   String j;
-  j.reserve(32 + 200 * n);
+  j.reserve(32 + 230 * n);
   j += "{\"ts\":";
   j += (uint32_t)time(nullptr);
   j += ",\"d\":[";
@@ -115,6 +115,8 @@ String liveJson(const HubUser* u) {
       j += o.tempC;
       j += ",";
       j += left < 0 ? -1L : left;
+      j += ",";
+      if (curValid(s, k, now)) j += String(s.curA[k], 2); else j += "-1";   // real current (A), -1 = none
       j += "]";
     }
     j += "]}";

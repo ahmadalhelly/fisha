@@ -230,7 +230,7 @@ class _Socket extends StatelessWidget {
     final pending = state.isPending(strip.mac, o.n);
     final badges = badgesFor(state, strip, o, size: 12);
     final load = on ? (o.powerW / kOutletMaxW).clamp(0.0, 1.0) : 0.0;
-    final currentAmps = o.powerW / (strip.voltage ?? 220.0);
+    final currentAmps = o.amps(strip.voltage);
     final isAmpWarn = o.ampLimit > 0 && currentAmps >= (o.ampLimit * 0.85);
     final isTempWarn = o.tempC >= 55;
     final baseLevel = loadLevel(o.powerW, kOutletMaxW);

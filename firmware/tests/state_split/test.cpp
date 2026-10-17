@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
     String lv = liveJson(nullptr);
     save("live_owner", lv);
     CHECK(lv.indexOf("\"mac\":\"AAAAAA000001\",\"v\":230.4,\"r\":-60,\"up\":5,") > 0);
-    CHECK(lv.indexOf("[1,12.50,1.234,35,-1],[0,0.00,0.000,0,90]") > 0);
+    CHECK(lv.indexOf("[1,12.50,1.234,35,-1,-1],[0,0.00,0.000,0,90,-1]") > 0);
     CHECK(lv.indexOf("\"mac\":\"AAAAAA000002\",\"v\":null,\"r\":null,\"up\":0,") > 0);
     CHECK(lv.indexOf("AAAAAA000003") < 0 && lv.indexOf("AAAAAA000009") < 0);   // offline / not identified: not in live
     String lu = liveJson(&users[0]);

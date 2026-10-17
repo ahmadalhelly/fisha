@@ -51,4 +51,19 @@ void main() {
     expect(n.outlets.length, 4);
     expect(n.upS, 5);
   });
+
+  test('measured current (hub 1.0.2) is used when sent, power / voltage otherwise', () {
+    final s = Strip.fromJson(full);
+    final m = s.withLive({'mac': 'AAAAAA000001', 'v': 230.0, 'o': [[1, 150.0, 1.0, 30, -1, 0.722], [1, 230.0, 0.0, 30, -1, -1], [0, 0.0, 0.0, 0, -1], [0, 0.0, 0.0, 0, -1, -1]]});
+    expect(m.outlets[0].currentA, 0.722);
+    expect(m.outlets[0].amps(230.0), 0.722);
+    expect(m.outlets[1].currentA, -1);
+    expect(m.outlets[1].amps(230.0), 1.0);
+    expect(m.outlets[1].amps(null), closeTo(230.0 / 220.0, 1e-9));
+    expect(m.liveAmps(230.0), closeTo(1.722, 1e-9));
+    final o = Outlet.fromJson({'n': 1, 'on': true, 'power_w': 148.0, 'current_a': 0.72, 'cur_real': true});
+    expect(o.amps(230.0), 0.72);
+    expect(Outlet.fromJson({'n': 1, 'on': true, 'power_w': 230.0, 'current_a': 1.0, 'cur_real': false}).currentA, -1);
+    expect(o.copyWith(on: false).currentA, 0.72);
+  });
 }

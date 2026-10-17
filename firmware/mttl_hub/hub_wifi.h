@@ -161,9 +161,20 @@ void runWifiTest() {
       delay(300);
       connectWiFi();
       uint32_t t0 = millis();
+      uint32_t keepAt[MAX_STRIPS] = {0};
       auto pump = [&](uint32_t ms) {
         uint32_t ts = millis();
-        while (millis() - ts < ms) { esp_task_wdt_reset(); pumpStrips(); delay(10); }
+        while (millis() - ts < ms) {
+          esp_task_wdt_reset();
+          pumpStrips();
+          uint32_t n = millis();
+          // a strip silent for 8 s is asked for its state, so its link is not dropped as stale (45 s) while the others are slow
+          for (int i = 0; i < MAX_STRIPS; i++) {
+            Strip& s = strips[i];
+            if (s.used && s.identified && n - s.lastRx > 8000 && n - keepAt[i] > 8000) { keepAt[i] = n; sendLine(s, "up:getinfo:all"); }
+          }
+          delay(10);
+        }
       };
       while (millis() - t0 < 60000) {
         int back = 0;
@@ -172,21 +183,53 @@ void runWifiTest() {
         pump(500);
       }
       pump(1500);
-      for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0) sendWifiTo(strips[k], wifiTestSsid, wifiTestPass); }
+      wifiOkMacs = "";
+      uint32_t lastSend[MAX_STRIPS] = {0}, okAt[MAX_STRIPS] = {0};
+      uint8_t sends[MAX_STRIPS] = {0};
       t0 = millis();
-      while (millis() - t0 < 15000) {
+      for (int h = 0; h < hadN; h++) {
+        int k = findStrip(had[h]);
+        if (k < 0) continue;
+        sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
+        lastSend[h] = millis(); sends[h] = 1;
+      }
+      // up to 40 s for every strip to answer connect_ok (a strip that is still re-dialling gets the network as soon as it
+      // is back; one that has not answered gets it again every 12 s, up to 3 times). It ends at once when all answered.
+      while (millis() - t0 < 40000) {
         bool all = true;
-        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && !strips[k].connOk) all = false; }
+        uint32_t n = millis();
+        for (int h = 0; h < hadN; h++) {
+          if (wifiOkMacs.indexOf(had[h]) >= 0) { if (!okAt[h]) okAt[h] = n - t0 + 1; continue; }
+          all = false;
+          int k = findStrip(had[h]);
+          if (k < 0) continue;                   // not back yet: keep waiting
+          if (!sends[h] || (sends[h] < 3 && n - lastSend[h] > 12000)) {
+            sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
+            lastSend[h] = n; sends[h]++;
+          }
+        }
         if (all) break;
         pump(300);
       }
       // move only if EVERY strip took the new network. A strip that answered while another did not would be
       // stranded on the wrong network (all offline), so in that case the old network is handed back to the ones that answered.
       int missed = 0;
-      for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k < 0 || !strips[k].connOk) { missed++; addEvent("wifipush", had[h], 0, "missed"); } }
+      wifiMoveInfo = "";
+      for (int h = 0; h < hadN; h++) {
+        int k = findStrip(had[h]);
+        bool ok = wifiOkMacs.indexOf(had[h]) >= 0;
+        if (wifiMoveInfo.length() < 420) {
+          wifiMoveInfo += had[h].substring(6) + ":";
+          if (ok) wifiMoveInfo += "ok " + String((okAt[h] ? okAt[h] - 1 : 0) / 1000.0f, 1) + "s";
+          else if (k < 0) wifiMoveInfo += "missed offline";
+          else wifiMoveInfo += "missed no_reply rssi=" + String(strips[k].hasRssi ? strips[k].rssi : 0) + " fw=" + strips[k].fw;
+          wifiMoveInfo += " sends=" + String(sends[h]) + "; ";
+        }
+        if (!ok) { missed++; addEvent("wifipush", had[h], 0, "missed"); }
+      }
       if (missed) {
         String oldS = secSsid, oldP = secWifi;
-        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && strips[k].connOk) sendWifiTo(strips[k], oldS, oldP); }
+        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && wifiOkMacs.indexOf(had[h]) >= 0) sendWifiTo(strips[k], oldS, oldP); }
         pump(2500);
         wifiTestState = "failed";
         wifiTestMsg = "strips:" + String(missed);

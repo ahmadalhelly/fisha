@@ -16,11 +16,16 @@ String stripJson(int i) {
   float pw = 0, en = 0;
   bool any = false;
   uint32_t now = millis();
+  float vS = (!isnan(s.voltage) && s.voltage > 50) ? s.voltage : 220.0f, ampsSum = 0;
+  bool anyReal = false;
   String outs = "[";
   for (int k = 0; k < 4; k++) {
     const Outlet& o = s.o[k];
     float p = o.on ? o.powerW : 0;
     pw += p; en += o.energyWh / 1000.0f; any |= o.on;
+    bool real = curValid(s, k, now);
+    float oa = outletAmps(s, k, vS, now);
+    anyReal |= real; ampsSum += oa;
     long left = s.autoOffAt[k] ? (long)((int32_t)(s.autoOffAt[k] - now) / 1000) : -1;
     if (k) outs += ",";
     outs += "{\"n\":" + String(k + 1) + ",\"on\":" + (o.on ? "true" : "false") + ",\"power_w\":" + String(o.powerW, 2) +
@@ -30,14 +35,15 @@ String stripJson(int i) {
             ",\"amp_limit\":" + (s.ampX2[k] ? String(s.ampX2[k] * 0.5f, 1) : "0") +
             ",\"auto_off_min\":" + String(s.autoOffMin[k]) +
             ",\"auto_off_in_s\":" + String(left < 0 ? -1 : left) + ",\"sched\":" + (hasSched(s.mac, k + 1) ? "true" : "false") +
-            ",\"rule\":" + (hasRule(s.mac, k + 1) ? "true" : "false") + "}";
+            ",\"rule\":" + (hasRule(s.mac, k + 1) ? "true" : "false") +
+            ",\"current_a\":" + String(oa, 2) + ",\"cur_real\":" + (real ? "true" : "false") + "}";
   }
   outs += "]";
   return "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"label\":\"" + jsonEsc(s.label) +
          "\",\"model\":\"" + s.model + "\",\"fw\":\"" + s.fw + "\",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
          ",\"power_w\":" + String(pw, 2) + ",\"energy_kwh\":" + String(en, 3) +
          ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
-         ",\"current_a\":" + (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2)) +
+         ",\"current_a\":" + (anyReal ? String(ampsSum, 2) : (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2))) +
          ",\"rssi\":" + (s.hasRssi ? String(s.rssi) : String("null")) + ",\"up_s\":" + String((millis() - s.connectedAt) / 1000) +
          ",\"mlock\":" + (s.masterLock ? "true" : "false") + ",\"notify\":" + String(s.notifyMask) +
          ",\"sched\":" + (hasSched(s.mac, 0) ? "true" : "false") + ",\"rule\":" + (hasRule(s.mac, 0) ? "true" : "false") + ",\"outlets\":" + outs + "}";
@@ -66,7 +72,7 @@ String timersJson() {
 uint32_t stateDevicesBytes(const HubUser* u) {
   uint32_t n = 0;
   for (int i = 0; i < MAX_STRIPS; i++)
-    if (strips[i].used && strips[i].identified && (!u || userHas(*u, strips[i].mac))) n += 1300;
+    if (strips[i].used && strips[i].identified && (!u || userHas(*u, strips[i].mac))) n += 1500;
   for (int k = 0; k < knownCount; k++)
     if (findStrip(known[k].mac) < 0 && (!u || userHas(*u, known[k].mac))) n += 1100;
   return n;

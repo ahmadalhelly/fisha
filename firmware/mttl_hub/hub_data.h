@@ -53,6 +53,12 @@ struct Strip {
   uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
   bool connOk = false;                           // strip answered connect_ok to a network handed over on its link
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
+  // real per-outlet current (up:power_report:<ch>:current answers in mA). One power_report request in flight per strip.
+  float curA[4] = {0, 0, 0, 0}, curPw[4] = {0, 0, 0, 0};   // last real current (A) and the outlet's power (W) when it was read
+  uint32_t curAt[4] = {0, 0, 0, 0};              // when it was read (0 = never)
+  uint32_t pwrAt = 0;                            // when the pending power_report request was sent
+  uint8_t pwrKind = 0, pwrCh = 0, curNext = 0, curBadN = 0;   // pending request: 0 none · 1 voltage · 2 current (and its channel) · next outlet to ask · answers that were not mA
+  bool curBad = false;                           // this strip answers :current in another unit: stop asking
 };
 
 struct Timer { bool used = false; uint32_t id = 0; char mac[13] = {0}; uint8_t outlet = 0, kind = 0, phase = 0; bool on = false;
