@@ -8,7 +8,7 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 - `mttl_hub.ino` (version, libraries, configuration, includes) + 14 parts `hub_data.h` ... `hub_wifi.h`, cut only at the old section banners. Text order is unchanged, so static initialisation order is unchanged.
 - Proof: the code and data sections of the built firmware (`.iram0.text`, `.flash.text`, `.dram0.data`, `.flash.appdesc`) are byte-identical to the build of the single file; the only difference in the whole image is the build time string. The host tests pass unchanged through `tests/flatten.py`.
 - Why: one 5300-line file was hard to review. Prototypes: PlatformIO only auto-generates them for functions written in the `.ino` itself, so they are now explicit in `hub_protos.h`.
-- Regenerating `hub_protos.h`: run the PlatformIO prototype regex over the flattened source (`tests/flatten.py`), the same way `platformio/builder/tools/pioino.py` does.
+- Regenerating `hub_protos.h`: `python3 firmware/tools/gen_protos.py` (it runs the PlatformIO prototype regex over the flattened source; `--check` tells if the file is out of date).
 
 ### Owner recovery (unreleased, not yet flashed by the owner's CI build)
 - Owner can take the hub back on a new phone: `/api/auth/claim` accepts a phone whose email already owns the hub when the update password is also sent (`ota`). The phone gets a new key and the old key of that email is replaced.
