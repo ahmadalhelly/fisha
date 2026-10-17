@@ -25,7 +25,7 @@ void tcpKeepAlive(WiFiClient& c);
 bool flushTx(Strip& s, uint32_t maxMs);
 void sendLine(Strip& s, const String& line);
 void sendChildLock(Strip& s);
-void sendWifiTo(Strip& s, const String& ssid, const String& pass);
+bool sendWifiTo(Strip& s, const String& ssid, const String& pass);
 int typeBit(const String& t);
 void queueNotify(const String& type, const String& mac, int outlet, const String& msg);
 String noteTitle(const Note& n);

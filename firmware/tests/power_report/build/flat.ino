@@ -208,6 +208,8 @@ struct Strip {
   float curA[4] = {0, 0, 0, 0}, curPw[4] = {0, 0, 0, 0};   // last real current (A) and the outlet's power (W) when it was read
   uint32_t curAt[4] = {0, 0, 0, 0};              // when it was read (0 = never)
   uint32_t pwrAt = 0;                            // when the pending power_report request was sent
+  float preA[4] = {0,0,0,0};          // the reading before curA
+  uint32_t preAt[4] = {0,0,0,0};
   uint8_t pwrKind = 0, pwrCh = 0, curNext = 0, curBadN = 0;   // pending request: 0 none · 1 voltage · 2 current (and its channel) · next outlet to ask · answers that were not mA
   bool curBad = false;                           // this strip answers :current in another unit: stop asking
 };
@@ -625,12 +627,13 @@ void sendChildLock(Strip& s) {
   // and come back when it is turned off
   sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));
 }
-void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
-  if (s.dead || !s.c.connected()) return;
+bool sendWifiTo(Strip& s, const String& ssid, const String& pass) {
+  if (s.dead || !s.c.connected()) return false;
   s.connOk = false;
   s.txq += "up:connect:" + ssid + ":" + pass + "\r\n";
   flushTx(s, 150);
   Serial.printf("[tx %s] up:connect:%s:****\n", s.mac.c_str(), ssid.c_str());
+  return true;
 }
 
 bool mqttPub(const String& topic, const String& payload, int qos, bool retain);
@@ -1283,7 +1286,10 @@ void voltCheck(Strip& s) {
 // Without one the estimate (W / V) is used, as before.
 bool curValid(const Strip& s, int k, uint32_t now) {
   const Outlet& o = s.o[k];
-  if (!o.on || !s.curAt[k] || (int32_t)(now - s.curAt[k]) > 45000) return false;
+  if (!o.on || !s.curAt[k]) return false;
+  int32_t age = (int32_t)(now - s.curAt[k]);       // a reading a few ms newer than 'now' is fine; one older than 45 s (or from before a 24-day wrap) is not
+  if (age < 0 && age > -1000) age = 0;
+  if (age < 0 || age > 45000) return false;
   float d = o.powerW - s.curPw[k];
   if (d < 0) d = -d;
   return d <= s.curPw[k] * 0.15f + 10.0f;
@@ -1297,7 +1303,10 @@ float outletAmps(const Strip& s, int k, float volts, uint32_t now) {
 float outletAmpsMax(const Strip& s, int k, float volts, uint32_t now) {
   if (!s.o[k].on) return 0;
   float est = s.o[k].powerW / volts;
-  return curValid(s, k, now) && s.curA[k] > est ? s.curA[k] : est;
+  // one reading never decides alone (it may be an inrush spike or a bad sample): the lower of the last two counts
+  if (!curValid(s, k, now) || !s.preAt[k] || s.curAt[k] - s.preAt[k] > 60000UL) return est;
+  float real = s.curA[k] < s.preA[k] ? s.curA[k] : s.preA[k];
+  return real > est ? real : est;
 }
 
 // ---------- automations / protections (evaluated after every poll) ----------
@@ -1359,8 +1368,9 @@ void evalStrip(int i) {
 
   // over-current on the whole strip
   float amps = total / volts;
-  float ampsHold = amps, ampsShown = 0;
+  float ampsHold = amps, ampsShown = 0, ampsMaxShown = 0;
   { float sumMax = 0; for (int k = 0; k < 4; k++) { sumMax += outletAmpsMax(s, k, volts, now); ampsShown += outletAmps(s, k, volts, now); }
+    ampsMaxShown = sumMax;
     if (sumMax > ampsHold) ampsHold = sumMax; }
   if (aProt && ampsHold > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
@@ -1406,8 +1416,8 @@ void evalStrip(int i) {
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
     float pw, tc, cur;
     bool on;
-    if (r.outlet == 0) { pw = total; tc = hottest; cur = ampsShown; on = anyOn; }
-    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
+    if (r.outlet == 0) { pw = total; tc = hottest; cur = r.above ? max(ampsShown, ampsMaxShown) : ampsShown; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = r.above ? max(outletAmps(s, r.outlet - 1, volts, now), outletAmpsMax(s, r.outlet - 1, volts, now)) : outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
     // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
@@ -1525,10 +1535,11 @@ void handlePowerReport(Strip& s, const String& line) {
     bool num = f[1].length() > 0 && f[1].length() <= 6;
     for (unsigned c = 0; num && c < f[1].length(); c++) if (f[1][c] < '0' || f[1][c] > '9') num = false;
     long mA = num ? f[1].toInt() : -1;
-    if (mA >= 50000) { if (++s.curBadN >= 3) s.curBad = true; }
+    if (mA >= 50000) { if (++s.curBadN >= 3) { s.curBad = true; for (int q = 0; q < 4; q++) { s.curAt[q] = 0; s.preAt[q] = 0; } } }
     else if (mA >= 0 && mA <= 20000 && s.pwrCh >= 1 && s.pwrCh <= 4) {
       int k = s.pwrCh - 1;
       s.curBadN = 0;
+      s.preA[k] = s.curA[k]; s.preAt[k] = s.curAt[k];   // the protections need two readings in a row
       s.curA[k] = mA / 1000.0f;
       s.curPw[k] = s.o[k].powerW;
       s.curAt[k] = millis() | 1;
@@ -1589,7 +1600,7 @@ void handleLine(int i, const String& line) {
   if (line.startsWith("up:power_report:")) { handlePowerReport(s, line); return; }
   if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover sent on the normal link
     s.connOk = true;
-    if (wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
+    if (wifiTestState == "moving" && wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
     addEvent("wifipush", s.mac, 0, "connect_ok");
     return;
   }
@@ -1708,7 +1719,7 @@ void pollStrips() {
     if (!s.used || !s.identified) continue;
     sendLine(s, "up:getinfo:all");
     if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
-    else if (pollCount % DIAG_EVERY == 1) askCurrent(s);
+    else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
   }
 }
 
@@ -5128,8 +5139,7 @@ void runWifiTest() {
       for (int h = 0; h < hadN; h++) {
         int k = findStrip(had[h]);
         if (k < 0) continue;
-        sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
-        lastSend[h] = millis(); sends[h] = 1;
+        if (sendWifiTo(strips[k], wifiTestSsid, wifiTestPass)) { lastSend[h] = millis(); sends[h] = 1; }
       }
       // up to 40 s for every strip to answer connect_ok (a strip that is still re-dialling gets the network as soon as it
       // is back; one that has not answered gets it again every 12 s, up to 3 times). It ends at once when all answered.
@@ -5141,9 +5151,9 @@ void runWifiTest() {
           all = false;
           int k = findStrip(had[h]);
           if (k < 0) continue;                   // not back yet: keep waiting
-          if (!sends[h] || (sends[h] < 3 && n - lastSend[h] > 12000)) {
-            sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
-            lastSend[h] = n; sends[h]++;
+          // nothing new is started in the last 10 s: a strip would have no time left to answer before the revert decision
+          if (n - t0 < 30000 && (!sends[h] || (sends[h] < 3 && n - lastSend[h] > 12000))) {
+            if (sendWifiTo(strips[k], wifiTestSsid, wifiTestPass)) { lastSend[h] = n; sends[h]++; }
           }
         }
         if (all) break;
@@ -5167,8 +5177,12 @@ void runWifiTest() {
       }
       if (missed) {
         String oldS = secSsid, oldP = secWifi;
-        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && wifiOkMacs.indexOf(had[h]) >= 0) sendWifiTo(strips[k], oldS, oldP); }
-        pump(2500);
+        // every strip that was sent the new network gets the old one back (also one whose answer was lost or came late);
+        // a strip that never left the old network just keeps it. Done twice to catch a strip that re-dials meanwhile.
+        for (int pass = 0; pass < 2; pass++) {
+          for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && sends[h]) sendWifiTo(strips[k], oldS, oldP); }
+          pump(pass ? 500 : 2500);
+        }
         wifiTestState = "failed";
         wifiTestMsg = "strips:" + String(missed);
         wifiTestPass = "";

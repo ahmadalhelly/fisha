@@ -183,7 +183,10 @@ void voltCheck(Strip& s) {
 // Without one the estimate (W / V) is used, as before.
 bool curValid(const Strip& s, int k, uint32_t now) {
   const Outlet& o = s.o[k];
-  if (!o.on || !s.curAt[k] || (int32_t)(now - s.curAt[k]) > 45000) return false;
+  if (!o.on || !s.curAt[k]) return false;
+  int32_t age = (int32_t)(now - s.curAt[k]);       // a reading a few ms newer than 'now' is fine; one older than 45 s (or from before a 24-day wrap) is not
+  if (age < 0 && age > -1000) age = 0;
+  if (age < 0 || age > 45000) return false;
   float d = o.powerW - s.curPw[k];
   if (d < 0) d = -d;
   return d <= s.curPw[k] * 0.15f + 10.0f;
@@ -197,7 +200,10 @@ float outletAmps(const Strip& s, int k, float volts, uint32_t now) {
 float outletAmpsMax(const Strip& s, int k, float volts, uint32_t now) {
   if (!s.o[k].on) return 0;
   float est = s.o[k].powerW / volts;
-  return curValid(s, k, now) && s.curA[k] > est ? s.curA[k] : est;
+  // one reading never decides alone (it may be an inrush spike or a bad sample): the lower of the last two counts
+  if (!curValid(s, k, now) || !s.preAt[k] || s.curAt[k] - s.preAt[k] > 60000UL) return est;
+  float real = s.curA[k] < s.preA[k] ? s.curA[k] : s.preA[k];
+  return real > est ? real : est;
 }
 
 // ---------- automations / protections (evaluated after every poll) ----------
@@ -259,8 +265,9 @@ void evalStrip(int i) {
 
   // over-current on the whole strip
   float amps = total / volts;
-  float ampsHold = amps, ampsShown = 0;
+  float ampsHold = amps, ampsShown = 0, ampsMaxShown = 0;
   { float sumMax = 0; for (int k = 0; k < 4; k++) { sumMax += outletAmpsMax(s, k, volts, now); ampsShown += outletAmps(s, k, volts, now); }
+    ampsMaxShown = sumMax;
     if (sumMax > ampsHold) ampsHold = sumMax; }
   if (aProt && ampsHold > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
@@ -306,8 +313,8 @@ void evalStrip(int i) {
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
     float pw, tc, cur;
     bool on;
-    if (r.outlet == 0) { pw = total; tc = hottest; cur = ampsShown; on = anyOn; }
-    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
+    if (r.outlet == 0) { pw = total; tc = hottest; cur = r.above ? max(ampsShown, ampsMaxShown) : ampsShown; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = r.above ? max(outletAmps(s, r.outlet - 1, volts, now), outletAmpsMax(s, r.outlet - 1, volts, now)) : outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
     // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.

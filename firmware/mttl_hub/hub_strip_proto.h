@@ -78,10 +78,11 @@ void handlePowerReport(Strip& s, const String& line) {
     bool num = f[1].length() > 0 && f[1].length() <= 6;
     for (unsigned c = 0; num && c < f[1].length(); c++) if (f[1][c] < '0' || f[1][c] > '9') num = false;
     long mA = num ? f[1].toInt() : -1;
-    if (mA >= 50000) { if (++s.curBadN >= 3) s.curBad = true; }
+    if (mA >= 50000) { if (++s.curBadN >= 3) { s.curBad = true; for (int q = 0; q < 4; q++) { s.curAt[q] = 0; s.preAt[q] = 0; } } }
     else if (mA >= 0 && mA <= 20000 && s.pwrCh >= 1 && s.pwrCh <= 4) {
       int k = s.pwrCh - 1;
       s.curBadN = 0;
+      s.preA[k] = s.curA[k]; s.preAt[k] = s.curAt[k];   // the protections need two readings in a row
       s.curA[k] = mA / 1000.0f;
       s.curPw[k] = s.o[k].powerW;
       s.curAt[k] = millis() | 1;
@@ -142,7 +143,7 @@ void handleLine(int i, const String& line) {
   if (line.startsWith("up:power_report:")) { handlePowerReport(s, line); return; }
   if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover sent on the normal link
     s.connOk = true;
-    if (wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
+    if (wifiTestState == "moving" && wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
     addEvent("wifipush", s.mac, 0, "connect_ok");
     return;
   }
@@ -261,7 +262,7 @@ void pollStrips() {
     if (!s.used || !s.identified) continue;
     sendLine(s, "up:getinfo:all");
     if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
-    else if (pollCount % DIAG_EVERY == 1) askCurrent(s);
+    else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
   }
 }
 

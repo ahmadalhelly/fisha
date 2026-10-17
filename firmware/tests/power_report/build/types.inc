@@ -33,6 +33,8 @@ struct Strip {
   float curA[4] = {0, 0, 0, 0}, curPw[4] = {0, 0, 0, 0};   // last real current (A) and the outlet's power (W) when it was read
   uint32_t curAt[4] = {0, 0, 0, 0};              // when it was read (0 = never)
   uint32_t pwrAt = 0;                            // when the pending power_report request was sent
+  float preA[4] = {0,0,0,0};          // the reading before curA
+  uint32_t preAt[4] = {0,0,0,0};
   uint8_t pwrKind = 0, pwrCh = 0, curNext = 0, curBadN = 0;   // pending request: 0 none · 1 voltage · 2 current (and its channel) · next outlet to ask · answers that were not mA
   bool curBad = false;                           // this strip answers :current in another unit: stop asking
 };

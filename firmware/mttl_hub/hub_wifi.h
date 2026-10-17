@@ -190,8 +190,7 @@ void runWifiTest() {
       for (int h = 0; h < hadN; h++) {
         int k = findStrip(had[h]);
         if (k < 0) continue;
-        sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
-        lastSend[h] = millis(); sends[h] = 1;
+        if (sendWifiTo(strips[k], wifiTestSsid, wifiTestPass)) { lastSend[h] = millis(); sends[h] = 1; }
       }
       // up to 40 s for every strip to answer connect_ok (a strip that is still re-dialling gets the network as soon as it
       // is back; one that has not answered gets it again every 12 s, up to 3 times). It ends at once when all answered.
@@ -203,9 +202,9 @@ void runWifiTest() {
           all = false;
           int k = findStrip(had[h]);
           if (k < 0) continue;                   // not back yet: keep waiting
-          if (!sends[h] || (sends[h] < 3 && n - lastSend[h] > 12000)) {
-            sendWifiTo(strips[k], wifiTestSsid, wifiTestPass);
-            lastSend[h] = n; sends[h]++;
+          // nothing new is started in the last 10 s: a strip would have no time left to answer before the revert decision
+          if (n - t0 < 30000 && (!sends[h] || (sends[h] < 3 && n - lastSend[h] > 12000))) {
+            if (sendWifiTo(strips[k], wifiTestSsid, wifiTestPass)) { lastSend[h] = n; sends[h]++; }
           }
         }
         if (all) break;
@@ -229,8 +228,12 @@ void runWifiTest() {
       }
       if (missed) {
         String oldS = secSsid, oldP = secWifi;
-        for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && wifiOkMacs.indexOf(had[h]) >= 0) sendWifiTo(strips[k], oldS, oldP); }
-        pump(2500);
+        // every strip that was sent the new network gets the old one back (also one whose answer was lost or came late);
+        // a strip that never left the old network just keeps it. Done twice to catch a strip that re-dials meanwhile.
+        for (int pass = 0; pass < 2; pass++) {
+          for (int h = 0; h < hadN; h++) { int k = findStrip(had[h]); if (k >= 0 && sends[h]) sendWifiTo(strips[k], oldS, oldP); }
+          pump(pass ? 500 : 2500);
+        }
         wifiTestState = "failed";
         wifiTestMsg = "strips:" + String(missed);
         wifiTestPass = "";

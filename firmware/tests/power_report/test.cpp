@@ -50,7 +50,8 @@ int main() {
     s.curA[1] = 0.30f;
     CHECK(fabsf(outletAmpsMax(s, 1, 230.0f, nowMs) - 148.0f / 230.0f) < 1e-4);
     s.curA[1] = 0.90f;
-    CHECK(fabsf(outletAmpsMax(s, 1, 230.0f, nowMs) - 0.90f) < 1e-6);
+    CHECK(fabsf(outletAmpsMax(s, 1, 230.0f, nowMs) - 148.0f / 230.0f) < 1e-4);   // one reading alone: estimate
+    s.preA[1] = 0.95f; s.preAt[1] = s.curAt[1] - 6000; CHECK(fabsf(outletAmpsMax(s, 1, 230.0f, nowMs) - 0.90f) < 1e-6);   // confirmed by the one before
     // validity: load changed a lot, too old, switched off
     s.o[1].powerW = 400.0f;  CHECK(!curValid(s, 1, nowMs));
     s.o[1].powerW = 155.0f;  CHECK(curValid(s, 1, nowMs));                          // inside 15 % + 10 W
@@ -120,11 +121,32 @@ int main() {
     nowMs += 10000; lastPoll = 0;
     pollCount = 2; sent.clear(); pollStrips();                      // -> pollCount 3: slot 0
     CHECK(sent.size() == 3 && sent[0] == "up:getinfo:all" && sent[1] == "up:power_report:1:vol" && sent[2] == "up:query:wifirssi" && strips[0].pwrKind == 1);
-    nowMs += 2000; strips[0].pwrKind = 0; sent.clear(); pollStrips();   // slot 1 (the voltage answer came)
+    nowMs += 2000; sent.clear(); pollStrips();   // slot 1: only the state
+    CHECK(sent.size() == 1 && sent[0] == "up:getinfo:all" && strips[0].pwrKind == 1);
+    nowMs += 2000; sent.clear(); pollStrips();   // slot 2: the voltage answer never came, 4 s later the current is still asked
     CHECK(sent.size() == 2 && sent[1] == "up:power_report:1:current" && strips[0].pwrKind == 2);
-    nowMs += 2000; sent.clear(); pollStrips();                      // slot 2
-    CHECK(sent.size() == 1 && sent[0] == "up:getinfo:all");
-    for (auto& l : sent) CHECK(l.find(":power") == std::string::npos);
+    for (auto& l : sent) CHECK((l.size() < 6 || l.substr(l.size() - 6) != ":power"));
+  }
+  // ---- protections need two readings in a row; one spike never counts
+  { Strip s = fresh(); s.o[0].on = true; s.o[0].powerW = 460.0f;     // estimate 2.0 A
+    ask(s); handlePowerReport(s, "up:power_report:1:6000");           // spike 6 A
+    CHECK(outletAmps(s, 0, 230.0f, nowMs) == 6.0f);                   // shown
+    CHECK(fabsf(outletAmpsMax(s, 0, 230.0f, nowMs) - 2.0f) < 1e-4);   // but protections still see the estimate
+    nowMs += 3500; s.pwrKind = 0; ask(s); handlePowerReport(s, "up:power_report:1:5800");
+    CHECK(fabsf(outletAmpsMax(s, 0, 230.0f, nowMs) - 5.8f) < 1e-4);   // confirmed: the lower of the two
+    nowMs += 3500; s.pwrKind = 0; ask(s); handlePowerReport(s, "up:power_report:1:2100");
+    CHECK(fabsf(outletAmpsMax(s, 0, 230.0f, nowMs) - 2.1f) < 1e-4);
+    nowMs += 70000; CHECK(!curValid(s, 0, nowMs));                    // old
+  }
+  // ---- a reading from before a 24-day wrap is not fresh again
+  { Strip s = fresh(); s.o[0].on = true; s.o[0].powerW = 460.0f; s.curA[0] = 9.0f; s.curPw[0] = 460.0f; s.curAt[0] = 5001;
+    CHECK(!curValid(s, 0, 5001u + 0x80000000u + 10)); CHECK(!curValid(s, 0, 5001u + 0xFFFFF000u));
+    CHECK(curValid(s, 0, 5001 + 40000)); CHECK(curValid(s, 0, 4990));  // a few ms "older" now is still fine
+  }
+  // ---- after the third wrong-unit answer the readings are dropped
+  { Strip s = fresh(); s.o[0].on = true; s.o[0].powerW = 460.0f; s.curA[0] = 9.0f; s.curPw[0] = 460.0f; s.curAt[0] = nowMs;
+    for (int n = 0; n < 3; n++) { s.pwrKind = 0; nowMs += 4000; ask(s); handlePowerReport(s, "up:power_report:1:230000"); }
+    CHECK(s.curBad && !curValid(s, 0, nowMs));
   }
   printf(fails ? "FAILED %d\n" : "ALL PASSED\n", fails);
   return fails != 0;

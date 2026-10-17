@@ -268,12 +268,13 @@ void sendChildLock(Strip& s) {
   // and come back when it is turned off
   sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));
 }
-void sendWifiTo(Strip& s, const String& ssid, const String& pass) {
-  if (s.dead || !s.c.connected()) return;
+bool sendWifiTo(Strip& s, const String& ssid, const String& pass) {
+  if (s.dead || !s.c.connected()) return false;
   s.connOk = false;
   s.txq += "up:connect:" + ssid + ":" + pass + "\r\n";
   flushTx(s, 150);
   Serial.printf("[tx %s] up:connect:%s:****\n", s.mac.c_str(), ssid.c_str());
+  return true;
 }
 
 bool mqttPub(const String& topic, const String& payload, int qos, bool retain);

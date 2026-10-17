@@ -103,7 +103,7 @@ volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
 String wifiOkMacs;                              // strips that answered connect_ok during the move (kept by MAC, not by socket slot)
 String wifiMoveInfo;                            // what happened to each strip in the last move (shown in /api/health)
-const char* FW_VERSION = "1.0.1";
+const char* FW_VERSION = "1.0.2";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----

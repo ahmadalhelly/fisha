@@ -8,7 +8,10 @@ std::vector<String> split(const String& s, char sep) {
 }
 bool curValid(const Strip& s, int k, uint32_t now) {
   const Outlet& o = s.o[k];
-  if (!o.on || !s.curAt[k] || (int32_t)(now - s.curAt[k]) > 45000) return false;
+  if (!o.on || !s.curAt[k]) return false;
+  int32_t age = (int32_t)(now - s.curAt[k]);       // a reading a few ms newer than 'now' is fine; one older than 45 s (or from before a 24-day wrap) is not
+  if (age < 0 && age > -1000) age = 0;
+  if (age < 0 || age > 45000) return false;
   float d = o.powerW - s.curPw[k];
   if (d < 0) d = -d;
   return d <= s.curPw[k] * 0.15f + 10.0f;
@@ -20,7 +23,10 @@ float outletAmps(const Strip& s, int k, float volts, uint32_t now) {
 float outletAmpsMax(const Strip& s, int k, float volts, uint32_t now) {
   if (!s.o[k].on) return 0;
   float est = s.o[k].powerW / volts;
-  return curValid(s, k, now) && s.curA[k] > est ? s.curA[k] : est;
+  // one reading never decides alone (it may be an inrush spike or a bad sample): the lower of the last two counts
+  if (!curValid(s, k, now) || !s.preAt[k] || s.curAt[k] - s.preAt[k] > 60000UL) return est;
+  float real = s.curA[k] < s.preA[k] ? s.curA[k] : s.preA[k];
+  return real > est ? real : est;
 }
 void handlePowerReport(Strip& s, const String& line) {
   std::vector<String> f = split(line.substring(16), ':');
@@ -32,10 +38,11 @@ void handlePowerReport(Strip& s, const String& line) {
     bool num = f[1].length() > 0 && f[1].length() <= 6;
     for (unsigned c = 0; num && c < f[1].length(); c++) if (f[1][c] < '0' || f[1][c] > '9') num = false;
     long mA = num ? f[1].toInt() : -1;
-    if (mA >= 50000) { if (++s.curBadN >= 3) s.curBad = true; }
+    if (mA >= 50000) { if (++s.curBadN >= 3) { s.curBad = true; for (int q = 0; q < 4; q++) { s.curAt[q] = 0; s.preAt[q] = 0; } } }
     else if (mA >= 0 && mA <= 20000 && s.pwrCh >= 1 && s.pwrCh <= 4) {
       int k = s.pwrCh - 1;
       s.curBadN = 0;
+      s.preA[k] = s.curA[k]; s.preAt[k] = s.curAt[k];   // the protections need two readings in a row
       s.curA[k] = mA / 1000.0f;
       s.curPw[k] = s.o[k].powerW;
       s.curAt[k] = millis() | 1;
@@ -74,6 +81,6 @@ void pollStrips() {
     if (!s.used || !s.identified) continue;
     sendLine(s, "up:getinfo:all");
     if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
-    else if (pollCount % DIAG_EVERY == 1) askCurrent(s);
+    else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
   }
 }
