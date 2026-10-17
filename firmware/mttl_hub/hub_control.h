@@ -1,0 +1,320 @@
+// Fisha hub: strip control, energy, automations and protections. Part of mttl_hub.ino, included in order from there.
+// ---------- strip control ----------
+void dropStrip(Strip& s, const char* why) {
+  Serial.printf("[-] %s %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), why);
+  if (s.identified && (!strcmp(why, "disconnected") || !strcmp(why, "stale") || !strcmp(why, "socket stuck"))) {
+    String mac = s.mac;
+    if (offlineMacs.indexOf(mac) < 0) offlineMacs += mac + ",";
+    { SubT st("sock_close"); s.c.stop(); }
+    s = Strip();
+    stateDirty = true;
+    linkDrop(mac);
+    addEvent("offline", mac, 0, why);                 // why: "disconnected" (strip closed), "stale" (silent 45 s) or "socket stuck" (hub could not send,
+    return;
+  }
+  { SubT st("sock_close"); s.c.stop(); }
+  s = Strip();
+  stateDirty = true;
+}
+
+void noteCommanded(Strip& s, int outlet, bool on) {
+  uint8_t before = s.lockState;
+  for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    s.cmdAt[ch - 1] = millis();
+    if (on) s.lockState |= (1 << (ch - 1)); else s.lockState &= ~(1 << (ch - 1));
+  }
+  if (s.lockState != before && s.lockMask) saveLocks(s);
+}
+
+// fire-and-forget switch (used by schedules, timers, automations); the next poll confirms it
+// keep-always-on outlets ignore "off" unless it is a safety cut (force), which holds them off until switched on again
+bool keepSkip(Strip& s, int ch, bool on, bool force) {
+  uint8_t bit = 1 << (ch - 1);
+  if (on || !(s.keepMask & bit)) return false;
+  if (!force) return true;
+  s.keepHold |= bit;
+  return false;
+}
+
+// fix: a master "all on/off" (outlet == 0) used to also re-command a child-locked outlet, which raced
+// with the "keep a locked outlet where it belongs" resend (the lock enforcement loop) and could stall or confuse
+// the whole batch for the strip, so the other (free) outlets did not respond properly either. A direct command to
+// that one outlet (outlet == ch, from its own tile) still goes through — only the whole-strip master command skips
+// locked channels now, the same way it already skips keep-always-on ones.
+bool lockSkip(Strip& s, int ch, int outlet) { return outlet == 0 && (s.lockMask & (1 << (ch - 1))); }
+
+void sendOnOffF(Strip& s, int outlet, bool on, bool force) {
+  for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (on) s.tripMask &= ~(1 << (ch - 1));      // switched back on on purpose: stop chasing the safety cut
+    if (lockSkip(s, ch, outlet) || keepSkip(s, ch, on, force)) continue;
+    noteCommanded(s, ch, on);
+    sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
+    s.o[ch - 1].on = on;
+  }
+  sendLine(s, "up:getinfo:all");
+  stateDirty = true;
+}
+void sendOnOff(Strip& s, int outlet, bool on) { sendOnOffF(s, outlet, on, false); }
+
+// safety cut: switch the outlet off and keep checking the strip's next reports. If it still says "on", send
+// the off again (up to 4 more times), then raise "trip_fail" so the user knows the cut did not take.
+void protectCut(Strip& s, int k) {
+  sendOnOffF(s, k + 1, false, true);
+  s.tripMask |= 1 << k;
+  s.tripTries[k] = 0;
+  s.tripAt = millis();
+  s.tripSeq = s.infoSeq;
+}
+void tripVerify(Strip& s) {
+  if (!s.tripMask) return;
+  uint32_t now = millis();
+  if (s.infoSeq == s.tripSeq || now - s.tripAt < 1500) return;   // wait for a report made after the last off
+  for (int k = 0; k < 4; k++) {
+    uint8_t bit = 1 << k;
+    if (!(s.tripMask & bit)) continue;
+    if (!s.o[k].on) { s.tripMask &= ~bit; continue; }             // confirmed off
+    if (s.tripTries[k] >= 4) {
+      s.tripMask &= ~bit;
+      addEvent("trip_fail", s.mac, k + 1, String((int)s.o[k].powerW) + " W");
+      continue;
+    }
+    s.tripTries[k]++;
+    Serial.printf("[trip] %s outlet %d still on, off again (%u)\n", s.mac.c_str(), k + 1, s.tripTries[k]);
+    sendOnOffF(s, k + 1, false, true);
+    s.tripAt = now;
+    s.tripSeq = s.infoSeq;
+  }
+}
+
+void pumpStrips();
+void pumpFor(uint32_t ms) { uint32_t t0 = millis(); while (millis() - t0 < ms) { pumpStrips(); delay(5); } }
+bool waitForInfo(Strip& s, uint32_t seq, uint32_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) { pumpStrips(); if (!s.used) return false; if (s.infoSeq > seq) return true; delay(5); }
+  return false;
+}
+
+// switch and wait for the strip to confirm (used by app commands)
+bool setOutlets(Strip& s, int outlet, bool on) {
+  for (int ch = (outlet ? outlet : 1); ch <= (outlet ? outlet : 4); ch++) {
+    if (on) s.tripMask &= ~(1 << (ch - 1));
+    if (lockSkip(s, ch, outlet) || keepSkip(s, ch, on, false)) continue;
+    noteCommanded(s, ch, on);
+    sendLine(s, "up:onoff:" + String(ch) + ":" + (on ? "on" : "off"));
+    pumpFor(120);
+  }
+  pumpFor(300);
+  if (!s.used) return false;
+  uint32_t seq = s.infoSeq;
+  sendLine(s, "up:getinfo:all");
+  bool ok = waitForInfo(s, seq, 4000);
+  stateDirty = true;
+  return ok;
+}
+
+// ---------- energy ----------
+void energyUpdate(int i) {
+  if (!timeOk() || !histHeads(i)) return;
+  Strip& s = strips[i];
+  const ElogHead& h = elogs[i];
+  int32_t today = localDay();
+  bool changed = h.day == 0 || today != h.day;
+  for (int k = 0; k < 4; k++) changed |= s.o[k].energyWh < h.base[k];   // counter reset
+  if (!changed) return;
+  ELog* elp = elogGet(i);
+  if (!elp) return;                                // no memory now: next report tries again
+  ELog& el = *elp;
+  if (el.day == 0) {
+    el.day = today;
+    for (int k = 0; k < 4; k++) el.base[k] = s.o[k].energyWh;
+  } else if (today != el.day) {
+    int idx = ((el.day % ELOG_DAYS) + ELOG_DAYS) % ELOG_DAYS;
+    for (int k = 0; k < 4; k++) {
+      uint32_t c = s.o[k].energyWh;
+      el.wh[idx][k] = c >= el.base[k] ? c - el.base[k] : 0;
+      el.base[k] = c;
+    }
+    el.dayOf[idx] = el.day;
+    el.day = today;
+  } else {
+    for (int k = 0; k < 4; k++) if (s.o[k].energyWh < el.base[k]) el.base[k] = s.o[k].energyWh;
+  }
+  elogPut(i, elp);
+}
+
+
+// over-voltage + under-voltage protection for the whole strip
+void voltCheck(Strip& s) {
+  if (isnan(s.voltage)) return;
+  uint32_t now = millis();
+  // over-voltage is always enforced ; vProt only switches the under-voltage cut
+  bool underOn = vProt && vMin > 0;
+  bool badV = s.voltage > vMax || (underOn && s.voltage < vMin);
+  if (badV) {
+    s.vOkSince = 0;
+    if (s.ovCount < 255) s.ovCount++;
+    bool far = s.voltage > vMax + 15 || (underOn && s.voltage < vMin - 15);
+    if (s.vCutMask || (s.ovCount < 2 && !far)) return;   // two readings in a row, or one far outside
+    bool over = s.voltage > vMax;
+    uint8_t cut = 0;
+    for (int k = 0; k < 4; k++)                       // over-voltage cuts protected outlets too
+      if (s.o[k].on && (over || !(s.protMask & (1 << k)))) { protectCut(s, k); cut |= 1 << k; }
+    s.vCutMask = cut ? cut : 0x80;                     // 0x80 = tripped with nothing to cut
+    addEvent(over ? "overvolt" : "undervolt", s.mac, 0, String(s.voltage, 0) + " V");
+    stateDirty = true;
+    return;
+  }
+  s.ovCount = 0;
+  if (!s.vCutMask) return;
+  // back inside the safe window with a 5 V hysteresis
+  if (s.voltage > vMax - 5 || (underOn && s.voltage < vMin + 5)) { s.vOkSince = 0; return; }
+  if (!s.vOkSince) { s.vOkSince = now ? now : 1; return; }
+  if (now - s.vOkSince < 60000) return;
+  if (vRestore)
+    for (int k = 0; k < 4; k++) if (s.vCutMask & (1 << k)) sendOnOff(s, k + 1, true);
+  addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V ok");
+  s.vCutMask = 0;
+  s.vOkSince = 0;
+  stateDirty = true;
+}
+
+// ---------- automations / protections (evaluated after every poll) ----------
+void evalStrip(int i) {
+  Strip& s = strips[i];
+  uint32_t now = millis();
+  tripVerify(s);
+  float total = 0;
+  float volts = (!isnan(s.voltage) && s.voltage > 50) ? s.voltage : 220.0f;
+  for (int k = 0; k < 4; k++) {
+    Outlet& o = s.o[k];
+    total += o.on ? o.powerW : 0;
+    float oAmps = o.on ? (o.powerW / volts) : 0;
+
+    // over-temperature protection & near-limit warning
+    // 10 °C past the limit cuts on the first reading instead of waiting 30 s
+    if (tempProtect && o.on && o.tempC >= tempMax) {
+      if (!s.hotSince[k]) s.hotSince[k] = now ? now : 1;
+      if (o.tempC >= tempMax + 10 || now - s.hotSince[k] > 30000) {
+        protectCut(s, k);
+        addEvent("temp", s.mac, k + 1, String(o.tempC) + "°C");
+        s.hotSince[k] = 0;
+      }
+    } else {
+      s.hotSince[k] = 0;
+    }
+    // near temperature limit: 5 °C before tempMax (orange band)
+    if (tempProtect && o.on && o.tempC >= tempMax - 5 && o.tempC < tempMax) {
+      if (!(s.warnT & (1 << k))) { s.warnT |= (1 << k); addEvent("warn", s.mac, k + 1, String(o.tempC) + "°C (near " + String(tempMax) + "°C)"); }
+    } else if (!o.on || o.tempC < tempMax - 8) s.warnT &= ~(1 << k);
+
+    // per-outlet current limit (ampX2 in 0.5 A steps) & near-limit warning
+    float oMaxA = s.ampX2[k] ? (s.ampX2[k] * 0.5f) : 0;
+    if (oMaxA > 0 && o.on) {
+      if (oAmps >= oMaxA) {
+        if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
+        if (oAmps >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // 25 % over cuts at once
+          protectCut(s, k);
+          addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
+          s.ocoSince[k] = 0;
+        }
+      } else s.ocoSince[k] = 0;
+      // near current limit (>= 85 %)
+      if (oAmps >= oMaxA * 0.85f && oAmps < oMaxA) {
+        if (!(s.warnA & (1 << k))) { s.warnA |= (1 << k); addEvent("warn", s.mac, k + 1, String(oAmps, 1) + " A (near " + String(oMaxA, 1) + " A)"); }
+      } else if (!o.on || oAmps < oMaxA * 0.75f) s.warnA &= ~(1 << k);
+    } else { s.ocoSince[k] = 0; s.warnA &= ~(1 << k); }
+
+    // auto-off
+    if (s.autoOffAt[k] && (int32_t)(now - s.autoOffAt[k]) >= 0) {
+      s.autoOffAt[k] = 0;
+      if (o.on && !(s.keepMask & (1 << k))) {
+        sendOnOff(s, k + 1, false);
+        addEvent("auto_off", s.mac, k + 1, String(s.autoOffMin[k]) + " min");
+      }
+    }
+  }
+
+  // over-current on the whole strip
+  float amps = total / volts;
+  if (aProt && amps > aMax) {
+    if (!s.ocSince) s.ocSince = now ? now : 1;
+    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // 15 % over cuts at once
+      for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) protectCut(s, k);
+      addEvent("overcurrent", s.mac, 0, String(amps, 1) + " A");
+      s.ocSince = 0;
+    }
+  } else s.ocSince = 0;
+
+  // strip load limit: one strip never carries more than 3500 W (the stock firmware only warns at 3000 W and
+  // cuts at 16 A). After 3 s over (at once when 15 % over), the biggest unprotected loads go first until the rest
+  // fits; protected outlets are cut only if they alone keep the strip over the limit.
+  if (total > STRIP_MAX_W) {
+    if (!s.olSince) s.olSince = now ? now : 1;
+    if (total > STRIP_MAX_W * 1.15f || now - s.olSince > 3000) {
+      float left = 0;                              // what is still on now (the current cut above may have run)
+      for (int k = 0; k < 4; k++) left += s.o[k].on ? s.o[k].powerW : 0;
+      for (int pass = 0; pass < 2 && left > STRIP_MAX_W; pass++)
+        while (left > STRIP_MAX_W) {
+          int big = -1;
+          for (int k = 0; k < 4; k++)
+            if (s.o[k].on && s.o[k].powerW > 0 && (pass == 1 || !(s.protMask & (1 << k))) && (big < 0 || s.o[k].powerW > s.o[big].powerW)) big = k;
+          if (big < 0) break;
+          left -= s.o[big].powerW;
+          protectCut(s, big);
+        }
+      addEvent("overload", s.mac, 0, String((int)total) + " W");
+      s.olSince = 0;
+    }
+  } else s.olSince = 0;
+  if (total > 3300 && now - s.loadEventAt > 300000) {
+    s.loadEventAt = now;
+    addEvent("load", s.mac, 0, String((int)total) + " W");
+  }
+  int hottest = 0;
+  bool anyOn = false;
+  for (int k = 0; k < 4; k++) { hottest = max(hottest, s.o[k].tempC); anyOn |= s.o[k].on; }
+
+  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A
+  for (int a = 0; a < autoCount; a++) {
+    Autom& r = autos[a];
+    if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
+    float pw, tc, cur;
+    bool on;
+    if (r.outlet == 0) { pw = total; tc = hottest; cur = amps; on = anyOn; }
+    else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = o.on ? (o.powerW / volts) : 0; on = o.on; }
+    float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
+    // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
+    // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
+    // Before, it only armed after the load crossed back first: a heater already above, or an outlet already in
+    // standby, never tripped, and every hub reboot (firmware update) disarmed all rules.
+    bool clear;
+    if (r.metric == 2) { clear = pw < r.watts && tc < r.limit2; if (tc >= r.limit2) p = tc; }   // either limit (watts or temp)
+    else clear = r.above ? p < r.watts : p > r.watts;
+    if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; continue; }
+    bool cond = autoArmed[a];
+    // near-threshold warning (color-code alert) before the countdown trips
+    if (r.above && autoArmed[a] && on && !autoWarned[a]) {
+      float warnAt = r.watts * 0.85f;
+      if (r.metric == 1) warnAt = max(r.watts - 5.0f, 40.0f);
+      if (p >= warnAt && p < r.watts) {
+        autoWarned[a] = true;
+        addEvent("warn", s.mac, r.outlet, String(p, r.metric == 1 ? 0 : 1) + (r.metric == 1 ? "°C" : (r.metric == 3 ? " A" : " W")) + " (near " + String(r.watts, r.metric == 1 ? 0 : 1) + ")");
+      }
+    }
+    if (!cond) { autoSince[a] = 0; continue; }
+    if (!autoSince[a]) autoSince[a] = now ? now : 1;
+    if (now - autoSince[a] >= (uint32_t)r.holdS * 1000) {
+      autoArmed[a] = false;
+      autoWarned[a] = false;
+      autoSince[a] = 0;
+      if (r.act & 2) {
+        if (r.outlet == 0) {                       // whole strip: never cut protected outlets (router)
+          for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+        } else sendOnOffF(s, r.outlet, false, true);
+      }
+      String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : " W");
+      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, (unit == " C") ? 0 : 1) + unit);
+    }
+  }
+}
+

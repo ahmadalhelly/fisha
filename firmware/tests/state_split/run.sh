@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")"
 B=build; mkdir -p $B
 cp "$CORE/WString.cpp" "$CORE/WString.h" "$CORE/stdlib_noniso.h" "$CORE/stdlib_noniso.c" $B/
-INO=../../mttl_hub/mttl_hub.ino
+INO=$B/flat.ino; python3 ../flatten.py > $INO
 python3 extract.py $INO "struct Outlet" "struct ELog" "struct PeakLog" "struct ElogHead" "struct PeakHead" "struct Strip" "struct Known" \
   "struct HubUser" "struct HubUserV1" "struct UsersNV" "struct UsersNVV1" "line:const uint8_t USER_STRIPS" "struct PubMark" > $B/types.inc
 python3 extract.py $INO split isHex jsonEsc civilFromDays findStrip macKnown userHas parseStrips stripJson offlineStripJson \

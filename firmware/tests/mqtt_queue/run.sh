@@ -7,7 +7,8 @@ B=build; mkdir -p $B
 cp "$CORE/WString.cpp" "$CORE/WString.h" "$CORE/stdlib_noniso.h" "$CORE/stdlib_noniso.c" $B/
 sed -i 's/(char \*)realloc(/(char *)test_realloc(/' $B/WString.cpp          # lets the test make String allocations fail
 sed -i '27a extern "C" void* test_realloc(void*, size_t);' $B/WString.cpp
-awk '/^struct MqttOut/{f=1} /^String relaySignature/{f=0} f' ../../mttl_hub/mttl_hub.ino > $B/mqtt_extract.inc   # code under test, verbatim
+python3 ../flatten.py > $B/flat.ino
+awk '/^struct MqttOut/{f=1} /^String relaySignature/{f=0} f' $B/flat.ino > $B/mqtt_extract.inc   # code under test, verbatim
 SAN="-fsanitize=address,undefined -fno-omit-frame-pointer"
 g++ -std=gnu++17 -c -g $SAN -Istub -I$B $B/WString.cpp -o $B/WString.o
 gcc -c -g -Istub -I$B $B/stdlib_noniso.c -o $B/noniso.o

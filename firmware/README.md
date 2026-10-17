@@ -1,8 +1,14 @@
 # Fisha hub firmware
 
-Source: `mttl_hub/mttl_hub.ino` (CI builds this folder).
+Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in order (CI builds this folder). `hub_protos.h` holds the function prototypes that the Arduino/PlatformIO builder used to generate by itself; when a function is added to or removed from a part, regenerate it (see below). Host tests read the code through `tests/flatten.py`.
 
 ## Changelog
+
+### Code split into parts (no behaviour change)
+- `mttl_hub.ino` (version, libraries, configuration, includes) + 14 parts `hub_data.h` ... `hub_wifi.h`, cut only at the old section banners. Text order is unchanged, so static initialisation order is unchanged.
+- Proof: the code and data sections of the built firmware (`.iram0.text`, `.flash.text`, `.dram0.data`, `.flash.appdesc`) are byte-identical to the build of the single file; the only difference in the whole image is the build time string. The host tests pass unchanged through `tests/flatten.py`.
+- Why: one 5300-line file was hard to review. Prototypes: PlatformIO only auto-generates them for functions written in the `.ino` itself, so they are now explicit in `hub_protos.h`.
+- Regenerating `hub_protos.h`: run the PlatformIO prototype regex over the flattened source (`tests/flatten.py`), the same way `platformio/builder/tools/pioino.py` does.
 
 ### Owner recovery (unreleased, not yet flashed by the owner's CI build)
 - Owner can take the hub back on a new phone: `/api/auth/claim` accepts a phone whose email already owns the hub when the update password is also sent (`ota`). The phone gets a new key and the old key of that email is replaced.
