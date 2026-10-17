@@ -174,3 +174,43 @@ jobs:
           git add -f build10.log STATUS.txt fisha-hub-*.bin 2>/dev/null || git add -f build10.log STATUS.txt
           git commit -q -m "hub build log, run ${{ github.run_number }}"
           git push -f origin HEAD:ci-logs-fw || true
+
+  # After every build: remove the Actions runs, artifacts and caches of earlier builds of this workflow, so the
+  # storage quota never fills up. Kept: the newest successful run per branch (the release notes compare against it),
+  # runs still in progress, and the caches of this build. Runs before this one only; never the current run.
+  cleanup:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      CUR: ${{ github.run_id }}
+      WF: build-firmware.yml
+    steps:
+      - name: Delete earlier runs, artifacts and caches of this workflow
+        continue-on-error: true
+        run: |
+          runs=$(gh run list --workflow "$WF" --limit 200 --json databaseId,status,conclusion,headBranch \
+            -q '.[] | "\(.databaseId) \(.status) \(.conclusion) \(.headBranch)"')
+          keep=$(echo "$runs" | awk '$3=="success" && !seen[$4]++ {print $1}')
+          echo "$runs" | while read -r id status concl branch; do
+            [ -n "$id" ] || continue
+            [ "$id" -lt "$CUR" ] || continue            # this run and newer ones stay
+            [ "$status" = "completed" ] || continue
+            for a in $(gh api --paginate "repos/$REPO/actions/runs/$id/artifacts" --jq '.artifacts[].id' 2>/dev/null); do
+              gh api -X DELETE "repos/$REPO/actions/artifacts/$a" >/dev/null && echo "artifact $a of run $id removed"
+            done
+            if echo "$keep" | grep -qx "$id"; then continue; fi
+            gh api -X DELETE "repos/$REPO/actions/runs/$id" >/dev/null && echo "run $id removed"
+          done
+          # caches: per key family only the newest one is kept (the build of this run has saved its caches already, so
+          # it is the newest); the older ones go. A family is the key without its last part (the run number or hash).
+          gh cache list --limit 100 --json id,key,createdAt \
+            -q 'sort_by(.createdAt) | reverse | group_by(.key | sub("-[^-]*$"; "")) | .[] | .[1:][] | "\(.id) \(.key)"' |
+          while read -r cid key; do
+            gh cache delete "$cid" >/dev/null 2>&1 && echo "cache $key removed"
+          done
