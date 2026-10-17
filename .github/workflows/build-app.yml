@@ -66,6 +66,7 @@ jobs:
 
       - name: Upload APK as Artifact
         if: success()
+        continue-on-error: true      # the release below carries the APK too; a full artifact quota must not block it
         uses: actions/upload-artifact@v4
         with:
           name: Fisha-${{ steps.ver.outputs.v }}-build-${{ github.run_number }}
