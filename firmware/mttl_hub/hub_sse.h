@@ -27,7 +27,8 @@ static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
       pc[d++] = allocPcFix(f.pc);
       if (!f.next_pc || !esp_backtrace_get_next_frame(&f)) break;
     }
-    // the first two frames are this callback and the heap code that called it
+    // esp_backtrace_get_start starts at this callback's caller: the first two frames are heap_caps_alloc_failed and the
+    // heap_caps_* function above it (malloc / new frames can still follow)
     uint8_t skip = d > 2 ? 2 : 0;
     portENTER_CRITICAL(&allocSiteMux);
     allocSiteNote(size, pc + skip, d - skip, pcTaskGetName(nullptr), millis());

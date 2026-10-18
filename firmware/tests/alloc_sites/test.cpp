@@ -9,8 +9,8 @@ static int bad = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad++; } } while (0)
 int main() {
   uint32_t a[3] = {0x400d1000, 0x400d2000, 0x400d3000}, b[3] = {0x400d1000, 0x400d2000, 0x400d3004};
-  CHECK(allocPcFix(0x800d1234u) == 0x400d1234u);
-  CHECK(allocPcFix(0x400d1234u) == 0x400d1234u);
+  CHECK(allocPcFix(0x800d1234u) == 0x400d1231u);           // as esp_cpu_process_stack_pc(): window bits off, minus 3
+  CHECK(allocPcFix(0x400d1234u) == 0x400d1231u && allocPcFix(0xC0081000u) == 0x40080ffdu);
   int s1 = allocSiteNote(1528, a, 3, "loopTask", 100);
   int s2 = allocSiteNote(1528, a, 3, "loopTask", 200);
   CHECK(s1 == 0 && s2 == 0 && allocSites[0].n == 2 && allocSites[0].last == 200 && allocSites[0].depth == 3);
@@ -29,6 +29,9 @@ int main() {
   CHECK(stripFwHasChildLock("F1.1.0") && stripFwHasChildLock("F2.0.0") && stripFwHasChildLock("F1.0.82-x"));
   CHECK(!stripFwHasChildLock("F1.0.81") && !stripFwHasChildLock("F1.0.9") && !stripFwHasChildLock("1.0.66"));
   CHECK(!stripFwHasChildLock("") && !stripFwHasChildLock("F") && !stripFwHasChildLock("F1") && !stripFwHasChildLock("F1.0") && !stripFwHasChildLock("Fx.y.z"));
+  CHECK(!stripFwHasChildLock("F2") && !stripFwHasChildLock("F1.1") && !stripFwHasChildLock("F1.1."));
+  CHECK(stripFwHasChildLock("F1.0.82.1") && stripFwHasChildLock("comMTTL-W01_F1.0.85") && stripFwHasChildLock("FW F1.0.85"));
+  CHECK(!stripFwHasChildLock("FW F1.0.66") && stripFwHasChildLock("F1.0.99999999999") && !stripFwHasChildLock("F0.9.99999999999"));
   printf(bad ? "FAILED\n" : "alloc_sites: all passed\n");
   return bad;
 }

@@ -13,8 +13,9 @@ struct AllocSite {
 AllocSite allocSites[ALLOC_SITES];
 uint32_t allocSiteOther = 0;   // failures from sites that did not fit in the table
 
-// Xtensa return addresses carry the call size in the top two bits; this puts them back to the real code address
-uint32_t allocPcFix(uint32_t pc) { return (pc & 0x3FFFFFFFu) | 0x40000000u; }
+// Xtensa return addresses carry the call size in the top two bits; this puts them back to the real code address and
+// steps back 3 bytes onto the call itself, the same as ESP-IDF's esp_cpu_process_stack_pc() for panic backtraces
+uint32_t allocPcFix(uint32_t pc) { return ((pc & 0x3FFFFFFFu) | 0x40000000u) - 3; }
 
 uint32_t allocSiteKey(uint32_t size, const uint32_t* pc, uint8_t depth) {
   uint32_t h = 2166136261u ^ size;            // FNV-1a over the size and the addresses

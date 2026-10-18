@@ -76,6 +76,7 @@ extern char stateBadBuf[];
 extern volatile uint32_t allocFailN, allocFailAt, allocFailSize, allocFailCaps, allocFailFree, allocFailLargest, allocFailMaxSize;
 extern const char* volatile allocFailFn;
 extern const char* volatile allocFailTask;
+extern portMUX_TYPE allocSiteMux;
 // how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;

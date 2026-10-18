@@ -264,17 +264,18 @@ void sendLine(Strip& s, const String& line) {
 // F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
 // strips on F1.0.82 and newer have it (F1.0.82, F1.0.85, F1.1.0, F2.0.0 ...); older or unknown firmware does not
 bool stripFwHasChildLock(const String& fw) {
-  int p = fw.indexOf('F');
+  int p = 0;                                    // the first 'F' followed by a digit
+  while ((p = fw.indexOf('F', p)) >= 0 && !(p + 1 < (int)fw.length() && fw[p + 1] >= '0' && fw[p + 1] <= '9')) p++;
   if (p < 0) return false;
   int v[3] = {0, 0, 0}, k = 0;
   bool any = false;
   for (int i = p + 1; i < (int)fw.length() && k < 3; i++) {
     char ch = fw[i];
-    if (ch >= '0' && ch <= '9') { v[k] = v[k] * 10 + (ch - '0'); any = true; }
+    if (ch >= '0' && ch <= '9') { if (v[k] < 100000) v[k] = v[k] * 10 + (ch - '0'); any = true; }
     else if (ch == '.' && any) { k++; any = false; }
     else break;
   }
-  if (k < 2 && !any) return false;
+  if (k < 2 || (k == 2 && !any)) return false;  // needs all three numbers
   if (v[0] != 1) return v[0] > 1;
   if (v[1] != 0) return v[1] > 0;
   return v[2] >= 82;
