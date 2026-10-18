@@ -183,6 +183,11 @@ void handleLine(int i, const String& line) {
     uint8_t freeM = 0x0F & ~s.lockMask;
     if (s.lockMask && freeM && f[1] == "off" && !(s.infoOn & freeM))
       for (int k = 0; k < 4; k++) if (freeM & (1 << k)) sendOnOffF(s, k + 1, true, false);
+    // the master button also switched the locked outlets; put them back right away (the same command the poll below
+    // would send after its answer) so they flip for a moment instead of half a second
+    for (int k = 0; k < 4; k++)
+      if ((s.lockMask & (1 << k)) && !(s.keepMask & (1 << k)))
+        sendLine(s, "up:onoff:" + String(k + 1) + ":" + ((s.lockState & (1 << k)) ? "on" : "off"));
     sendLine(s, "up:getinfo:all");                           // master button: next poll re-applies locks
   }
 }
