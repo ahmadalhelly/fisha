@@ -262,8 +262,25 @@ void sendLine(Strip& s, const String& line) {
 
 // like sendLine, but the serial log shows only the network name, never the password
 // F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
+// strips on F1.0.82 and newer have it (F1.0.82, F1.0.85, F1.1.0, F2.0.0 ...); older or unknown firmware does not
+bool stripFwHasChildLock(const String& fw) {
+  int p = fw.indexOf('F');
+  if (p < 0) return false;
+  int v[3] = {0, 0, 0}, k = 0;
+  bool any = false;
+  for (int i = p + 1; i < (int)fw.length() && k < 3; i++) {
+    char ch = fw[i];
+    if (ch >= '0' && ch <= '9') { v[k] = v[k] * 10 + (ch - '0'); any = true; }
+    else if (ch == '.' && any) { k++; any = false; }
+    else break;
+  }
+  if (k < 2 && !any) return false;
+  if (v[0] != 1) return v[0] > 1;
+  if (v[1] != 0) return v[1] > 0;
+  return v[2] >= 82;
+}
 void sendChildLock(Strip& s) {
-  if (s.fw.indexOf("F1.0.82") < 0) return;
+  if (!stripFwHasChildLock(s.fw)) return;
   // the strip-level lock locks EVERY button on the strip (master + 4 outlets); the per-outlet locks stay saved
   // and come back when it is turned off
   sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));

@@ -76,6 +76,14 @@ jobs:
           path: fisha-hub-${{ steps.ver.outputs.v }}.bin
           if-no-files-found: error
 
+      # private (workflow artifact only, never in the release): turns /api/heapdiag addresses into code lines
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fisha-hub-elf-${{ steps.ver.outputs.v }}
+          path: firmware/.pio/build/hub/firmware.elf
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Publish as a release
         uses: softprops/action-gh-release@v2
         with:

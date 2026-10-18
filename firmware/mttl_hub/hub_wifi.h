@@ -363,6 +363,7 @@ void setup() {
   web.on("/api/state", HTTP_GET, handleState);
   web.on("/api/health", HTTP_GET, handleHealth);
   web.on("/api/raw", HTTP_GET, handleRaw);
+  web.on("/api/heapdiag", HTTP_GET, handleHeapDiag);
   web.on("/update", HTTP_GET, handleUpdatePage);
   web.on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   web.on("/stripfw", HTTP_GET, handleStripFwPage);

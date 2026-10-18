@@ -10,6 +10,12 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 - Why: one 5300-line file was hard to review. Prototypes: PlatformIO only auto-generates them for functions written in the `.ino` itself, so they are now explicit in `hub_protos.h`.
 - Regenerating `hub_protos.h`: `python3 firmware/tools/gen_protos.py` (it runs the PlatformIO prototype regex over the flattened source; `--check` tells if the file is out of date).
 
+### 1.0.3 (diagnostic build, not built or flashed yet)
+- Failed-memory call sites: every refused allocation now records the return addresses of the code that asked (`hub_allocsites.h`, a table of 6 sites: size, task, count, 8 addresses). `GET /api/heapdiag` lists them; turn the addresses into function and line with `addr2line -pfiaC -e firmware.elf <addr...>` (the CI run keeps `firmware.elf` as a private workflow artifact, not in the release). Why: 1528-byte requests in `loopTask` fail thousands of times and we do not know which line asks.
+- `/api/raw` takes an optional `mac=<strip MAC>`: the command goes to that strip (404 when it is not connected). Without `mac` it goes to the first strip as before. Why: to read or test one strip, e.g. the ones that refuse the Wi-Fi move.
+- Child lock now works for strip firmware F1.0.82 and newer (was exactly F1.0.82), so F1.0.85 and later keep the physical lock.
+- Host test: `firmware/tests/alloc_sites`. Backtrace calls (`esp_backtrace_get_start` / `esp_backtrace_get_next_frame`) are not compiled on the host; they are verified only by the CI build and on the device.
+
 ### 1.0.2 (unreleased, not yet flashed)
 - Real per-outlet current: the hub asks each outlet that is on for `up:power_report:<ch>:current` (mA), one request per 6 s poll cycle, only one request in flight per strip. `:power` is never sent (it answers in mW and would look like a voltage). New JSON: per outlet `current_a` + `cur_real`, strip `current_a`, a 6th number in each `live` outlet (A, -1 = none). Old apps ignore them.
 - Why it is safe: a reading counts for 45 s and only while the outlet's watts stay within 15 % + 10 W of when it was read. Shown values and rules use it; protections use `max(W/V, lower of the last two readings)`, instant cuts use W/V only. After 3 answers that are not mA the strip is not asked again. Effect: loads with a low power factor (motors, power supplies) can reach an amp limit earlier than before, because real amps are higher than W/V.

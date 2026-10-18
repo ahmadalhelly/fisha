@@ -66,6 +66,7 @@ struct PairReq;
 #include <errno.h>
 #include <vector>
 #include "esp_heap_caps.h"
+#include "esp_debug_helpers.h"
 
 // ================== CONFIG ==================
 const char* WIFI_SSID = "YOUR_WIFI_NAME";                 // 2.4 GHz home network — also given to new strips (can be changed from the app)
@@ -103,7 +104,7 @@ volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
 String wifiOkMacs;                              // strips that answered connect_ok during the move (kept by MAC, not by socket slot)
 String wifiMoveInfo;                            // what happened to each strip in the last move (shown in /api/health)
-const char* FW_VERSION = "1.0.2";
+const char* FW_VERSION = "1.0.3";
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----
@@ -159,6 +160,7 @@ const int      ELOG_DAYS = 90;
 #include "hub_json.h"
 #include "hub_auth.h"
 #include "hub_api.h"
+#include "hub_allocsites.h"
 #include "hub_http.h"
 #include "hub_sse.h"
 #include "hub_mqtt.h"

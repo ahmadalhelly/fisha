@@ -15,8 +15,24 @@ void sseCutNow() { sseCut++; sseCutAt = millis(); }
 volatile uint32_t allocFailN = 0, allocFailAt = 0, allocFailSize = 0, allocFailCaps = 0, allocFailFree = 0, allocFailLargest = 0, allocFailMaxSize = 0;
 const char* volatile allocFailFn = "";
 const char* volatile allocFailTask = "";
+portMUX_TYPE allocSiteMux = portMUX_INITIALIZER_UNLOCKED;
 static void allocFailCb(size_t size, uint32_t caps, const char* fn) {
   allocFailN++;
+  if (!xPortInIsrContext()) {   // who asked: return addresses of the calling code, kept per site (see hub_allocsites.h)
+    uint32_t pc[ALLOC_BT + 2];
+    uint8_t d = 0;
+    esp_backtrace_frame_t f;
+    esp_backtrace_get_start(&f.pc, &f.sp, &f.next_pc);
+    while (d < ALLOC_BT + 2) {
+      pc[d++] = allocPcFix(f.pc);
+      if (!f.next_pc || !esp_backtrace_get_next_frame(&f)) break;
+    }
+    // the first two frames are this callback and the heap code that called it
+    uint8_t skip = d > 2 ? 2 : 0;
+    portENTER_CRITICAL(&allocSiteMux);
+    allocSiteNote(size, pc + skip, d - skip, pcTaskGetName(nullptr), millis());
+    portEXIT_CRITICAL(&allocSiteMux);
+  }
   allocFailAt = millis();
   allocFailSize = size;
   if (size > allocFailMaxSize) allocFailMaxSize = size;
