@@ -3,7 +3,7 @@
 // allocFailCb (hub_sse.h) hands every refused request here with the return addresses of the code that asked. The same
 // size from the same call chain is one site, so a table of a few entries shows which line keeps failing (the addresses
 // are turned into lines with addr2line on the build's firmware.elf). Plain arrays only: no allocation, no logging.
-const uint8_t ALLOC_SITES = 6, ALLOC_BT = 8;
+const uint8_t ALLOC_SITES = 6, ALLOC_BT = 14;
 struct AllocSite {
   uint32_t key = 0, n = 0, last = 0, size = 0;
   uint32_t pc[ALLOC_BT] = {0};

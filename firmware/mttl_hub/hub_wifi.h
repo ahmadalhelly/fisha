@@ -221,7 +221,7 @@ void runWifiTest() {
           wifiMoveInfo += had[h].substring(6) + ":";
           if (ok) wifiMoveInfo += "ok " + String((okAt[h] ? okAt[h] - 1 : 0) / 1000.0f, 1) + "s";
           else if (k < 0) wifiMoveInfo += "missed offline";
-          else wifiMoveInfo += "missed no_reply rssi=" + String(strips[k].hasRssi ? strips[k].rssi : 0) + " fw=" + strips[k].fw;
+          else wifiMoveInfo += "missed no_reply rssi=" + String(strips[k].hasRssi ? strips[k].rssi : 0) + " fw=" + strips[k].fw + " last_rx=" + strips[k].lastLine.substring(0, 50);
           wifiMoveInfo += " sends=" + String(sends[h]) + "; ";
         }
         if (!ok) { missed++; addEvent("wifipush", had[h], 0, "missed"); }

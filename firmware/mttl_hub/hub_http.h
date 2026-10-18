@@ -112,7 +112,7 @@ void handleHealth() {
 // Each pc is a code address: addr2line -pfiaC -e firmware.elf <pc...> gives the function and line.
 void handleHeapDiag() {
   if (!guard()) return;
-  static char buf[1500];
+  static char buf[2300];
   AllocSite snap[ALLOC_SITES];
   uint32_t other, now = millis();
   portENTER_CRITICAL(&allocSiteMux);
@@ -125,7 +125,7 @@ void handleHeapDiag() {
   bool first = true;
   for (int i = 0; i < ALLOC_SITES; i++) {
     if (!snap[i].key) continue;
-    if (n > (int)sizeof buf - 260) break;
+    if (n > (int)sizeof buf - 340) break;
     n += snprintf(buf + n, sizeof buf - n, "%s{\"n\":%u,\"size\":%u,\"task\":\"%s\",\"ago_s\":%u,\"pc\":[", first ? "" : ",",
                   (unsigned)snap[i].n, (unsigned)snap[i].size, snap[i].task, (unsigned)((now - snap[i].last) / 1000));
     first = false;

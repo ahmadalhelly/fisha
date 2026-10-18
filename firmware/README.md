@@ -11,6 +11,7 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 - Regenerating `hub_protos.h`: `python3 firmware/tools/gen_protos.py` (it runs the PlatformIO prototype regex over the flattened source; `--check` tells if the file is out of date).
 
 ### 1.0.4 (not built or flashed yet)
+- Diagnostics: the failed-allocation backtrace is 14 frames deep (was 8; `/api/heapdiag` buffer 2300 bytes) so it reaches the code that sends; `wifi_move` shows the last line each non-answering strip sent (`last_rx`). Why: the 1.0.3 data stopped inside lwip `tcp_write` and the strips answer nothing to `up:connect`.
 - Child lock and the strip's own master button: the hub now sends the locked outlets back to their saved state the moment the master-button event arrives, instead of after the next `getinfo` answer. Expected effect: the glitch of a locked outlet switching for about half a second gets much shorter. It cannot be removed completely, the strip switches the relay itself. Not verified on a device.
 
 ### 1.0.3 (diagnostic build, not built or flashed yet)
