@@ -116,11 +116,11 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _switchTile(
                     Icons.lock_outline,
                     Tr.isAr ? 'قفل الأطفال للمشترك كله' : 'Child lock for the whole strip',
-                    s.fw.contains('F1.0.82')
+                    stripFwHasChildLock(s.fw)
                         ? (Tr.isAr ? 'كل زراير المشترك نفسه (الرئيسي والمخارج) متشتغلش، والتطبيق شغال عادي' : 'Every button on the strip (master and outlets) stops working; the app still works')
                         : (Tr.isAr ? 'محتاج فيرموير المشترك F1.0.82 (حدّثه من مركز التحديثات)' : 'Needs strip firmware F1.0.82 (update it in the Update Center)'),
                     s.masterLock,
-                    state.hubV2 && s.online && s.fw.contains('F1.0.82'),
+                    state.hubV2 && s.online && stripFwHasChildLock(s.fw),
                     (v) => state.setMasterLock(s, v)),
                 if (state.canAdmin)
                 _switchTile(Icons.notifications_outlined, t('notify_strip'), t('notify_strip_sub'), s.notifyMask & 0x10 != 0, state.hubV2,
@@ -342,3 +342,13 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
 /// Schedules and automations that act on this outlet (or on its whole strip). A tap opens the rule's page
 /// and highlights it there.
 bool _linkedLoading = false;
+
+/// strip firmware F1.0.82 or newer (F1.0.83, F1.1.0, F2.0.0 ...) has the physical child lock
+bool stripFwHasChildLock(String fw) {
+  final m = RegExp(r'F(\d+)\.(\d+)\.(\d+)').firstMatch(fw);
+  if (m == null) return false;
+  final v = [for (var i = 1; i <= 3; i++) int.parse(m.group(i)!)];
+  if (v[0] != 1) return v[0] > 1;
+  if (v[1] != 0) return v[1] > 0;
+  return v[2] >= 82;
+}
