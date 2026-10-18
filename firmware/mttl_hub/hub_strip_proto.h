@@ -55,7 +55,7 @@ bool tryParseInfo(int i) {
     if (s.o[k].on) { s.keepHold &= ~bit; continue; }
     if (!(s.keepHold & bit)) keepRestore(s, k + 1);
   }
-  for (int k = 0; k < 4; k++) {                  // child lock: keep a locked outlet where it belongs
+  for (int k = 0; k < 4 && !stripOwnsLocks(s.fw); k++) {   // child lock: keep a locked outlet where it belongs (older strip fw)
     if (!(s.lockMask & (1 << k)) || (s.keepMask & (1 << k))) continue;
     bool want = s.lockState & (1 << k);
     if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
@@ -165,7 +165,7 @@ void handleLine(int i, const String& line) {
       s.o[ch - 1].on = false;
       keepRestore(s, ch);
       stateDirty = true;
-    } else if (isEvent && (s.lockMask & (1 << (ch - 1)))) {
+    } else if (isEvent && (s.lockMask & (1 << (ch - 1))) && !stripOwnsLocks(s.fw)) {
       bool want = s.lockState & (1 << (ch - 1));
       if (on != want) sendLine(s, "up:onoff:" + String(ch) + ":" + (want ? "on" : "off"));
       addEvent("lock", s.mac, ch, "");
@@ -176,6 +176,8 @@ void handleLine(int i, const String& line) {
       if (isEvent && changed && millis() - s.cmdAt[ch - 1] > 8000) { s.cmdAt[ch - 1] = millis(); addEvent("button", s.mac, ch, on ? "on" : "off"); }
       stateDirty = true;
     }
+  } else if (isEvent && ch == 0 && stripOwnsLocks(s.fw)) {
+    sendLine(s, "up:getinfo:all");                           // master button on F1.0.83+: the strip handled the locks, only refresh
   } else if (isEvent && ch == 0) {
     // the strip's own master button turns everything off while any outlet is on. With a child-locked outlet
     // left on, every press meant "all off": the hub put the locked one back and the free ones (already off) never came

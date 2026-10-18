@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 B=build; mkdir -p $B
 cp "$CORE/WString.cpp" "$CORE/WString.h" "$CORE/stdlib_noniso.h" "$CORE/stdlib_noniso.c" $B/
 python3 ../flatten.py > $B/flat.ino
-python3 ../state_split/extract.py $B/flat.ino stripFwHasChildLock > $B/code.inc
+python3 ../state_split/extract.py $B/flat.ino stripFwLevel stripFwHasChildLock stripOwnsLocks > $B/code.inc
 SAN="-fsanitize=address,undefined -fno-omit-frame-pointer"
 g++ -std=gnu++17 -c -g $SAN -I../mqtt_queue/stub -I$B $B/WString.cpp -o $B/WString.o
 gcc -c -g -I../mqtt_queue/stub -I$B $B/stdlib_noniso.c -o $B/noniso.o

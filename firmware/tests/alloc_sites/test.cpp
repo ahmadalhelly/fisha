@@ -32,6 +32,8 @@ int main() {
   CHECK(!stripFwHasChildLock("F2") && !stripFwHasChildLock("F1.1") && !stripFwHasChildLock("F1.1."));
   CHECK(stripFwHasChildLock("F1.0.82.1") && stripFwHasChildLock("comMTTL-W01_F1.0.85") && stripFwHasChildLock("FW F1.0.85"));
   CHECK(!stripFwHasChildLock("FW F1.0.66") && stripFwHasChildLock("F1.0.99999999999") && !stripFwHasChildLock("F0.9.99999999999"));
+  CHECK(!stripOwnsLocks("0.1.55-F1.0.82") && stripOwnsLocks("0.1.55-F1.0.83") && stripOwnsLocks("F1.1.0") && !stripOwnsLocks("1.0.66"));
+  CHECK(stripFwLevel("0.1.55-F1.0.82") == 82 && stripFwLevel("1.0.141") == -1 && stripFwLevel("F2.0.0") == 100000);
   printf(bad ? "FAILED\n" : "alloc_sites: all passed\n");
   return bad;
 }
