@@ -144,7 +144,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       );
 
   bool _pending(String kind) {
-    if (kind == 'strip') return s.strips.any((x) => x.online && x.fw.isNotEmpty && !x.fw.endsWith(UpdateService.latestStripFw));
+    if (kind == 'strip') return s.strips.any((x) => x.online && u.newer('strip', x.fw) != null);
     final cur = _current(kind);
     return u.newer(kind, cur) != null;
   }
@@ -257,11 +257,16 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
 
   bool _stripFetching = false;
   Future<void> _fetchLatestStrip() async {
+    final release = u.latest('strip');
+    if (release == null) {
+      setState(() => _status['strip'] = _tr('مفيش ملف فيرموير صالح منشور.', 'No valid strip firmware release is published.'));
+      return;
+    }
     setState(() {
       _stripFetching = true;
-      _status['strip'] = _tr('الـ Hub بيجيب الملف…', 'The hub is downloading…');
+      _status['strip'] = _tr('الـ Hub بيجيب F${release.version}…', 'The hub is downloading F${release.version}…');
     });
-    final err = await s.fetchStripFwByUrl(UpdateService.latestStripUrl);
+    final err = await s.fetchStripFwByUrl(release.url);
     if (!mounted) return;
     setState(() {
       _stripFetching = false;
@@ -285,17 +290,18 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Row(children: [
             Expanded(child: Text(x.label.isNotEmpty ? x.label : x.mac, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
-            Text(x.fw.isEmpty ? '—' : x.fw, textDirection: TextDirection.ltr, style: mono(12, color: !x.fw.endsWith(UpdateService.latestStripFw) ? C.warn : C.muted)),
+            Text(x.fw.isEmpty ? '—' : x.fw, textDirection: TextDirection.ltr,
+                style: mono(12, color: u.newer('strip', x.fw) != null ? C.warn : C.muted)),
           ]),
         ),
       const SizedBox(height: 8),
       // the hub downloads our latest strip build itself; the file never passes through the phone
       FilledButton.icon(
-        onPressed: s.mode == ConnMode.local && !_stripFetching ? _fetchLatestStrip : null,
+        onPressed: s.mode == ConnMode.local && !_stripFetching && u.latest('strip') != null ? _fetchLatestStrip : null,
         icon: _stripFetching
             ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: C.onAccent))
             : const Icon(Icons.cloud_download_outlined, size: 18),
-        label: Text(_tr('الـ Hub يجيب F${UpdateService.latestStripFw} ويحدّث', 'Hub gets F${UpdateService.latestStripFw} and updates')),
+        label: Text(_tr('الـ Hub يجيب F${u.latest('strip')?.version ?? '—'} ويحدّث', 'Hub gets F${u.latest('strip')?.version ?? '—'} and updates')),
         style: FilledButton.styleFrom(
             backgroundColor: C.accent, foregroundColor: C.onAccent, minimumSize: const Size(0, 44),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),

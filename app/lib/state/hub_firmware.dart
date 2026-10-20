@@ -77,7 +77,7 @@ extension AppStateHubFirmware on AppState {
     }
   }
 
-  /// {size, valid, why, running, items:[{mac, from, to, state, msg, pct}]}, or null when the hub can't be reached
+  /// {size, valid, why, fetching, running, items:[{mac, from, to, state, msg, pct}]}, or null when unreachable
   /// (or is older than 2.15.8).
   Future<Map<String, dynamic>?> stripFwState() async {
     try {
@@ -130,9 +130,23 @@ extension AppStateHubFirmware on AppState {
       final r = await http
           .post(_localUri('/api/stripfw/fetch'),
               headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders}, body: jsonEncode({'url': url}))
-          .timeout(const Duration(seconds: 30));
-      if (r.statusCode == 200) return null;
-      return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+          // Older 1.0.5 hubs finish the same endpoint synchronously; allow that
+          // response while newer hubs return immediately and expose fetching.
+          .timeout(const Duration(seconds: 35));
+      if (r.statusCode != 200) return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+      final deadline = DateTime.now().add(const Duration(seconds: 90));
+      while (DateTime.now().isBefore(deadline)) {
+        final state = await stripFwState();
+        if (state == null) return 'net';
+        if (state['fetching'] != true) {
+          final size = (state['size'] as num?)?.toInt() ?? 0;
+          if (state['valid'] == true && size > 0) return null;
+          final why = (state['why'] ?? '').toString();
+          return why.isEmpty ? 'download_failed' : why;
+        }
+        await Future.delayed(const Duration(seconds: 1));
+      }
+      return 'fetch_timeout';
     } catch (_) {
       return 'net';
     }
