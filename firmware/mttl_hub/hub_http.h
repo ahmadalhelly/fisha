@@ -76,6 +76,7 @@ extern char stateBadBuf[];
 extern volatile uint32_t allocFailN, allocFailAt, allocFailSize, allocFailCaps, allocFailFree, allocFailLargest, allocFailMaxSize;
 extern const char* volatile allocFailFn;
 extern const char* volatile allocFailTask;
+extern portMUX_TYPE allocSiteMux;
 // how full the settings storage is (a full NVS silently loses saves)
 String nvsStatsJson() {
   nvs_stats_t st;
@@ -107,16 +108,52 @@ void handleHealth() {
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");
 }
 
+// the call sites of the refused memory requests (see hub_allocsites.h), in a fixed buffer so the answer itself needs no allocation.
+// Each pc is a code address: addr2line -pfiaC -e firmware.elf <pc...> gives the function and line.
+void handleHeapDiag() {
+  if (!guard()) return;
+  static char buf[2300];
+  AllocSite snap[ALLOC_SITES];
+  uint32_t other, now = millis();
+  portENTER_CRITICAL(&allocSiteMux);
+  memcpy(snap, allocSites, sizeof snap);
+  other = allocSiteOther;
+  portEXIT_CRITICAL(&allocSiteMux);
+  int n = snprintf(buf, sizeof buf, "{\"alloc_fail\":%u,\"other\":%u,\"heap8\":%u,\"heap8_max\":%u,\"sites\":[",
+                   (unsigned)allocFailN, (unsigned)other, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  bool first = true;
+  for (int i = 0; i < ALLOC_SITES; i++) {
+    if (!snap[i].key) continue;
+    if (n > (int)sizeof buf - 340) break;
+    n += snprintf(buf + n, sizeof buf - n, "%s{\"n\":%u,\"size\":%u,\"task\":\"%s\",\"ago_s\":%u,\"pc\":[", first ? "" : ",",
+                  (unsigned)snap[i].n, (unsigned)snap[i].size, snap[i].task, (unsigned)((now - snap[i].last) / 1000));
+    first = false;
+    for (uint8_t k = 0; k < snap[i].depth; k++) n += snprintf(buf + n, sizeof buf - n, "%s\"0x%08x\"", k ? "," : "", (unsigned)snap[i].pc[k]);
+    n += snprintf(buf + n, sizeof buf - n, "]}");
+  }
+  n += snprintf(buf + n, sizeof buf - n, "]}");
+  if (n >= (int)sizeof buf) n = sizeof buf - 1;
+  NetworkClient& c = web.client();
+  char h[120];
+  int hn = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", n);
+  if (!sendNB(c, h, hn, 300) || !sendNB(c, buf, n, 1500)) { webSlow++; c.stop(); }
+}
+
+// optional &mac=<strip MAC> sends to that strip (404 if it is not connected); without it, to the first strip as before
 void handleRaw() {
   if (!guard()) return;
   if (apiSrc == 2) { web.send(403, "application/json", "{\"ok\":false,\"error\":\"forbidden\"}"); return; }
   String cmd = web.arg("cmd");
   cmd.trim();
-  int i = firstStrip();
-  if (!cmd.startsWith("up:") || i < 0) { web.send(400, "application/json", "{\"ok\":false}"); return; }
+  String mac = web.arg("mac");
+  mac.trim();
+  int i = mac.length() ? findStrip(mac) : firstStrip();
+  if (!cmd.startsWith("up:") || (i < 0 && !mac.length())) { web.send(400, "application/json", "{\"ok\":false}"); return; }
+  if (i < 0) { web.send(404, "application/json", "{\"ok\":false,\"error\":\"no such strip\"}"); return; }
   sendLine(strips[i], cmd);
   pumpFor(1500);
-  web.send(200, "application/json", "{\"sent\":\"" + jsonEsc(cmd) + "\",\"last_rx\":\"" + jsonEsc(strips[i].lastLine) + "\"}");
+  web.send(200, "application/json", "{\"sent\":\"" + jsonEsc(cmd) + "\",\"mac\":\"" + jsonEsc(strips[i].mac) + "\",\"last_rx\":\"" + jsonEsc(strips[i].lastLine) + "\"}");
 }
 
 void handleOther() {

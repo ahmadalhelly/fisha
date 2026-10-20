@@ -262,8 +262,32 @@ void sendLine(Strip& s, const String& line) {
 
 // like sendLine, but the serial log shows only the network name, never the password
 // F1.0.82 keeps the physical-button locks in its own flash: bit0 = master button, bits1..4 = outlet buttons
+// strips on F1.0.82 and newer have it (F1.0.82, F1.0.85, F1.1.0, F2.0.0 ...); older or unknown firmware does not
+// the strip firmware level: x of F1.0.x, 100000 for anything above 1.0 (F1.1.0, F2.0.0 ...), -1 for stock or unknown firmware
+int stripFwLevel(const String& fw) {
+  int p = 0;                                    // the first 'F' followed by a digit
+  while ((p = fw.indexOf('F', p)) >= 0 && !(p + 1 < (int)fw.length() && fw[p + 1] >= '0' && fw[p + 1] <= '9')) p++;
+  if (p < 0) return -1;
+  int v[3] = {0, 0, 0}, k = 0;
+  bool any = false;
+  for (int i = p + 1; i < (int)fw.length() && k < 3; i++) {
+    char ch = fw[i];
+    if (ch >= '0' && ch <= '9') { if (v[k] < 100000) v[k] = v[k] * 10 + (ch - '0'); any = true; }
+    else if (ch == '.' && any) { k++; any = false; }
+    else break;
+  }
+  if (k < 2 || (k == 2 && !any)) return -1;     // needs all three numbers
+  if (v[0] != 1) return v[0] > 1 ? 100000 : -1;
+  if (v[1] != 0) return v[1] > 0 ? 100000 : -1;
+  return v[2];
+}
+// F1.0.82 and newer keep the physical-button locks in their own flash (F1.0.82, F1.0.85, F1.1.0, F2.0.0 ...)
+bool stripFwHasChildLock(const String& fw) { return stripFwLevel(fw) >= 82; }
+// F1.0.83 and newer: the master button skips locked outlets and the strip keeps its outlet states itself, so the hub never
+// switches a locked outlet back on its own; it only sends what the app asks for
+bool stripOwnsLocks(const String& fw) { return stripFwLevel(fw) >= 83; }
 void sendChildLock(Strip& s) {
-  if (s.fw.indexOf("F1.0.82") < 0) return;
+  if (!stripFwHasChildLock(s.fw)) return;
   // the strip-level lock locks EVERY button on the strip (master + 4 outlets); the per-outlet locks stay saved
   // and come back when it is turned off
   sendLine(s, "up:childlock:" + String(s.masterLock ? 0x1F : ((s.lockMask & 0x0F) << 1)));
