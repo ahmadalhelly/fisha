@@ -77,7 +77,7 @@ extension AppStateHubFirmware on AppState {
     }
   }
 
-  /// {size, valid, why, running, items:[{mac, from, to, state, msg, pct}]}, or null when the hub can't be reached
+  /// {size, valid, why, preparing, prepared, running, items:[{mac, from, to, state, msg, pct}]}, or null when unreachable
   /// (or is older than 2.15.8).
   Future<Map<String, dynamic>?> stripFwState() async {
     try {
@@ -109,30 +109,52 @@ extension AppStateHubFirmware on AppState {
     } catch (_) {}
   }
 
+  /// Erases the spare OTA slot before a strip upload. The hub does one 4 KB sector per loop pass,
+  /// so the phone is never sending while the ESP32 is busy erasing flash.
+  Future<String?> prepareStripFwStorage() async {
+    try {
+      final r = await http.post(_localUri('/api/stripfw/prepare'), headers: _localHeaders).timeout(const Duration(seconds: 9));
+      if (r.statusCode != 200) return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+      final deadline = DateTime.now().add(const Duration(seconds: 90));
+      while (DateTime.now().isBefore(deadline)) {
+        final state = await stripFwState();
+        if (state == null) return 'net';
+        if (state['preparing'] == true) {
+          await Future.delayed(const Duration(milliseconds: 250));
+          continue;
+        }
+        if (state['prepared'] == true) return null;
+        final why = (state['why'] ?? '').toString();
+        return why.isEmpty ? 'prepare_failed' : why;
+      }
+      return 'prepare_timeout';
+    } catch (_) {
+      return 'net';
+    }
+  }
+
   /// Uploads a strip .fwr to the hub (kept there until replaced). Returns null on success or an error text.
   Future<String?> uploadStripFw(List<int> bytes, void Function(double) progress) async {
     if (!AppState.looksLikeStripFw(bytes)) return 'bad_file';
-    var err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
+    progress(.02);
+    final prepared = await prepareStripFwStorage();
+    if (prepared != null) return prepared;
+    var err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', (p) => progress(.02 + p * .98),
         headers: _localHeaders, fileName: 'strip.fwr');
-    if (err == 'net') {                                   // the hub can be busy for a moment (flash erase): one more try
-      await Future.delayed(const Duration(seconds: 2));
-      err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', progress,
-          headers: _localHeaders, fileName: 'strip.fwr');
-    }
     if (err == null || err == 'net' || err == 'auth') return err;
     return _hubJson(err)?['error']?.toString() ?? err;
   }
 
-  /// Hub 2.16+: the hub downloads the .fwr itself over HTTP(S) and stores it — the file never passes through
-  /// this phone. Returns null on success or an error text.
-  Future<String?> fetchStripFwByUrl(String url) async {
+  /// Downloads a published .fwr on the phone, then uses the same reliable local upload as a picked file.
+  /// The hub does not open a second TLS session while MQTT is active.
+  Future<String?> downloadAndUploadStripFw(String url, void Function(double) progress) async {
     try {
-      final r = await http
-          .post(_localUri('/api/stripfw/fetch'),
-              headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders}, body: jsonEncode({'url': url}))
-          .timeout(const Duration(seconds: 30));
-      if (r.statusCode == 200) return null;
-      return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+      progress(0);
+      final r = await http.get(Uri.parse(url), headers: const {'Accept': 'application/octet-stream'}).timeout(const Duration(seconds: 45));
+      if (r.statusCode != 200) return 'server replied ${r.statusCode}';
+      if (!AppState.looksLikeStripFw(r.bodyBytes)) return 'downloaded file is not valid strip firmware';
+      progress(.15);
+      return uploadStripFw(r.bodyBytes, (p) => progress(.15 + p * .85));
     } catch (_) {
       return 'net';
     }

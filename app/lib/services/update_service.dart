@@ -6,9 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// One published build on the public repo ahmadalhelly/fisha-app (CI copies every app and hub build there).
 class Release {
-  final String kind; // 'app' or 'hub'
-  final String version; // 2.0.16 / 2.15.12
-  final int build; // CI run number
+  final String kind; // 'app', 'hub' or 'strip'
+  final String version; // app/Hub release version or strip firmware version without the F prefix
+  final int build; // CI run number; strip firmware releases have no CI build number
   final String notes; // Arabic bullets from the commit messages (markdown)
   final DateTime published;
   final String url; // download of the .apk / .bin
@@ -48,6 +48,10 @@ class UpdateService extends ChangeNotifier {
   String dismissed = ''; // the "app|hub" versions whose home banner the user closed
 
   static final _tag = RegExp(r'^(app|hub)-(\d+(?:\.\d+)+)-(?:build|run)-(\d+)$');
+  static final _stripTag = RegExp(r'^strip-F(\d+(?:\.\d+)+)$', caseSensitive: false);
+  static final _stripVersion = RegExp(r'F(\d+(?:\.\d+)+)', caseSensitive: false);
+
+  static String? stripVersion(String firmware) => _stripVersion.firstMatch(firmware)?.group(1);
 
   /// 2.0.29: the newest build, by CI build number (always rising), not by version name: the public launch restarts
   /// the versions at 1.0.0, which must still count as newer than the internal 2.x builds.
@@ -55,7 +59,11 @@ class UpdateService extends ChangeNotifier {
     Release? best;
     for (final r in releases) {
       if (r.kind != kind) continue;
-      if (best == null || r.build > best.build) best = r;
+      if (best == null ||
+          (kind == 'strip'
+              ? compareVersions(r.version, best.version) > 0 ||
+                  (compareVersions(r.version, best.version) == 0 && r.published.isAfter(best.published))
+              : r.build > best.build)) best = r;
     }
     return best;
   }
@@ -73,16 +81,14 @@ class UpdateService extends ChangeNotifier {
   /// newer than these. Only matters when that old release is no longer listed (see [newer]).
   static bool isPreLaunch(String v) => (int.tryParse(v.split('.').first) ?? 0) == 2;
 
-  /// 2.0.20: the latest strip firmware we publish. Strip builds aren't on CI yet, so this is kept in sync by hand
-  /// with the newest .fwr we've shipped (see the strip-firmware notes).
-  static const latestStripFw = '1.0.82';
-  /// Where the hub downloads it from (public release on fisha-app; works once the owner publishes that release).
-  static const latestStripUrl = 'https://github.com/ahmadalhelly/fisha-app/releases/download/strip-F1.0.82/comMTTL-W01_F1.0.82.fwr';
-
   /// the newer release for [kind] than [current], or null when up to date or unknown
   Release? newer(String kind, String? current) {
     final l = latest(kind);
     if (l == null || current == null || current.isEmpty || current == 'dev') return null;
+    if (kind == 'strip') {
+      final cur = stripVersion(current);
+      return cur != null && compareVersions(l.version, cur) > 0 ? l : null;
+    }
     if (compareVersions(l.version, current) == 0) return null;
     final cur = buildOf(kind, current);
     if (cur != null) return l.build > cur ? l : null;
@@ -142,15 +148,23 @@ class UpdateService extends ChangeNotifier {
     try {
       final out = <Release>[];
       for (final j in (jsonDecode(body) as List)) {
-        final m = _tag.firstMatch((j['tag_name'] ?? '').toString());
-        if (m == null || j['draft'] == true) continue;
-        final kind = m.group(1)!;
+        if (j['draft'] == true) continue;
+        final tag = (j['tag_name'] ?? '').toString();
+        final m = _tag.firstMatch(tag);
+        final sm = _stripTag.firstMatch(tag);
+        if (m == null && sm == null) continue;
+        final kind = m == null ? 'strip' : m.group(1)!;
+        final version = m == null ? sm!.group(1)! : m.group(2)!;
+        final build = m == null ? 0 : int.parse(m.group(3)!);
+        final extension = switch (kind) { 'app' => '.apk', 'hub' => '.bin', _ => '.fwr' };
         final assets = (j['assets'] as List? ?? []).cast<Map>();
         final a = assets.cast<Map?>().firstWhere(
-            (x) => (x!['name'] ?? '').toString().toLowerCase().endsWith(kind == 'app' ? '.apk' : '.bin'),
+            (x) => (x!['name'] ?? '').toString().toLowerCase().endsWith(extension) &&
+                ((x['size'] as num?)?.toInt() ?? 0) > 0 &&
+                (kind != 'strip' || (x['name'] ?? '').toString() == 'comMTTL-W01_F$version.fwr'),
             orElse: () => null);
         if (a == null) continue;
-        out.add(Release(kind, m.group(2)!, int.parse(m.group(3)!), (j['body'] ?? '').toString(),
+        out.add(Release(kind, version, build, (j['body'] ?? '').toString(),
             DateTime.tryParse((j['published_at'] ?? '').toString())?.toLocal() ?? DateTime.now(), a['browser_download_url'].toString(), (a['size'] as num?)?.toInt() ?? 0));
       }
       out.sort((a, b) => b.published.compareTo(a.published));

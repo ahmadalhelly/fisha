@@ -226,6 +226,11 @@ void handleUpdateUpload() {
 // ---------- strip firmware flashing (/stripfw) ----------
 uint32_t stripFwWritten = 0;
 bool stripFwErr = false;
+bool stripFwUploadRejected = false;
+volatile bool stripFwPreparing = false;
+bool stripFwPrepared = false;
+uint32_t stripFwEraseAt = 0;
+String stripFwPrepareWhy;
 void handleStripFwPage() {
   if (!otaAuth()) return web.requestAuthentication();
   String h = "<meta name=viewport content='width=device-width,initial-scale=1'><meta charset=utf-8>"
@@ -318,8 +323,15 @@ bool stripFwStore(String& why) {
 }
 void handleStripFwDone() {
   if (!otaAuth()) return web.requestAuthentication();
+  if (stripFwUploadRejected || stripFwPreparing) {
+    stripFwUploadRejected = false;
+    web.send(409, "text/plain", "busy\n");
+    return;
+  }
   String why;
-  if (!stripFwStore(why)) { web.send(400, "text/plain", "REFUSED: " + why + "\n"); return; }
+  const bool ok = stripFwStore(why);
+  stripFwPrepared = false;
+  if (!ok) { web.send(400, "text/plain", "REFUSED: " + why + "\n"); return; }
   web.sendHeader("Location", "/stripfw");
   web.send(303, "text/plain", "OK " + String(stripFwSize) + " bytes\n");
 }
@@ -327,19 +339,21 @@ void stripFwChunk(HTTPUpload& u) {
   const esp_partition_t* part = stripFwPart();
   if (u.status == UPLOAD_FILE_START) {
     stripFwWritten = 0;
-    stripFwErr = !part || part->size < STRIP_FW_MAX;
-    if (!stripFwErr) stripFwErr = esp_partition_erase_range(part, 0, STRIP_FW_MAX) != ESP_OK;
-    Serial.printf("[strip-ota] upload %s%s\n", u.filename.c_str(), stripFwErr ? " (no spare slot)" : "");
+    stripFwErr = !stripFwPrepared || !part || part->size < STRIP_FW_MAX;
+    Serial.printf("[strip-ota] upload %s%s\n", u.filename.c_str(), stripFwErr ? " (storage not prepared)" : "");
   } else if (u.status == UPLOAD_FILE_WRITE && !stripFwErr) {
     if (stripFwWritten + u.currentSize > STRIP_FW_MAX) { stripFwErr = true; return; }
     if (esp_partition_write(part, stripFwWritten, u.buf, u.currentSize) != ESP_OK) { stripFwErr = true; return; }
     stripFwWritten += u.currentSize;
   } else if (u.status == UPLOAD_FILE_ABORTED) {
     stripFwErr = true;
+    stripFwPrepared = false;
   }
 }
 void handleStripFwUpload() {
   if (!otaAuth()) return;
+  if (web.upload().status == UPLOAD_FILE_START) stripFwUploadRejected = stripFwPreparing;
+  if (stripFwUploadRejected) return;
   stripFwChunk(web.upload());
 }
 void handleStripFwFlash() {
@@ -493,7 +507,7 @@ void suTick() {
 // starts a run; macs = the strips to update in order. Returns "" or an error.
 String suStart(const String* macs, int n) {
   if (!stripFwSize || !stripFwOk) return "no valid strip firmware stored";
-  if (suRunning() || provRequested || provState == "running" || provState == "waiting") return "busy";
+  if (stripFwPreparing || stripFwPrepared || suRunning() || provRequested || provState == "running" || provState == "waiting") return "busy";
   if (n <= 0) return "no strip selected";
   suN = 0;
   for (int k = 0; k < n && suN < MAX_STRIPS; k++) {
@@ -512,8 +526,9 @@ String suStart(const String* macs, int n) {
 }
 
 String suJson() {
-  String j = "{\"size\":" + String(stripFwSize) + ",\"valid\":" + (stripFwOk ? "true" : "false") + ",\"why\":\"" + jsonEsc(stripFwWhy) +
-             "\",\"running\":" + (suRunning() ? "true" : "false") + ",\"items\":[";
+  const String why = stripFwPrepareWhy.length() ? stripFwPrepareWhy : stripFwWhy;
+  String j = "{\"size\":" + String(stripFwSize) + ",\"valid\":" + (stripFwOk ? "true" : "false") + ",\"why\":\"" + jsonEsc(why) +
+             "\",\"preparing\":" + (stripFwPreparing ? "true" : "false") + ",\"prepared\":" + (stripFwPrepared ? "true" : "false") + ",\"running\":" + (suRunning() ? "true" : "false") + ",\"items\":[";
   for (uint8_t k = 0; k < suN; k++) {
     const SuItem& it = suList[k];
     int pct = it.state == "transfer" && stripFwSize ? (int)((uint64_t)suOff * 100 / stripFwSize) : (it.state == "ok" || it.state == "rebooting" ? 100 : 0);
@@ -570,16 +585,68 @@ void handleSuCancel() {
 bool suUploadAuth = false;
 void handleSuUpload() {
   HTTPUpload& u = web.upload();
-  if (u.status == UPLOAD_FILE_START) suUploadAuth = authorized() && (apiSrc != 2 || (apiUserIdx >= 0 && apiUserIdx < userCount &&
-      users[apiUserIdx].all && (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW))));
-  if (!suUploadAuth || suRunning()) { stripFwErr = true; return; }
+  if (u.status == UPLOAD_FILE_START) {
+    suUploadAuth = authorized() && (apiSrc != 2 || (apiUserIdx >= 0 && apiUserIdx < userCount &&
+        users[apiUserIdx].all && (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW))));
+    stripFwUploadRejected = !suUploadAuth || suRunning() || stripFwPreparing;
+  }
+  if (stripFwUploadRejected) return;
   stripFwChunk(u);
 }
 void handleSuUploadDone() {
   if (!sfwOnly()) return;
-  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
+  if (stripFwUploadRejected || suRunning() || stripFwPreparing) {
+    stripFwUploadRejected = false;
+    web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}");
+    return;
+  }
   String why;
-  if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  const bool ok = stripFwStore(why);
+  stripFwPrepared = false;
+  if (!ok) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  web.send(200, "application/json", suJson());
+}
+void stripFwPrepareTick() {
+  if (!stripFwPreparing) return;
+  const esp_partition_t* part = stripFwPart();
+  if (!part || part->size < STRIP_FW_MAX) {
+    stripFwPrepareWhy = "no spare slot";
+    stripFwWhy = stripFwPrepareWhy;
+    stripFwPreparing = false;
+    return;
+  }
+  if (stripFwEraseAt < STRIP_FW_MAX) {
+    if (esp_partition_erase_range(part, stripFwEraseAt, 4096) != ESP_OK) {
+      stripFwPrepareWhy = "flash erase failed";
+      stripFwWhy = stripFwPrepareWhy;
+      stripFwPreparing = false;
+      return;
+    }
+    stripFwEraseAt += 4096;
+    return;
+  }
+  stripFwWritten = 0;
+  stripFwErr = false;
+  stripFwSize = 0;
+  stripFwOk = false;
+  stripFwWhy = "";
+  stripFwPrepared = true;
+  stripFwPreparing = false;
+  Preferences p;
+  p.begin("stripfw", false);
+  p.putUInt("size", 0);
+  p.end();
+  Serial.println("[strip-ota] storage prepared");
+}
+void handleSuPrepare() {
+  if (!sfwOnly()) return;
+  if (suRunning() || stripFwPreparing) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
+  const esp_partition_t* part = stripFwPart();
+  if (!part || part->size < STRIP_FW_MAX) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"no spare slot\"}"); return; }
+  stripFwPrepared = false;
+  stripFwPrepareWhy = "";
+  stripFwEraseAt = 0;
+  stripFwPreparing = true;
   web.send(200, "application/json", suJson());
 }
 // the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
@@ -602,16 +669,21 @@ bool stripFwFetch(const String& url, String& why) {
   if (code != 200) { why = "server replied " + String(code); http.end(); return false; }
   int len = http.getSize();
   if (len <= 0 || (uint32_t)len > STRIP_FW_MAX) { why = "file too big or unknown size"; http.end(); return false; }
-  if (esp_partition_erase_range(part, 0, STRIP_FW_MAX) != ESP_OK) { why = "flash erase failed"; http.end(); return false; }
   WiFiClient* stream = http.getStreamPtr();
   uint8_t buf[1024];
-  uint32_t written = 0;
+  uint32_t written = 0, erasedUpTo = 0;
   uint32_t lastByte = millis();
   while (http.connected() && written < (uint32_t)len && millis() - lastByte < 15000) {
     size_t avail = stream->available();
     if (!avail) { delay(5); esp_task_wdt_reset(); continue; }
     size_t n = stream->readBytes(buf, min(avail, sizeof buf));
     if (!n) break;
+    const uint32_t eraseTo = min(STRIP_FW_MAX, (written + n + 4095u) & ~4095u);
+    while (erasedUpTo < eraseTo) {
+      if (esp_partition_erase_range(part, erasedUpTo, 4096) != ESP_OK) { why = "flash erase failed"; http.end(); return false; }
+      erasedUpTo += 4096;
+      esp_task_wdt_reset();
+    }
     if (esp_partition_write(part, written, buf, n) != ESP_OK) { why = "flash write failed"; http.end(); return false; }
     written += n;
     lastByte = millis();
@@ -625,16 +697,7 @@ bool stripFwFetch(const String& url, String& why) {
 }
 void handleSuFetch() {
   if (!sfwOnly()) return;
-  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
-  String b = web.arg("plain");
-  int at = b.indexOf("\"url\"");
-  int a = at >= 0 ? b.indexOf('"', b.indexOf(':', at) + 1) : -1;
-  int e = a >= 0 ? b.indexOf('"', a + 1) : -1;
-  String url = a >= 0 && e > a ? b.substring(a + 1, e) : "";
-  if (!url.length()) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"no url\"}"); return; }
-  String why;
-  if (!stripFwFetch(url, why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
-  web.send(200, "application/json", suJson());
+  web.send(501, "application/json", "{\"ok\":false,\"error\":\"download with the Fisha app\"}");
 }
 // form on /stripfw: mac=...&mac=... (checkboxes)
 void handleSuForm() {

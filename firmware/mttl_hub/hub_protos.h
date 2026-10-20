@@ -187,6 +187,8 @@ void handleSuStart();
 void handleSuCancel();
 void handleSuUpload();
 void handleSuUploadDone();
+void stripFwPrepareTick();
+void handleSuPrepare();
 bool stripFwFetch(const String& url, String& why);
 void handleSuFetch();
 void handleSuForm();

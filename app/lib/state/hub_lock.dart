@@ -46,7 +46,9 @@ extension AppStateHubLock on AppState {
   /// true once the hub answers on the home network at [ip]
   Future<bool> hubAnswersAt(String ip) async {
     try {
-      final r = await http.get(Uri.parse('http://$ip/'), headers: _localHeaders).timeout(const Duration(seconds: 3));
+      final r = await http
+          .get(Uri(scheme: 'http', host: ip, port: settings.localPort, path: '/'), headers: _localHeaders)
+          .timeout(const Duration(seconds: 3));
       return r.statusCode == 200 && r.body.contains('Fisha Hub');
     } catch (_) {
       return false;

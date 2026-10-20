@@ -373,6 +373,7 @@ void setup() {
   web.on("/api/stripfw", HTTP_GET, handleSuState);
   web.on("/api/stripfw/start", HTTP_POST, handleSuStart);
   web.on("/api/stripfw/cancel", HTTP_POST, handleSuCancel);
+  web.on("/api/stripfw/prepare", HTTP_POST, handleSuPrepare);
   web.on("/api/stripfw/upload", HTTP_POST, handleSuUploadDone, handleSuUpload);
   web.on("/api/stripfw/fetch", HTTP_POST, handleSuFetch);
   web.onNotFound(handleOther);
@@ -531,6 +532,7 @@ void loop() {
   stg("notify");
   sendNotes();
   stg("strip_update");
+  stripFwPrepareTick();
   suTick();
   stg("provision");
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();
