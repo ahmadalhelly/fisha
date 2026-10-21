@@ -105,9 +105,7 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
       }).toList();
       if (sameOrOlder.isNotEmpty) {
         final warnBody = Tr.isAr
-            ? 'الملف المخزن حالياً على الـ Hub هو ($storedFw)، بينما المشترك «${_name(sameOrOlder.first)}» يعمل على (${sameOrOlder.first.fw}).
-
-لو ضغطت متابعة بدون رفع ملف أحدث، سيرفض الـ Hub التحديث أو يعيد المشترك لنسخة $storedFw!'
+            ? 'الملف المخزن حالياً على الـ Hub هو ($storedFw)، بينما المشترك «${_name(sameOrOlder.first)}» يعمل على (${sameOrOlder.first.fw}).\n\nلو ضغطت متابعة بدون رفع ملف أحدث، سيرفض الـ Hub التحديث أو يعيد المشترك لنسخة $storedFw!'
             : 'The firmware currently stored on the Hub is ($storedFw), while "${_name(sameOrOlder.first)}" is on (${sameOrOlder.first.fw}). Upload a newer .fwr file first!';
         if (!await confirmDialog(context, Tr.isAr ? 'تنبيه إصدار الملف المخزن' : 'Stored firmware warning', warnBody,
             ok: Tr.isAr ? 'متابعة على أي حال' : 'Continue anyway', danger: true)) {

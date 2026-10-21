@@ -24,8 +24,8 @@ String formatHumanDuration(int s) {
     if (m > 0) return '$m د';
     return '$sec ث';
   } else {
-    if (d > 0) return '${d}d ${h}:${two(m)}h';
-    if (h > 0) return '${h}:${two(m)}h';
+    if (d > 0) return '${d}d $h:${two(m)}h';
+    if (h > 0) return '$h:${two(m)}h';
     if (m > 0) return '${m}m';
     return '${sec}s';
   }

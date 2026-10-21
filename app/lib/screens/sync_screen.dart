@@ -231,7 +231,6 @@ class _SyncScreenState extends State<SyncScreen> {
 
   String _when(DateTime d) => '${_dayLabel(d)} · ${fmtTime12(d.hour, d.minute)}';
 
-  String get _syncTitle => Tr.isAr ? 'كل قد إيه؟' : 'How often?';
   String _syncLabel(int m) => switch (m) {
         60 => Tr.isAr ? 'كل ساعة' : 'Hourly',
         1440 => Tr.isAr ? 'يوميًا' : 'Daily',

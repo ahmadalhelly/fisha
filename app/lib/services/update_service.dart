@@ -63,7 +63,9 @@ class UpdateService extends ChangeNotifier {
           (kind == 'strip'
               ? compareVersions(r.version, best.version) > 0 ||
                   (compareVersions(r.version, best.version) == 0 && r.published.isAfter(best.published))
-              : r.build > best.build)) best = r;
+              : r.build > best.build)) {
+        best = r;
+      }
     }
     return best;
   }
@@ -113,7 +115,7 @@ class UpdateService extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setString('upd_dismissed', key);
   }
 
-  /// Fallback parser using GitHub's Atom feed (https://github.com/<repo>/releases.atom)
+  /// Fallback parser using GitHub's Atom feed (`https://github.com/<repo>/releases.atom`)
   /// which is never subject to api.github.com's 60 req/hr unauthenticated rate limit.
   Future<bool> _checkAtomFallback() async {
     try {

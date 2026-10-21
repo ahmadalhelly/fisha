@@ -39,7 +39,7 @@ String timerText(HubTimer x) {
   final when = x.inS <= 0 ? t('now') : t('after_x', {'x': shortDuration(x.inS)});
   final String base;
   if (x.kind == 'loop') {
-    base = t('timer_loop', {'a': shortDuration(x.onS), 'b': shortDuration(x.offS)}) + ' · ' + (x.phase == 1 ? t('loop_next_off', {'x': when}) : t('loop_next_on', {'x': when}));
+    base = '${t('timer_loop', {'a': shortDuration(x.onS), 'b': shortDuration(x.offS)})} · ${x.phase == 1 ? t('loop_next_off', {'x': when}) : t('loop_next_on', {'x': when})}';
     return base;
   }
   if (x.kind == 'cycle') {
