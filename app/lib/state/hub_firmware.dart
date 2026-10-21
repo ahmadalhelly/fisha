@@ -1,6 +1,6 @@
 part of '../app_state.dart';
 
-/// Hub Wi-Fi, hub firmware and strip firmware update (moved verbatim from app_state.dart; behavior unchanged).
+/// Hub Wi-Fi, hub firmware and strip firmware update.
 extension AppStateHubFirmware on AppState {
   // ---------- hub Wi-Fi ----------
   /// Asks the hub to switch to another home network. It tests it first and stays on the old one if it fails.
@@ -77,8 +77,7 @@ extension AppStateHubFirmware on AppState {
     }
   }
 
-  /// {size, valid, why, preparing, prepared, running, items:[{mac, from, to, state, msg, pct}]}, or null when unreachable
-  /// (or is older than 2.15.8).
+  /// {size, valid, fw, why, preparing, prepared, fetching, running, items:[{mac, from, to, state, msg, pct}]}, or null when unreachable.
   Future<Map<String, dynamic>?> stripFwState() async {
     try {
       final r = await http.get(_localUri('/api/stripfw'), headers: _localHeaders).timeout(const Duration(seconds: 6));
@@ -109,12 +108,24 @@ extension AppStateHubFirmware on AppState {
     } catch (_) {}
   }
 
-  /// Erases the spare OTA slot before a strip upload. The hub does one 4 KB sector per loop pass,
-  /// so the phone is never sending while the ESP32 is busy erasing flash.
+  /// Prepares the spare OTA slot before a strip upload.
+  /// If the Hub firmware erases 4KB sectors on-the-fly and returns "unknown action" for /api/stripfw/prepare,
+  /// this gracefully returns null instead of failing with "unknown action".
   Future<String?> prepareStripFwStorage() async {
     try {
       final r = await http.post(_localUri('/api/stripfw/prepare'), headers: _localHeaders).timeout(const Duration(seconds: 9));
-      if (r.statusCode != 200) return _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+      if (r.statusCode != 200) {
+        final err = _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+        if (err == 'unknown action' || r.statusCode == 404) {
+          // Hub erases flash on-the-fly during upload; no separate prepare step needed!
+          return null;
+        }
+        return err;
+      }
+      final initial = _hubJson(utf8.decode(r.bodyBytes));
+      if (initial != null && initial['preparing'] != true) {
+        if (initial['prepared'] == true || initial['has_slot'] == true || initial.containsKey('size')) return null;
+      }
       final deadline = DateTime.now().add(const Duration(seconds: 90));
       while (DateTime.now().isBefore(deadline)) {
         final state = await stripFwState();
@@ -123,7 +134,7 @@ extension AppStateHubFirmware on AppState {
           await Future.delayed(const Duration(milliseconds: 250));
           continue;
         }
-        if (state['prepared'] == true) return null;
+        if (state['prepared'] == true || state['has_slot'] == true || state['preparing'] != true) return null;
         final why = (state['why'] ?? '').toString();
         return why.isEmpty ? 'prepare_failed' : why;
       }
@@ -133,29 +144,123 @@ extension AppStateHubFirmware on AppState {
     }
   }
 
+  /// Uploads a strip .fwr to the hub in 8 KB Base64 JSON chunks via POST /api/stripfw/chunk.
+  /// Returns null on success, 'unsupported' if the Hub lacks /api/stripfw/chunk, or an error string.
+  Future<String?> _uploadStripFwChunked(List<int> bytes, void Function(double) progress) async {
+    const int chunkSize = 8192; // 8 KB (exact multiple of 4096-byte NOR Flash sector; gentle on ESP32 heap8)
+    final int total = bytes.length;
+    int offset = 0;
+
+    while (offset < total) {
+      final int end = (offset + chunkSize < total) ? (offset + chunkSize) : total;
+      final bool isDone = end >= total;
+      final String b64 = base64Encode(bytes.sublist(offset, end));
+
+      try {
+        final r = await http
+            .post(
+              _localUri('/api/stripfw/chunk'),
+              headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders},
+              body: jsonEncode({
+                'off': offset,
+                'total': total,
+                'done': isDone,
+                'b64': b64,
+              }),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (r.statusCode == 401 || r.statusCode == 403) return 'auth';
+        if (r.statusCode != 200) {
+          final err = _hubJson(utf8.decode(r.bodyBytes))?['error']?.toString() ?? 'HTTP ${r.statusCode}';
+          if (offset == 0 && (err == 'unknown action' || r.statusCode == 404)) {
+            return 'unsupported';
+          }
+          return err;
+        }
+
+        offset = end;
+        progress(offset / total);
+
+        if (isDone) {
+          final st = _hubJson(utf8.decode(r.bodyBytes));
+          if (st != null && st['valid'] == false) {
+            final why = (st['why'] ?? '').toString();
+            return why.isNotEmpty ? why : 'bad_file';
+          }
+          return null;
+        }
+      } catch (e) {
+        lastUploadNetDetail = '${e.runtimeType}: $e';
+        return 'net';
+      }
+    }
+    return null;
+  }
+
   /// Uploads a strip .fwr to the hub (kept there until replaced). Returns null on success or an error text.
+  /// Uses 8 KB chunked upload first (immune to "Connection reset by peer"), then falls back to multipart upload.
   Future<String?> uploadStripFw(List<int> bytes, void Function(double) progress) async {
     if (!AppState.looksLikeStripFw(bytes)) return 'bad_file';
     progress(.02);
+
+    // 1. Try 8 KB chunked JSON upload (/api/stripfw/chunk)
+    final chunkErr = await _uploadStripFwChunked(bytes, (p) => progress(.02 + p * .98));
+    if (chunkErr == null) {
+      final verify = await stripFwState();
+      if (verify != null && verify['valid'] != true) {
+        final why = (verify['why'] ?? '').toString();
+        return why.isNotEmpty ? why : 'bad_file';
+      }
+      return null;
+    }
+    if (chunkErr != 'unsupported') {
+      return chunkErr;
+    }
+
+    // 2. Fallback for older Hub firmware without /api/stripfw/chunk
     final prepared = await prepareStripFwStorage();
     if (prepared != null) return prepared;
-    var err = await uploadFirmwareBytes(_localUri('/api/stripfw/upload'), bytes, '', (p) => progress(.02 + p * .98),
-        headers: _localHeaders, fileName: 'strip.fwr');
-    if (err == null || err == 'net' || err == 'auth') return err;
+    var err = await uploadFirmwareBytes(
+      _localUri('/api/stripfw/upload'),
+      bytes,
+      '',
+      (p) => progress(.02 + p * .98),
+      headers: _localHeaders,
+      fileName: 'strip.fwr',
+    );
+    if (err == null) {
+      final verify = await stripFwState();
+      if (verify != null && verify['valid'] != true) {
+        final why = (verify['why'] ?? '').toString();
+        return why.isNotEmpty ? why : 'bad_file';
+      }
+      return null;
+    }
+    if (err == 'net' || err == 'auth') return err;
     return _hubJson(err)?['error']?.toString() ?? err;
   }
 
-  /// Downloads a published .fwr on the phone, then uses the same reliable local upload as a picked file.
-  /// The hub does not open a second TLS session while MQTT is active.
+  /// Downloads a published .fwr on the phone (with User-Agent header), then uploads it reliably
+  /// to the Hub via 8 KB chunked upload (or multipart fallback).
   Future<String?> downloadAndUploadStripFw(String url, void Function(double) progress) async {
     try {
       progress(0);
-      final r = await http.get(Uri.parse(url), headers: const {'Accept': 'application/octet-stream'}).timeout(const Duration(seconds: 45));
+      final r = await http
+          .get(
+            Uri.parse(url),
+            headers: const {
+              'Accept': 'application/octet-stream',
+              'User-Agent': 'Fisha-App',
+            },
+          )
+          .timeout(const Duration(seconds: 45));
       if (r.statusCode != 200) return 'server replied ${r.statusCode}';
       if (!AppState.looksLikeStripFw(r.bodyBytes)) return 'downloaded file is not valid strip firmware';
       progress(.15);
-      return uploadStripFw(r.bodyBytes, (p) => progress(.15 + p * .85));
-    } catch (_) {
+      return await uploadStripFw(r.bodyBytes, (p) => progress(.15 + p * .85));
+    } catch (e) {
+      lastUploadNetDetail = '${e.runtimeType}: $e';
       return 'net';
     }
   }

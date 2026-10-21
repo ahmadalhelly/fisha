@@ -221,6 +221,8 @@ extension AppStateCloudLink on AppState {
           aProtect = cfg['a_protect'] != false;
           aMax = (cfg['a_max'] as num?)?.toDouble() ?? aMax;
         }
+        protHoldS = (cfg['hold_s'] as num?)?.toInt() ?? protHoldS;
+        tzOffsetMin = (cfg['tz_min'] as num?)?.toInt() ?? tzOffsetMin;
         ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
         notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
         hubSsid = (cfg['ssid'] ?? hubSsid).toString();

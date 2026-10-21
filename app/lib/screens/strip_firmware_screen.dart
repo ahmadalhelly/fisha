@@ -9,6 +9,7 @@ import '../models.dart';
 import '../services/firmware_upload.dart' show lastUploadNetDetail;
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../services/update_service.dart';
 import 'manual_screen.dart' show stripFwDisclaimer;
 
 /// Updates strip firmware through the hub (hub 2.15.8+): upload the .fwr once, pick strips (or all), and the hub
@@ -36,7 +37,7 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (_running) _refresh();
+      if (_running || _hub?['fetching'] == true) _refresh();
     });
   }
 
@@ -92,8 +93,29 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
   }
 
   Future<void> _start() async {
-    final macs = [for (final x in s.strips) if (x.online && _picked.contains(x.mac)) x.mac];
-    if (macs.isEmpty) return;
+    final pickedStrips = [for (final x in s.strips) if (x.online && _picked.contains(x.mac)) x];
+    if (pickedStrips.isEmpty) return;
+    final macs = [for (final x in pickedStrips) x.mac];
+    final storedFw = (_hub?['fw'] ?? '').toString();
+    final storedVer = UpdateService.stripVersion(storedFw);
+    if (storedVer != null) {
+      final sameOrOlder = pickedStrips.where((st) {
+        final curVer = UpdateService.stripVersion(st.fw);
+        return curVer != null && compareVersions(storedVer, curVer) <= 0;
+      }).toList();
+      if (sameOrOlder.isNotEmpty) {
+        final warnBody = Tr.isAr
+            ? 'الملف المخزن حالياً على الـ Hub هو ($storedFw)، بينما المشترك «${_name(sameOrOlder.first)}» يعمل على (${sameOrOlder.first.fw}).
+
+لو ضغطت متابعة بدون رفع ملف أحدث، سيرفض الـ Hub التحديث أو يعيد المشترك لنسخة $storedFw!'
+            : 'The firmware currently stored on the Hub is ($storedFw), while "${_name(sameOrOlder.first)}" is on (${sameOrOlder.first.fw}). Upload a newer .fwr file first!';
+        if (!await confirmDialog(context, Tr.isAr ? 'تنبيه إصدار الملف المخزن' : 'Stored firmware warning', warnBody,
+            ok: Tr.isAr ? 'متابعة على أي حال' : 'Continue anyway', danger: true)) {
+          return;
+        }
+      }
+    }
+    if (!mounted) return;
     if (!await confirmDialog(context, t('sfw_confirm_t'), t('sfw_confirm_b', {'n': macs.length}), ok: t('sfw_start'))) return;
     final err = await s.stripFwStart(macs);
     if (!mounted) return;
@@ -136,9 +158,13 @@ class _StripFirmwareScreenState extends State<StripFirmwareScreen> {
                 Icon(_hasFile ? Icons.check_circle_outline : Icons.insert_drive_file_outlined, color: _hasFile ? C.green : C.muted),
                 const SizedBox(width: 10),
                 Expanded(
-                    child: Text(_hasFile
-                        ? t('sfw_stored', {'kb': ((_hub!['size'] as num) / 1024).toStringAsFixed(0)})
-                        : ((_hub?['why'] ?? '').toString().isNotEmpty ? t('sfw_refused', {'x': _hub!['why']}) : t('sfw_none')))),
+                    child: Builder(builder: (_) {
+                      final storedFw = (_hub?['fw'] ?? '').toString();
+                      final baseText = _hasFile
+                          ? t('sfw_stored', {'kb': ((_hub!['size'] as num) / 1024).toStringAsFixed(0)})
+                          : ((_hub?['why'] ?? '').toString().isNotEmpty ? t('sfw_refused', {'x': _hub!['why']}) : t('sfw_none'));
+                      return Text(_hasFile && storedFw.isNotEmpty ? '$baseText · [$storedFw]' : baseText);
+                    })),
               ]),
               OutlinedButton.icon(
                 onPressed: busy || _hub == null ? null : _pickAndUpload,

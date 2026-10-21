@@ -87,6 +87,8 @@ extension AppStateBackup on AppState {
             'v_min': vMin,
             'a_protect': aProtect,
             'a_max': aMax,
+            'hold_s': protHoldS,
+            'tz_min': tzOffsetMin,
           },
           'ntfy': ntfyTopic,
           'notifyTypes': notifyTypes,
@@ -245,7 +247,7 @@ extension AppStateBackup on AppState {
       final prot = <String, dynamic>{
         for (final k in ['v_protect', 'v_restore', 'a_protect'])
           if (cfg[k] is bool) k: cfg[k],
-        for (final k in ['v_max', 'v_min', 'a_max'])
+        for (final k in ['v_max', 'v_min', 'a_max', 'hold_s', 'tz_min'])
           if (cfg[k] is num) k: cfg[k],
       };
       if (prot.isNotEmpty) await api('config', prot);

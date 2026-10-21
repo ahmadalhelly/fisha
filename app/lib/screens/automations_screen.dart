@@ -227,6 +227,59 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             enabled: s.aProtect,
             onChanged: (v) => s.setStripProtection(aLimit: v),
           ),
+          Divider(height: 22, color: C.border),
+          Row(children: [
+            Icon(Icons.timer_outlined, color: C.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                Tr.isAr ? 'مهلة تأكيد الفصل (ثواني / قراءات متتالية)' : 'Protection trip hold time (seconds / readings)',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            Tr.isAr
+                ? 'عدد الثواني/القراءات المتتالية قبل الفصل عند تجاوز الحدود (محفوظة في الـ Hub وفلاش المشترك F1.0.90)'
+                : 'Consecutive seconds/readings before disconnecting on overload/voltage trip',
+            style: TextStyle(color: C.muted, fontSize: 12, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          ValueStepper(
+            value: s.protHoldS.toDouble(),
+            min: 1,
+            max: 30,
+            step: 1,
+            unit: 's',
+            onChanged: (v) => s.setStripProtection(holdSeconds: v.round()),
+          ),
+          Divider(height: 22, color: C.border),
+          Row(children: [
+            Icon(Icons.public, color: C.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                Tr.isAr ? 'المنطقة الزمنية ومزامنة ساعة المشترك' : 'Timezone & Strip Clock Sync',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
+            ),
+            DropdownButton<int>(
+              value: const [0, 60, 120, 180, 240].contains(s.tzOffsetMin) ? s.tzOffsetMin : 120,
+              dropdownColor: C.surface2,
+              underline: const SizedBox.shrink(),
+              items: [
+                DropdownMenuItem(value: 120, child: Text(Tr.isAr ? 'مصر القياسي (UTC+2)' : 'Egypt (UTC+2)')),
+                DropdownMenuItem(value: 180, child: Text(Tr.isAr ? 'التوقيت الصيفي / السعودية (UTC+3)' : 'Summer / KSA (UTC+3)')),
+                DropdownMenuItem(value: 240, child: Text(Tr.isAr ? 'الإمارات (UTC+4)' : 'UAE (UTC+4)')),
+                DropdownMenuItem(value: 60, child: Text('UTC+1')),
+                DropdownMenuItem(value: 0, child: Text('UTC+0')),
+              ],
+              onChanged: (val) {
+                if (val != null) s.setStripProtection(tzMinutes: val);
+              },
+            ),
+          ]),
           const SizedBox(height: 6),
         ]),
       );

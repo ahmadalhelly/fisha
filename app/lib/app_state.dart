@@ -206,16 +206,20 @@ class AppState extends ChangeNotifier {
 
   List<PairRequest> pairRequests = [];
 
-  int tempMax = 70;
+  int tempMax = 80;
 
-  // whole-strip protections (hub 2.10+)
+  // whole-strip protections (hub 2.10+ / F1.0.90+)
   bool vProtect = true, vRestore = true, aProtect = true;
 
-  int vMax = 250;
+  int vMax = 260;
 
-  int vMin = 190;
+  int vMin = 180;
 
   double aMax = 16;
+
+  int protHoldS = 3;
+
+  int tzOffsetMin = 120; // Default: Egypt Standard Time (UTC+2 = +120 min)
 
   bool hubHasStripProt = false;
 

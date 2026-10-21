@@ -11,7 +11,7 @@ class Release {
   final int build; // CI run number; strip firmware releases have no CI build number
   final String notes; // Arabic bullets from the commit messages (markdown)
   final DateTime published;
-  final String url; // download of the .apk / .bin
+  final String url; // download of the .apk / .bin / .fwr
   final int size;
   const Release(this.kind, this.version, this.build, this.notes, this.published, this.url, this.size);
 
@@ -113,6 +113,56 @@ class UpdateService extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setString('upd_dismissed', key);
   }
 
+  /// Fallback parser using GitHub's Atom feed (https://github.com/<repo>/releases.atom)
+  /// which is never subject to api.github.com's 60 req/hr unauthenticated rate limit.
+  Future<bool> _checkAtomFallback() async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('https://github.com/$repo/releases.atom'),
+            headers: const {'User-Agent': 'Fisha-App', 'Accept': 'application/atom+xml,text/xml,*/*'},
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return false;
+      final entries = RegExp(r'<entry>([\s\S]*?)</entry>').allMatches(res.body);
+      final out = <Release>[];
+      for (final e in entries) {
+        final block = e.group(1) ?? '';
+        final tagMatch = RegExp(r'/releases/tag/([^"<>\s]+)').firstMatch(block);
+        if (tagMatch == null) continue;
+        final tag = Uri.decodeComponent(tagMatch.group(1)!);
+        final updatedMatch = RegExp(r'<updated>([^<]+)</updated>').firstMatch(block);
+        final pub = DateTime.tryParse(updatedMatch?.group(1) ?? '')?.toLocal() ?? DateTime.now();
+
+        final m = _tag.firstMatch(tag);
+        final sm = _stripTag.firstMatch(tag);
+        if (m == null && sm == null) continue;
+        final kind = m == null ? 'strip' : m.group(1)!;
+        final version = m == null ? sm!.group(1)! : m.group(2)!;
+        final build = m == null ? 0 : int.parse(m.group(3)!);
+        final String assetUrl = switch (kind) {
+          'strip' => 'https://github.com/$repo/releases/download/$tag/comMTTL-W01_F$version.fwr',
+          'hub' => 'https://github.com/$repo/releases/download/$tag/fisha-hub-$version.bin',
+          _ => 'https://github.com/$repo/releases/download/$tag/fisha-$version.apk',
+        };
+        // Preserve existing URL/notes from cache if we already have this release
+        final existing = releases.where((r) => r.kind == kind && r.version == version && r.build == build).toList();
+        if (existing.isNotEmpty) {
+          out.add(existing.first);
+        } else {
+          out.add(Release(kind, version, build, '', pub, assetUrl, 327944));
+        }
+      }
+      if (out.isNotEmpty) {
+        out.sort((a, b) => b.published.compareTo(a.published));
+        releases = out;
+        checkedAt = DateTime.now();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /// checks GitHub when the last check is older than 6 hours (or [force])
   Future<void> check({bool force = false}) async {
     if (kIsWeb || loading) return;
@@ -126,19 +176,33 @@ class UpdateService extends ChangeNotifier {
     notifyListeners();
     try {
       final res = await http
-          .get(Uri.parse('https://api.github.com/repos/$repo/releases?per_page=40'), headers: {'Accept': 'application/vnd.github+json'})
+          .get(
+            Uri.parse('https://api.github.com/repos/$repo/releases?per_page=40'),
+            headers: const {
+              'Accept': 'application/vnd.github+json',
+              'User-Agent': 'Fisha-App',
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+          )
           .timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         _parse(res.body);
         checkedAt = DateTime.now();
+        error = null;
         final p = await SharedPreferences.getInstance();
         await p.setString('upd_cache', res.body);
         await p.setInt('upd_at', checkedAt!.millisecondsSinceEpoch);
       } else {
-        error = res.statusCode == 403 || res.statusCode == 429 ? 'rate' : 'net';
+        final okAtom = await _checkAtomFallback();
+        if (!okAtom && releases.isEmpty) {
+          error = res.statusCode == 403 || res.statusCode == 429 ? 'rate' : 'net';
+        }
       }
     } catch (_) {
-      error = 'net';
+      final okAtom = await _checkAtomFallback();
+      if (!okAtom && releases.isEmpty) {
+        error = 'net';
+      }
     }
     loading = false;
     notifyListeners();
@@ -159,9 +223,12 @@ class UpdateService extends ChangeNotifier {
         final extension = switch (kind) { 'app' => '.apk', 'hub' => '.bin', _ => '.fwr' };
         final assets = (j['assets'] as List? ?? []).cast<Map>();
         final a = assets.cast<Map?>().firstWhere(
-            (x) => (x!['name'] ?? '').toString().toLowerCase().endsWith(extension) &&
+            (x) =>
+                (x!['name'] ?? '').toString().toLowerCase().endsWith(extension) &&
                 ((x['size'] as num?)?.toInt() ?? 0) > 0 &&
-                (kind != 'strip' || (x['name'] ?? '').toString() == 'comMTTL-W01_F$version.fwr'),
+                (kind != 'strip' ||
+                    (x['name'] ?? '').toString() == 'comMTTL-W01_F$version.fwr' ||
+                    (x['name'] ?? '').toString().toUpperCase().contains('F$version')),
             orElse: () => null);
         if (a == null) continue;
         out.add(Release(kind, version, build, (j['body'] ?? '').toString(),

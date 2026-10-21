@@ -264,9 +264,15 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     }
     setState(() {
       _stripFetching = true;
-      _status['strip'] = _tr('التطبيق بيحمّل F${release.version} ويرفعه للـ Hub…', 'The app is downloading F${release.version} and uploading it to the hub…');
+      _status['strip'] = _tr('التطبيق بيحمّل F${release.version} ويرفعه للـ Hub (0%)…', 'Downloading F${release.version} and uploading to hub (0%)…');
     });
-    final err = await s.downloadAndUploadStripFw(release.url, (_) {});
+    final err = await s.downloadAndUploadStripFw(release.url, (p) {
+      if (!mounted) return;
+      final pct = (p * 100).clamp(0, 100).toStringAsFixed(0);
+      setState(() {
+        _status['strip'] = _tr('جاري تحميل ورفع F${release.version} للـ Hub ($pct%)…', 'Uploading F${release.version} to hub ($pct%)…');
+      });
+    });
     if (!mounted) return;
     setState(() {
       _stripFetching = false;
@@ -274,7 +280,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
         _status.remove('strip');
       } else {
         _status['strip'] = err == 'net'
-            ? _tr('مقدرتش أوصل للـ Hub.', 'Could not reach the hub.')
+            ? _tr('مقدرتش أوصل للـ Hub. اتأكد إنك على نفس الواي فاي.', 'Could not reach the hub.')
             : _tr('تعذر تجهيز الملف: $err', 'Could not prepare the file: $err');
       }
     });

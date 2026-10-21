@@ -201,13 +201,24 @@ extension AppStateStripControl on AppState {
     _fail(await api('timer_cancel', {'tid': tid}));
   }
 
-  Future<void> setStripProtection({bool? vOn, bool? vBack, int? vLimit, int? vMinLimit, bool? aOn, double? aLimit}) async {
+  Future<void> setStripProtection({
+    bool? vOn,
+    bool? vBack,
+    int? vLimit,
+    int? vMinLimit,
+    bool? aOn,
+    double? aLimit,
+    int? holdSeconds,
+    int? tzMinutes,
+  }) async {
     if (vOn != null) vProtect = vOn;
     if (vBack != null) vRestore = vBack;
     if (vLimit != null) vMax = vLimit;
     if (vMinLimit != null) vMin = vMinLimit;
     if (aOn != null) aProtect = aOn;
     if (aLimit != null) aMax = aLimit;
+    if (holdSeconds != null) protHoldS = holdSeconds;
+    if (tzMinutes != null) tzOffsetMin = tzMinutes;
     _notify();
     _fail(await api('config', {
       'v_protect': vProtect,
@@ -216,6 +227,8 @@ extension AppStateStripControl on AppState {
       'v_min': vMin,
       'a_protect': aProtect,
       'a_max': aMax,
+      'hold_s': protHoldS,
+      'tz_min': tzOffsetMin,
     }));
   }
 
