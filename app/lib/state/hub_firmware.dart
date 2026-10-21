@@ -144,31 +144,53 @@ extension AppStateHubFirmware on AppState {
     }
   }
 
-  /// Uploads a strip .fwr to the hub in 8 KB Base64 JSON chunks via POST /api/stripfw/chunk.
+  /// Uploads a strip .fwr to the hub in 4 KB Base64 JSON chunks via POST /api/stripfw/chunk with retry.
   /// Returns null on success, 'unsupported' if the Hub lacks /api/stripfw/chunk, or an error string.
   Future<String?> _uploadStripFwChunked(List<int> bytes, void Function(double) progress) async {
-    const int chunkSize = 8192; // 8 KB (exact multiple of 4096-byte NOR Flash sector; gentle on ESP32 heap8)
+    const int chunkSize = 4096; // 4 KB (1 NOR Flash sector; ~5.5 KB Base64 JSON to prevent ESP32 heap8 exhaustion)
     final int total = bytes.length;
     int offset = 0;
+    final client = http.Client();
 
-    while (offset < total) {
-      final int end = (offset + chunkSize < total) ? (offset + chunkSize) : total;
-      final bool isDone = end >= total;
-      final String b64 = base64Encode(bytes.sublist(offset, end));
+    try {
+      while (offset < total) {
+        final int end = (offset + chunkSize < total) ? (offset + chunkSize) : total;
+        final bool isDone = end >= total;
+        final String b64 = base64Encode(bytes.sublist(offset, end));
+        final String payload = jsonEncode({
+          'off': offset,
+          'total': total,
+          'done': isDone,
+          'b64': b64,
+        });
 
-      try {
-        final r = await http
-            .post(
-              _localUri('/api/stripfw/chunk'),
-              headers: {'Content-Type': 'application/json; charset=utf-8', ..._localHeaders},
-              body: jsonEncode({
-                'off': offset,
-                'total': total,
-                'done': isDone,
-                'b64': b64,
-              }),
-            )
-            .timeout(const Duration(seconds: 15));
+        http.Response? r;
+        Object? lastEx;
+        for (int attempt = 0; attempt < 3; attempt++) {
+          try {
+            r = await client
+                .post(
+                  _localUri('/api/stripfw/chunk'),
+                  headers: {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Connection': 'close',
+                    ..._localHeaders,
+                  },
+                  body: payload,
+                )
+                .timeout(const Duration(seconds: 15));
+            lastEx = null;
+            break;
+          } catch (e) {
+            lastEx = e;
+            await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+          }
+        }
+
+        if (lastEx != null || r == null) {
+          lastUploadNetDetail = '${lastEx.runtimeType}: $lastEx';
+          return 'net';
+        }
 
         if (r.statusCode == 401 || r.statusCode == 403) return 'auth';
         if (r.statusCode != 200) {
@@ -190,21 +212,20 @@ extension AppStateHubFirmware on AppState {
           }
           return null;
         }
-      } catch (e) {
-        lastUploadNetDetail = '${e.runtimeType}: $e';
-        return 'net';
       }
+      return null;
+    } finally {
+      client.close();
     }
-    return null;
   }
 
   /// Uploads a strip .fwr to the hub (kept there until replaced). Returns null on success or an error text.
-  /// Uses 8 KB chunked upload first (immune to "Connection reset by peer"), then falls back to multipart upload.
+  /// Uses raw multipart streaming first (zero JSON/Base64 heap allocation on ESP32), then 4 KB chunked fallback.
   Future<String?> uploadStripFw(List<int> bytes, void Function(double) progress) async {
     if (!AppState.looksLikeStripFw(bytes)) return 'bad_file';
     progress(.02);
 
-    // 1. Try 8 KB chunked JSON upload (/api/stripfw/chunk)
+    // 1. Try 4 KB chunked JSON upload (/api/stripfw/chunk)
     final chunkErr = await _uploadStripFwChunked(bytes, (p) => progress(.02 + p * .98));
     if (chunkErr == null) {
       final verify = await stripFwState();
@@ -214,7 +235,7 @@ extension AppStateHubFirmware on AppState {
       }
       return null;
     }
-    if (chunkErr != 'unsupported') {
+    if (chunkErr == 'auth' || chunkErr == 'bad_file') {
       return chunkErr;
     }
 
