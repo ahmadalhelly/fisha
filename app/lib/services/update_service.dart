@@ -83,14 +83,17 @@ class UpdateService extends ChangeNotifier {
   static bool isPreLaunch(String v) => (int.tryParse(v.split('.').first) ?? 0) == 2;
 
   /// the newer release for [kind] than [current], or null when up to date or unknown
-  Release? newer(String kind, String? current) {
+  Release? newer(String kind, String? current, {int build = 0}) {
     final l = latest(kind);
     if (l == null || current == null || current.isEmpty || current == 'dev') return null;
     if (kind == 'strip') {
       final cur = stripVersion(current);
       return cur != null && compareVersions(l.version, cur) > 0 ? l : null;
     }
-    if (compareVersions(l.version, current) == 0) return null;
+    if (compareVersions(l.version, current) == 0) {
+      // the same version name: a later CI build counts as an update only when the installed build number is known
+      return build > 0 && l.build > build ? l : null;
+    }
     final cur = buildOf(kind, current);
     if (cur != null) return l.build > cur ? l : null;
     // the installed version isn't listed (an old release that was removed, or a hand-flashed build)

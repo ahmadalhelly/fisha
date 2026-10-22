@@ -104,7 +104,15 @@ volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
 String wifiOkMacs;                              // strips that answered connect_ok during the move (kept by MAC, not by socket slot)
 String wifiMoveInfo;                            // what happened to each strip in the last move (shown in /api/health)
-const char* FW_VERSION = "1.1.8";
+const char* FW_VERSION = "1.1.9";
+// the CI run number of this build (the workflow writes fisha_build.h); 0 for a build made by hand. The app uses it to
+// tell a newer build of the same version from the one installed.
+#if __has_include("fisha_build.h")
+#include "fisha_build.h"
+#endif
+#ifndef FISHA_BUILD
+#define FISHA_BUILD 0
+#endif
 
 static const char MQTT_CA[] = R"PEM(
 -----BEGIN CERTIFICATE-----

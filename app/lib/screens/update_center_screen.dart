@@ -12,7 +12,7 @@ import '../widgets/ota_dialogs.dart';
 import '../services/apk_install.dart';
 import '../services/keep_alive.dart';
 import '../services/update_service.dart';
-import 'settings_screen.dart' show appVersion;
+import 'settings_screen.dart' show appVersion, appBuild;
 import 'strip_firmware_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
@@ -136,9 +136,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     final lines = r?.lines ?? const <String>[];
     if (lines.isEmpty) return '$version ($tag) — ${_tr('تحسينات عامة وإصلاحات', 'General improvements and fixes')}';
     if (lines.length == 1) return '$version ($tag) — ${lines.first}';
-    return '$version ($tag)
-${lines.map((l) => '• $l').join('
-')}';
+    return '$version ($tag)\n${lines.map((l) => '• $l').join('\n')}';
   }
 
   Widget _kindIcon(String kind, {double size = 20}) => Icon(
@@ -150,7 +148,7 @@ ${lines.map((l) => '• $l').join('
   bool _pending(String kind) {
     if (kind == 'strip') return s.strips.any((x) => x.online && u.newer('strip', x.fw) != null);
     final cur = _current(kind);
-    return u.newer(kind, cur) != null;
+    return u.newer(kind, cur, build: kind == 'hub' ? s.hubBuild : appBuild) != null;
   }
 
   Widget _row(String kind, String name) {

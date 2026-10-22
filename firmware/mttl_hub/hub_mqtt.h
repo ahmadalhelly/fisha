@@ -336,7 +336,7 @@ void mqttRestart() {
   mqttStart();
 }
 void mqttHealth() {
-  if (mqttRestartReq && exJob.state != 1) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
+  if (mqttRestartReq && exJob.state != 1 && !updateMode()) { mqttRestartReq = false; mqttRestart(); stateDirty = true; }
   String e;
   if (!secMqtt.length()) e = "no_pass";
   else if (mqttUp) e = "";
@@ -364,6 +364,8 @@ void mqttMemTick() {
     sseShedAll();
     if (!mqttPaused && mqtt) {
       mqttLock();
+      // a polite stop sends DISCONNECT, so the broker would not publish the "offline" will: say it here, retained
+      if (mqttUp && tStatus.length()) esp_mqtt_client_publish(mqtt, tStatus.c_str(), "offline", 0, 1, 1);
       esp_mqtt_client_stop(mqtt);
       esp_mqtt_client_destroy(mqtt);
       mqtt = nullptr;
@@ -381,7 +383,7 @@ void mqttMemTick() {
     Serial.println("[mqtt] started again after the update");
     return;
   }
-  if (!mqtt) return;
+  if (!mqtt || tlsBusy) return;
   if (mqttUp) { mqttDownSince = 0; mqttGated = false; mqttGateWaitMs = 5000; return; }
   if (!mqttDownSince) mqttDownSince = now;
   uint32_t big = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
@@ -413,7 +415,7 @@ void mqttProcess() {
     mqttFreshConnect = false;
     Serial.println("[mqtt] connected");
     mqttPub(tStatus, "online", 1, true);
-    mqttPub(tInfo, "{\"hub\":\"" + hubId + "\",\"fw\":\"" + FW_VERSION + "\",\"ip\":\"" + WiFi.localIP().toString() +
+    mqttPub(tInfo, "{\"hub\":\"" + hubId + "\",\"fw\":\"" + FW_VERSION + "\",\"build\":" + String(FISHA_BUILD) + ",\"ip\":\"" + WiFi.localIP().toString() +
             "\",\"web_port\":" + String(WEB_PORT) + ",\"sse_port\":" + String(SSE_PORT) + "}", 1, true);
     pubMarksReset();                              // every strip again after a reconnect
     publishState();

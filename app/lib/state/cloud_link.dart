@@ -93,6 +93,7 @@ extension AppStateCloudLink on AppState {
       try {
         final j = jsonDecode(text) as Map<String, dynamic>;
         hubFw = j['fw']?.toString() ?? hubFw;
+        hubBuild = (j['build'] as num?)?.toInt() ?? hubBuild;
         _notify();
       } catch (_) {}
     } else if (topic == '$_base/cmd/ack') {
@@ -201,6 +202,7 @@ extension AppStateCloudLink on AppState {
     try {
       final fw = j['hub_fw'];
       if (fw != null) hubFw = fw.toString();
+      hubBuild = (j['hub_build'] as num?)?.toInt() ?? hubBuild;
       hubTimeOk = j['time_ok'] == true;
       if (j.containsKey('uptime_s')) hubUptimeS = (j['uptime_s'] as num?)?.toInt() ?? hubUptimeS;
       final pv = j['provision'];

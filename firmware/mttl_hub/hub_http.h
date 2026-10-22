@@ -87,7 +87,7 @@ String nvsStatsJson() {
 void handleHealth() {
   int n = 0;
   for (int i = 0; i < MAX_STRIPS; i++) if (strips[i].used && strips[i].identified) n++;
-  web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"mqtt\":" +
+  web.send(200, "application/json", "{\"status\":\"ok\",\"fw\":\"" + String(FW_VERSION) + "\",\"build\":" + String(FISHA_BUILD) + ",\"hub\":\"" + hubId + "\",\"mqtt\":" +
            (mqttUp ? "true" : "false") + ",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"strips\":" + String(n) +
            ",\"uptime_s\":" + String(millis() / 1000) + ",\"lock\":" + (ownerCount ? "true" : "false") + ",\"heap\":" + String(ESP.getFreeHeap()) + ",\"max_alloc\":" + String(ESP.getMaxAllocHeap()) +
            ",\"heap_min\":" + String(ESP.getMinFreeHeap()) + ",\"mqtt_drop\":" + String(mqttOutDropped) + ",\"sse\":" + String(sseCount()) + ",\"sse_open\":" + String(sseOpened) +
@@ -611,9 +611,9 @@ void handleSuUploadDone() {
 }
 // Chunked JSON/Base64 upload endpoint (/api/stripfw/chunk) - Zero-copy & retry-safe
 void handleSuChunk() {
-  lastSuChunkAt = lastUpdActAt = millis();
   web.sendHeader("Connection", "close");
   if (!sfwOnly()) return;
+  lastSuChunkAt = lastUpdActAt = millis();      // only an authorised caller starts update mode
   if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
   const esp_partition_t* part = stripFwPart();
   if (!part || part->size < STRIP_FW_MAX) {
@@ -669,7 +669,7 @@ void handleSuChunk() {
   }
   // Allow resuming on a 4KB sector boundary if a previous chunk write was interrupted
   if (off != stripFwWritten) {
-    if ((off & 4095u) == 0 && off <= suChunkErased) {
+    if ((off & 4095u) == 0 && off < stripFwWritten) {   // rewind only; never jump forward over sectors not written
       stripFwWritten = off;
       stripFwErr = false;
     } else {

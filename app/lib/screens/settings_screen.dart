@@ -27,6 +27,8 @@ import 'wifi_screen.dart';
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
 const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
+/// the CI run number of this build, to tell a newer build of the same version from the installed one (0 = built by hand)
+const appBuild = int.fromEnvironment('APP_BUILD', defaultValue: 0);
 
 /// Settings home: short, grouped, every detail lives one tap deeper.
 class SettingsScreen extends StatelessWidget {
@@ -127,7 +129,7 @@ class SettingsScreen extends StatelessWidget {
                     listenable: UpdateService.instance,
                     builder: (context, _) {
                       final u = UpdateService.instance;
-                      final n = (u.newer('app', appVersion) != null ? 1 : 0) + (st.can(Perm.hubFw) && u.newer('hub', st.hubFw) != null ? 1 : 0);
+                      final n = (u.newer('app', appVersion, build: appBuild) != null ? 1 : 0) + (st.can(Perm.hubFw) && u.newer('hub', st.hubFw, build: st.hubBuild) != null ? 1 : 0);
                       return _row(context, Icons.cloud_download_outlined, C.accent, _tr('مركز التحديثات', 'Update center'),
                           n == 0 ? _tr('آخر نسخة', 'Up to date') : _tr('$n جديد', '$n new'), () => _open(context, UpdateCenterScreen(state: st)),
                           dot: n > 0 ? C.danger : null);

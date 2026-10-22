@@ -24,7 +24,7 @@ import 'scenes_screen.dart';
 import 'update_center_screen.dart';
 import 'lock_screen.dart';
 import '../services/update_service.dart';
-import 'settings_screen.dart' show appVersion;
+import 'settings_screen.dart' show appVersion, appBuild;
 
 class HomeScreen extends StatefulWidget {
   final AppState state;
@@ -240,8 +240,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListenableBuilder(
       listenable: u,
       builder: (context, _) {
-        final hub = s.isShared ? null : u.newer('hub', s.hubFw);
-        final app = u.newer('app', appVersion);
+        final hub = s.isShared ? null : u.newer('hub', s.hubFw, build: s.hubBuild);
+        final app = u.newer('app', appVersion, build: appBuild);
         if (hub == null && app == null) return const SizedBox.shrink();
         final key = '${app?.version ?? ''}|${hub?.version ?? ''}';
         if (u.dismissed == key) return const SizedBox.shrink();

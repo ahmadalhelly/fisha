@@ -424,7 +424,7 @@ String actionMac(const String& p, const String& b) {
 }
 // a member's state up to its strips ("devices":[ included); the strips follow through stateStream
 String userStateHeadJson(const HubUser& u) {
-  String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
+  String j = "{\"hub_fw\":\"" + String(FW_VERSION) + "\",\"hub_build\":" + String(FISHA_BUILD) + ",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") +
              ",\"lip\":\"" + WiFi.localIP().toString() + "\",\"ts\":" + String((uint32_t)time(nullptr)) + ",\"uptime_s\":" + String(millis() / 1000) + ",\"me\":" + userJson(u) + ",\"timers\":[";
   bool first = true;
   uint32_t now = millis();

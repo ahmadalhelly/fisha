@@ -507,6 +507,7 @@ void loop() {
   webUri = "";
   web.handleClient();
   if (lastSuChunkAt && (uint32_t)(millis() - lastSuChunkAt) < 4000) {
+    mqttMemTick();                                // update mode starts here too, not only after the upload
     esp_task_wdt_reset();
     delay(1);
     return;

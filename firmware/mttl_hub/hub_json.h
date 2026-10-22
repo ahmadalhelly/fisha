@@ -81,7 +81,7 @@ uint32_t stateDevicesBytes(const HubUser* u) {
 // everything in the owner's state up to the strips ("devices":[ included)
 String stateHeadJson() {
   String j = "{\"local_ip\":\"" + WiFi.localIP().toString() + "\",\"port\":" + String(STRIP_PORT) + ",\"hub_fw\":\"" + FW_VERSION +
-             "\",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
+             "\",\"hub_build\":" + String(FISHA_BUILD) + ",\"hub\":\"" + hubId + "\",\"time_ok\":" + (timeOk() ? "true" : "false") + ",\"ts\":" + String((uint32_t)time(nullptr)) +
              ",\"uptime_s\":" + String(millis() / 1000) + ",\"nvs\":\"" + nvsId + "\"" +
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +

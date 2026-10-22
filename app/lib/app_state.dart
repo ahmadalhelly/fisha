@@ -196,6 +196,7 @@ class AppState extends ChangeNotifier {
   bool hubTimeOk = false;
 
   String? hubFw;
+  int hubBuild = 0; // the CI run number of the hub firmware, 0 when it does not report one
 
   // hub lock: the hub refused this phone (no key, or a key it no longer knows)
   bool hubLocked = false;

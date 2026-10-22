@@ -4,6 +4,10 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 
 ## Changelog
 
+### 1.1.9 (built by the CI)
+- Review fixes for the 1.1.8 update mode: it starts only after the caller is authorised, also while chunks are still arriving, a cloud restart request waits until the update ends, "offline" is published before MQTT is stopped, the memory gate waits while a TLS job runs, and a resumed chunk upload can only go back, never forward.
+- The hub reports its CI run number (`build` in /api/health and the info topic, `hub_build` in the state) so the app can tell a newer build of the same version.
+
 ### 1.1.8 (built, not flashed yet)
 - Base: the 1.1.8 source worked out with the F1.0.92 strip firmware (chunked strip upload, timezone +180 with NVS key `tzmin3`, `up:limits` / `up:sched` / `up:tz` / `up:time` sync, `up:cycle`, hold seconds), split back into the `hub_*.h` parts (cut at the part headers, so the order of the text is unchanged).
 - Logic is the 1.1.8 source as it is (owner decision, 2026-10-22): the child lock, timezone, defaults and strip sync are Gemini's. Earlier-tree additions that are not in it were left out on purpose: strip-owned child lock (`stripFwLevel`, `stripOwnsLocks`), `/api/stripfw/prepare` (the chunk upload erases sector by sector; the app treats "unknown action" there as fine). Kept on the owner's word: `/api/heapdiag` (with `hub_allocsites.h`) and `mac=` on `/api/raw`.

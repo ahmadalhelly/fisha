@@ -150,6 +150,7 @@ extension AppStateHubFirmware on AppState {
     const int chunkSize = 4096; // 4 KB (1 NOR Flash sector; ~5.5 KB Base64 JSON to prevent ESP32 heap8 exhaustion)
     final int total = bytes.length;
     int offset = 0;
+    int rewinds = 0;
     var client = http.Client();
 
     try {
@@ -183,8 +184,8 @@ extension AppStateHubFirmware on AppState {
                 )
                 .timeout(const Duration(seconds: 15));
             lastEx = null;
-            if (r.statusCode == 409 && busyWaits < 5) {
-              // the hub is still taking its cloud link down for the update: wait, do not fail
+            if (r.statusCode == 409 && busyWaits < 60) {
+              // the hub is busy with a strip update or fetching a file: wait for it, do not fail
               busyWaits++;
               r = null;
               await Future.delayed(const Duration(seconds: 1));
@@ -201,12 +202,12 @@ extension AppStateHubFirmware on AppState {
             final st = await stripFwState();
             final w = st?['written'];
             if (w is int) {
-              if (w >= end) {
+              if (w >= end && offset > 0) {
                 landed = true;
                 lastEx = null;
                 break;
               }
-              if (w < offset) {
+              if (w < offset && ++rewinds <= 5) {
                 // the hub is behind (a sector was not kept): go back to the last 4 KB boundary it has
                 offset = w - (w % chunkSize);
                 continue outer;

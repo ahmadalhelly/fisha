@@ -58,6 +58,7 @@ jobs:
           set -o pipefail
           v=${{ steps.ver.outputs.v }}
           pip install -q platformio esptool
+          echo "#define FISHA_BUILD ${{ github.run_number }}" > firmware/mttl_hub/fisha_build.h
           pio run -d firmware 2>&1 | tee build10.log
           B=firmware/.pio/build/hub
           cp $B/firmware.bin fisha-hub-$v.bin

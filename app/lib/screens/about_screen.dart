@@ -4,7 +4,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
-import 'settings_screen.dart' show appVersion;
+import 'settings_screen.dart' show appVersion, appBuild;
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -14,6 +14,9 @@ class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key, required this.state});
 
   static List<(IconData, String, String)> get _latest => [
+        (Icons.memory, _tr('مميزات جوه المشترك', 'Features inside the strip'),
+            _tr('قفل الأطفال على الأزرار، وحدود الحماية، وإعادة تشغيل المخرج، والجدولة، كلها بتتحفظ داخل إعدادات المشترك وبتتنفذ حتى من غير اتصال بالهاب.',
+                'Child lock on the buttons, protection limits, outlet restart and schedules are all stored inside the strip and run even without the hub.')),
         (Icons.admin_panel_settings_outlined, _tr('صلاحيات العيلة', 'Family permissions'),
             _tr('كل فرد بيشوف اللي من صلاحيته بس: مشاهدة، تشغيل وتحكم، أو إدارة كاملة، والمالك يقدر يدي صلاحيات زيادة لأي حد.', 'Everyone sees only what their role allows: view, control or full admin, and the owner can grant extra permissions.')),
         (Icons.account_circle_outlined, _tr('صورة حساب جوجل', 'Google account photo'),
@@ -103,7 +106,8 @@ class AboutScreen extends StatelessWidget {
           const SizedBox(height: 18),
           card([
             kv(_tr('إصدار التطبيق', 'App version'), appVersion),
-            kv(_tr('فيرموير الـ Hub', 'Hub firmware'), state.hubFw == null ? '—' : 'v${state.hubFw}'),
+            kv(_tr('رقم البناء', 'Build number'), appBuild > 0 ? '$appBuild' : '—'),
+            kv(_tr('فيرموير الـ Hub', 'Hub firmware'), state.hubFw == null ? '—' : 'v${state.hubFw}${state.hubBuild > 0 ? ' (${_tr('بناء', 'build')} ${state.hubBuild})' : ''}'),
             kv(_tr('المشتركات', 'Strips'), '${state.strips.length}'),
           ]),
           const SizedBox(height: 14),

@@ -60,7 +60,7 @@ jobs:
             dart run flutter_native_splash:create
             flutter analyze --no-fatal-infos --no-fatal-warnings
             flutter test
-            flutter build apk --release --target-platform android-arm64 --build-name=${{ steps.ver.outputs.v }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=${{ steps.ver.outputs.v }}
+            flutter build apk --release --target-platform android-arm64 --build-name=${{ steps.ver.outputs.v }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=${{ steps.ver.outputs.v }} --dart-define=APP_BUILD=${{ github.run_number }}
             cp build/app/outputs/flutter-apk/app-release.apk ../Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           } 2>&1 | tee ../build.log
 

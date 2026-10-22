@@ -67,6 +67,9 @@ class HubSetupSheet extends StatefulWidget {
 class _HubSetupSheetState extends State<HubSetupSheet> {
   AppState get s => widget.state;
   bool _full = false, _adv = false, _busy = false, _done = false;
+  // the hub took the Wi-Fi but this phone has not seen it yet (still switching networks, or away from home)
+  bool _pending = false;
+  String _pendingIp = '';
   double _pct = 0;
   String _say = '', _sub = '';
   String? _err;
@@ -204,16 +207,63 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
 
     // 4. back home: wait for the hub to show up on the home network
     _step(_x('الهاب بيدخل على $home', 'The hub is joining $home'), 90);
+    _pendingIp = ip;
+    if (await _waitForHub(ip, const Duration(seconds: 150))) return _finish(ip);
+    if (!mounted) return;
+    // the hub is set up; only this phone could not see it yet. Say so and let the owner check again, instead of
+    // leaving the ring at 90% with a failure message.
+    setState(() {
+      _busy = false;
+      _pending = true;
+      _err = null;
+      _pct = 90;
+      _say = _x('الهاب اتجهّز', 'The hub is set up');
+      _sub = _x('بس الموبايل لسه ما شافوش على $ip. اتأكد إن الموبايل على واي فاي البيت وبعدين دوس «اتأكد تاني».',
+          'but this phone cannot see it at $ip yet. Make sure the phone is on your home Wi-Fi, then tap Check again.');
+    });
+  }
+
+  /// true once the hub answers on the home network, or the cloud already reports it online
+  Future<bool> _waitForHub(String ip, Duration limit, {bool cloudNow = false}) async {
     final t0 = DateTime.now();
-    var up = false;
-    while (!up && DateTime.now().difference(t0) < const Duration(seconds: 100)) {
+    var cloudTried = false;
+    if (cloudNow) {
+      await s.restart();
+      cloudTried = true;
+    }
+    while (DateTime.now().difference(t0) < limit) {
+      if (!mounted) return false;
+      if (await s.hubAnswersAt(ip)) return true;
+      if (cloudTried && s.settings.hubId.isNotEmpty && s.mode != ConnMode.offline) return true;
+      // after ~40 s try the cloud link once: the hub may be up while this phone is still on another network
+      if (!cloudTried && DateTime.now().difference(t0) > const Duration(seconds: 40)) {
+        cloudTried = true;
+        await s.restart();
+      }
       await Future.delayed(const Duration(seconds: 3));
-      up = await s.hubAnswersAt(ip);
     }
-    if (!up) {
-      return _fail(_x('الهاب ما ظهرش على $ip. لو باسورد الواي فاي غلط، الهاب هيرجع يفتح شبكته بعد دقيقة وتقدر تجرّب تاني.',
-          'The hub did not appear at $ip. If the Wi-Fi password was wrong, the hub reopens its network in a minute; try again.'));
+    return false;
+  }
+
+  Future<void> _recheck() async {
+    setState(() {
+      _busy = true;
+      _sub = _x('بيدوّر على الهاب…', 'Looking for the hub…');
+    });
+    final ok = await _waitForHub(_pendingIp, const Duration(seconds: 30), cloudNow: true);
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _pending = false);
+      return _finish(_pendingIp);
     }
+    setState(() {
+      _busy = false;
+      _sub = _x('لسه مش ظاهر على $_pendingIp. تأكد إن الموبايل على واي فاي البيت وجرّب تاني. لو الباسورد كان غلط، الهاب هيفتح شبكته بعد دقيقة وتقدر تعيد الإعداد.',
+          'Still not visible at $_pendingIp. Make sure the phone is on your home Wi-Fi and try again. If the password was wrong, the hub reopens its network in a minute and you can set it up again.');
+    });
+  }
+
+  Future<void> _finish(String ip) async {
     _step(_x('ظهر على $ip', 'Online at $ip'), 100);
     await s.restart();
     if (!mounted) return;
@@ -288,7 +338,7 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
                         child: Text('✓ $x', style: TextStyle(color: C.accent, fontSize: 11.5)),
                       ),
                   ]),
-                Expanded(child: _full && !_busy && !_done ? _form() : const SizedBox()),
+                Expanded(child: _full && !_busy && !_done && !_pending ? _form() : const SizedBox()),
                 if (_linked)
                   TextButton(
                     onPressed: _expand,
@@ -302,6 +352,8 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
                   width: double.infinity,
                   child: _done
                       ? primaryButton(_x('تمام', 'Done'), () => Navigator.pop(context), icon: Icons.check)
+                      : _pending
+                          ? primaryButton(_busy ? _x('بيتأكد…', 'Checking…') : _x('اتأكد تاني', 'Check again'), _busy ? null : _recheck, icon: Icons.refresh)
                       : _linked
                           ? primaryButton(_x('تمام', 'OK'), () => Navigator.pop(context), icon: Icons.check)
                           : !_full
