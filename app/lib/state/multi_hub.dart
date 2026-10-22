@@ -6,12 +6,16 @@ class HubProfile {
   String name;
   Map<String, dynamic> settings;
   bool primary;
-  HubProfile(this.name, this.settings, {this.primary = false});
+  // the firmware it reported the last time it was the hub in use ('' = not known yet), for the update center
+  String fw;
+  int build;
+  HubProfile(this.name, this.settings, {this.primary = false, this.fw = '', this.build = 0});
 
   String get hubId => (settings['hubId'] ?? '').toString().toUpperCase();
 
-  Map<String, dynamic> toJson() => {'name': name, 'settings': settings, 'primary': primary};
-  factory HubProfile.fromJson(Map<String, dynamic> j) => HubProfile((j['name'] ?? '').toString(), Map<String, dynamic>.from(j['settings'] as Map), primary: j['primary'] == true);
+  Map<String, dynamic> toJson() => {'name': name, 'settings': settings, 'primary': primary, 'fw': fw, 'build': build};
+  factory HubProfile.fromJson(Map<String, dynamic> j) => HubProfile((j['name'] ?? '').toString(), Map<String, dynamic>.from(j['settings'] as Map),
+      primary: j['primary'] == true, fw: (j['fw'] ?? '').toString(), build: (j['build'] as num?)?.toInt() ?? 0);
 }
 
 /// Several hubs on one account: each keeps its own settings; the app talks to one at a time (the active one) and
@@ -93,6 +97,16 @@ extension AppStateHubs on AppState {
     } else {
       _notify();
     }
+  }
+
+  /// remembers the firmware the hub in use reports, so the update center can list every hub
+  void _noteHubVersion() {
+    final i = activeHubIndex;
+    final fw = hubFw;
+    if (i < 0 || fw == null || (hubs[i].fw == fw && hubs[i].build == hubBuild)) return;
+    hubs[i].fw = fw;
+    hubs[i].build = hubBuild;
+    _saveHubs();
   }
 
   String get activeHubName {

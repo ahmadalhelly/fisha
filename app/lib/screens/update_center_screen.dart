@@ -370,6 +370,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                 const SizedBox(height: 16),
                 _row('app', _tr('التطبيق', 'App')),
                 if (s.can(Perm.hubFw)) _row('hub', 'Hub'),
+                if (s.can(Perm.hubFw) && s.hubs.length > 1) _otherHubs(),
                 if (s.can(Perm.stripFw)) _row('strip', _tr('المشتركات', 'Strips')),
                 const SizedBox(height: 4),
                 Text(
@@ -387,6 +388,50 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// the other hubs of this phone with the firmware each one had when it was last in use; an old one is a tap away
+  Widget _otherHubs() {
+    final active = s.activeHubIndex;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: cardBox(radius: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(_tr('الهابات التانية', 'Other hubs'), style: TextStyle(color: C.muted, fontSize: 12.5, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        for (var i = 0; i < s.hubs.length; i++)
+          if (i != active)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                Icon(Icons.router_outlined, color: C.muted, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(s.hubs[i].name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      s.hubs[i].fw.isEmpty
+                          ? _tr('نسخته مش معروفة لسه. بدّل له مرة عشان تظهر.', 'Its version is not known yet. Switch to it once.')
+                          : u.newer('hub', s.hubs[i].fw, build: s.hubs[i].build) != null
+                              ? _tr('v${s.hubs[i].fw} · فيه تحديث', 'v${s.hubs[i].fw} · update available')
+                              : _tr('v${s.hubs[i].fw} · محدّث', 'v${s.hubs[i].fw} · up to date'),
+                      style: TextStyle(
+                          color: s.hubs[i].fw.isNotEmpty && u.newer('hub', s.hubs[i].fw, build: s.hubs[i].build) != null ? C.warn : C.muted, fontSize: 12),
+                    ),
+                  ]),
+                ),
+                if (s.hubs[i].fw.isEmpty || u.newer('hub', s.hubs[i].fw, build: s.hubs[i].build) != null)
+                  TextButton(
+                    onPressed: () => s.switchHub(i),
+                    child: Text(s.hubs[i].fw.isEmpty ? _tr('بدّل', 'Switch') : _tr('بدّل وحدّث', 'Switch and update'), style: TextStyle(color: C.accent, fontWeight: FontWeight.w700)),
+                  ),
+              ]),
+            ),
+        Text(_tr('بعد التبديل، الهاب ومشتركاته بيظهروا فوق وتقدر تحدّثهم من هنا.', 'After switching, that hub and its strips show above and you can update them here.'),
+            style: TextStyle(color: C.muted, fontSize: 11, height: 1.5)),
+      ]),
     );
   }
 
