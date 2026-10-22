@@ -95,10 +95,19 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
   }
 
   String _hm(DateTime d) => fmtTime12(d.hour, d.minute);
-  String _dur(Duration d) {
+
+  /// the outlet's own name (as set in the account) of a cycle
+  String _outletOf(int n) {
+    final st = s.allStrips.where((x) => x.mac.toUpperCase() == widget.mac.toUpperCase());
+    return st.isEmpty ? '${_tr('مخرج', 'Outlet')} $n' : s.outletName(st.first, n);
+  }
+
+  /// "2 س 43 د" / "54 دقيقة" for the tiles, in full words
+  String _durLong(Duration d) {
     final m = d.inMinutes;
-    if (m < 60) return _tr('$m د', '${m}m');
-    return _tr('${m ~/ 60} س ${m % 60} د', '${m ~/ 60}h ${m % 60}m');
+    if (m < 60) return _tr('$m دقيقة', '$m min');
+    final h = m ~/ 60, r = m % 60;
+    return r == 0 ? _tr('$h ساعة', '$h h') : _tr('$h س $r د', '${h}h ${r}m');
   }
 
   String _dayLabel(DateTime d) {
@@ -211,13 +220,26 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
     }
   }
 
-  Widget _kpi(String label, String value) => Container(
+  Widget _kpi(String label, String value, String sub) => Container(
         padding: const EdgeInsets.all(12),
         decoration: cardBox(radius: 16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
           Text(label, style: TextStyle(color: C.muted, fontSize: 11.5)),
+          const SizedBox(height: 3),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 19)),
           const SizedBox(height: 2),
-          Text(value, textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+          Text(sub, style: TextStyle(color: C.muted, fontSize: 11.5)),
+        ]),
+      );
+
+  /// a titled card: every section of the page stands on its own
+  Widget _section(String title, Widget child) => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: cardBox(radius: 18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(title, style: TextStyle(color: C.textSoft, fontSize: 13, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          child,
         ]),
       );
 
@@ -276,52 +298,74 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 mainAxisSpacing: 10,
                 crossAxisSpacing: 10,
-                childAspectRatio: 2.1,
+                childAspectRatio: 1.75,
                 children: [
-                  _kpi(_tr('ساعات التشغيل', 'Hours on'), _dur(Duration(minutes: totalMin))),
-                  _kpi(_tr('الاستهلاك', 'Energy'), '${(totalWh / 1000).toStringAsFixed(2)} kWh'),
-                  _kpi(_tr('التكلفة', 'Cost'), '${(totalWh / 1000 * s.tariff).toStringAsFixed(2)} ${t('egp')}'),
-                  _kpi(_tr('عدد الدورات', 'Cycles'), '${_cycles.length}  ·  ${_tr('أطولها', 'longest')} ${_dur(longest)}'),
+                  _kpi(_tr('مدة التشغيل', 'Time on'), _durLong(Duration(minutes: totalMin)), _tr('مجموع كل الدورات', 'all cycles together')),
+                  _kpi(_tr('عدد الدورات', 'Cycles'), _cycles.length == 1 ? _tr('دورة واحدة', '1 cycle') : _tr('${_cycles.length} دورات', '${_cycles.length} cycles'),
+                      '${_tr('أطولها', 'longest')} ${_durLong(longest)}'),
+                  _kpi(_tr('الاستهلاك', 'Energy'), '${(totalWh / 1000).toStringAsFixed(2)} kWh', _tr('في الفترة دي', 'in this period')),
+                  _kpi(_tr('التكلفة', 'Cost'), '${(totalWh / 1000 * s.tariff).toStringAsFixed(2)} ${t('egp')}', _tr('حسب سعر الكيلو', 'at your tariff')),
                 ],
               ),
               const SizedBox(height: 14),
               RepaintBoundary(
                 key: _chartKey,
                 child: ColoredBox(
-                  color: C.surface,
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      Text(_tr('مواعيد التشغيل (كل سطر يوم، من 00 على الشمال)', 'On times (a row per day, 00 on the left)'), style: TextStyle(color: C.muted, fontSize: 12, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 8),
-                      for (final d in days.take(_days == 1 ? 2 : (_days == 7 ? 7 : 30)))
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 3),
-                          child: Row(children: [
-                            SizedBox(width: 62, child: Text(_dayLabel(d), style: TextStyle(color: C.muted, fontSize: 11))),
-                            Expanded(child: SizedBox(height: 14, child: CustomPaint(painter: _DayBand(perDay[d]!, C.surface2, C.accent)))),
-                          ]),
-                        ),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 62, top: 2),
-                        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                          for (final h in Tr.isAr ? const ['12 ص', '6 ص', '12 م', '6 م', '12 ص'] : const ['12AM', '6AM', '12PM', '6PM', '12AM']) Text(h, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 10)),
+                  color: C.bg,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    _section(
+                      _tr('مواعيد التشغيل', 'On times'),
+                      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        for (final d in days.take(_days == 1 ? 2 : (_days == 7 ? 7 : 30)))
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(children: [
+                              SizedBox(width: 62, child: Text(_dayLabel(d), style: TextStyle(color: C.muted, fontSize: 11.5))),
+                              // the band and its hours are drawn left to right in both languages: 12 AM is on the left
+                              Expanded(
+                                child: Directionality(
+                                  textDirection: TextDirection.ltr,
+                                  child: SizedBox(height: 14, child: CustomPaint(painter: _DayBand(perDay[d]!, C.surface2, C.accent))),
+                                ),
+                              ),
+                            ]),
+                          ),
+                        const SizedBox(height: 4),
+                        Row(children: [
+                          const SizedBox(width: 62),
+                          Expanded(
+                            child: Directionality(
+                              textDirection: TextDirection.ltr,
+                              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                                for (final h in Tr.isAr ? const ['12ص', '6ص', '12م', '6م', '12ص'] : const ['12AM', '6AM', '12PM', '6PM', '12AM'])
+                                  Text(h, style: TextStyle(color: C.muted, fontSize: 10)),
+                              ]),
+                            ),
+                          ),
                         ]),
+                      ]),
+                    ),
+                    const SizedBox(height: 14),
+                    _section(
+                      _tr('الاستهلاك اليومي (kWh)', 'Daily use (kWh)'),
+                      Directionality(
+                        textDirection: TextDirection.ltr,
+                        child: SizedBox(height: 120, child: CustomPaint(painter: _DayBars(kwh, C.accent, C.muted))),
                       ),
-                      const SizedBox(height: 14),
-                      Text(_tr('الاستهلاك اليومي (kWh)', 'Daily use (kWh)'), style: TextStyle(color: C.muted, fontSize: 12, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 8),
-                      SizedBox(height: 110, child: CustomPaint(painter: _DayBars(kwh, C.accent, C.muted))),
-                    ]),
-                  ),
+                    ),
+                  ]),
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 18),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 2),
+                child: Text(_tr('الدورات', 'Cycles'), style: TextStyle(color: C.muted, fontSize: 12.5, fontWeight: FontWeight.w700)),
+              ),
               for (final d in days) ...[
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
                   child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Text(_dayLabel(d), style: TextStyle(fontWeight: FontWeight.w700, color: C.textSoft, fontSize: 13)),
+                    Text(_dayLabel(d), style: TextStyle(fontWeight: FontWeight.w800, color: C.textSoft, fontSize: 14)),
                     Text('${((kwh[d] ?? 0) * 1000).round()} Wh · ${((kwh[d] ?? 0) * s.tariff).toStringAsFixed(2)} ${t('egp')}', textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 12)),
                   ]),
                 ),
@@ -337,8 +381,13 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text('${_hm(c.on)} – ${c.off == null ? _tr('شغال', 'on') : _hm(c.off!)}', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                              Text('${_dur(c.duration(now))} · ${c.src == 1 ? _tr('من التطبيق أو الجدولة', 'app or schedule') : _tr('من زرار المشترك', 'strip button')}${widget.outlet == 0 ? ' · ${_tr('مخرج', 'outlet')} ${c.outlet}' : ''}',
+                              if (widget.outlet == 0) Text(_outletOf(c.outlet), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                              Text(
+                                  c.off == null
+                                      ? _tr('من ${_hm(c.on)} · شغال دلوقتي', 'From ${_hm(c.on)} · on now')
+                                      : _tr('من ${_hm(c.on)} إلى ${_hm(c.off!)}', '${_hm(c.on)} to ${_hm(c.off!)}'),
+                                  style: TextStyle(fontWeight: widget.outlet == 0 ? FontWeight.w500 : FontWeight.w700, fontSize: 13.5, color: c.off == null ? C.green : null)),
+                              Text('${_durLong(c.duration(now))} · ${c.src == 1 ? _tr('من التطبيق أو الجدولة', 'app or schedule') : _tr('من زرار المشترك', 'strip button')}',
                                   style: TextStyle(color: C.muted, fontSize: 11.5)),
                             ]),
                           ),
