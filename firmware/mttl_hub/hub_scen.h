@@ -25,6 +25,7 @@ Scen scens[SC_MAX];
 String scenRaw[SC_MAX];                         // the JSON line of each slot, for listing
 uint16_t scenNextId = 1;
 
+ApiRes api(String path, const String& b);
 static void scCopy(char* dst, size_t n, const String& s) { strlcpy(dst, s.c_str(), n); }
 
 // strips are matched by the 12 hex digits of their MAC, with or without colons
