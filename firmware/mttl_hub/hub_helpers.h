@@ -197,11 +197,14 @@ bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   int fd = c.fd();
   if (fd < 0 || !c.connected()) return false;
   uint32_t t0 = millis();
+  size_t piece = len;
   while (len) {
-    int r = lwip_send(fd, p, len, MSG_DONTWAIT);
+    int r = lwip_send(fd, p, len < piece ? len : piece, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; continue; }
-    // ENOMEM = lwIP could not get a 1.5 KB buffer this instant (a fragmented heap); the socket is fine, so wait like for EAGAIN
-    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM) && millis() - t0 < maxMs) { delay(1); continue; }
+    // ENOMEM = lwIP could not get a buffer this instant (a fragmented heap); the socket is fine: wait a little and
+    // send smaller pieces, which need smaller buffers
+    if (r < 0 && errno == ENOMEM && millis() - t0 < maxMs) { piece = 256; delay(5); continue; }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && millis() - t0 < maxMs) { delay(1); continue; }
     return false;
   }
   return true;
@@ -214,11 +217,13 @@ int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   SubT st("sock_send");
   uint32_t t0 = millis();
   int sent = 0;
+  size_t piece = len;
   while (len) {
-    int r = lwip_send(fd, p, len, MSG_DONTWAIT);
+    int r = lwip_send(fd, p, len < piece ? len : piece, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; sent += r; continue; }
     if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM)) {   // ENOMEM: no buffer right now, not a broken socket
-      if (millis() - t0 < maxMs) { delay(1); continue; }
+      if (errno == ENOMEM) piece = 256;                                          // smaller pieces need smaller buffers
+      if (millis() - t0 < maxMs) { delay(errno == ENOMEM ? 5 : 1); continue; }
       return sent;
     }
     return -1;

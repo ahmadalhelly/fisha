@@ -653,10 +653,11 @@ void handleSuChunk() {
     return;
   }
 
-  static uint8_t decBuf[16384];
-  size_t decLen = 0;
-  int rc = mbedtls_base64_decode(decBuf, sizeof(decBuf), &decLen, b64Ptr, b64Len);
-  if (rc != 0 || decLen == 0 || off + decLen > STRIP_FW_MAX) {
+  // the chunk is decoded and written in 1 KB pieces of Base64 through a 768-byte buffer: a 16 KB buffer held for good
+  // took a quarter of the internal RAM that Wi-Fi and the sockets need
+  size_t pad = (b64Len >= 1 && b64Ptr[b64Len - 1] == '=') + (b64Len >= 2 && b64Ptr[b64Len - 2] == '=');
+  size_t decLen = (b64Len % 4 == 0) ? b64Len / 4 * 3 - pad : 0;
+  if (decLen == 0 || off + decLen > STRIP_FW_MAX) {
     stripFwErr = true;
     web.send(400, "application/json", "{\"ok\":false,\"error\":\"base64 decode failed\"}");
     return;
@@ -689,12 +690,29 @@ void handleSuChunk() {
     esp_task_wdt_reset();
   }
 
-  if (esp_partition_write(part, stripFwWritten, decBuf, decLen) != ESP_OK) {
+  static uint8_t decBuf[768];
+  uint32_t at = stripFwWritten;
+  for (size_t pos = 0; pos < b64Len; pos += 1024) {
+    size_t n = b64Len - pos < 1024 ? b64Len - pos : 1024;
+    size_t got = 0;
+    if (mbedtls_base64_decode(decBuf, sizeof(decBuf), &got, b64Ptr + pos, n) != 0 || got == 0) {
+      stripFwErr = true;
+      web.send(400, "application/json", "{\"ok\":false,\"error\":\"base64 decode failed\"}");
+      return;
+    }
+    if (esp_partition_write(part, at, decBuf, got) != ESP_OK) {
+      stripFwErr = true;
+      web.send(500, "application/json", "{\"ok\":false,\"error\":\"flash write failed\"}");
+      return;
+    }
+    at += got;
+  }
+  if (at - stripFwWritten != decLen) {
     stripFwErr = true;
-    web.send(500, "application/json", "{\"ok\":false,\"error\":\"flash write failed\"}");
+    web.send(400, "application/json", "{\"ok\":false,\"error\":\"base64 decode failed\"}");
     return;
   }
-  stripFwWritten += decLen;
+  stripFwWritten = at;
 
   if (done) {
     lastSuChunkAt = 0;
