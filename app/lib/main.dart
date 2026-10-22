@@ -16,6 +16,7 @@ import 'screens/schedules_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme.dart';
 import 'services/notify_service.dart';
+import 'widgets/whats_new.dart';
 import 'widgets/common.dart';
 
 void main() {
@@ -274,20 +275,44 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   AppState get state => widget.state;
 
+  // the tabs are pages that follow the finger; a tap on the bar slides to its page
+  late final PageController _pages = PageController(initialPage: state.tab);
+  String _hubSeen = '';
+  bool _sliding = false; // a tap's slide is running: the pages it passes are not picked tabs
+
+  /// slides to the picked tab; one picked mid-slide is reached when that slide ends
+  Future<void> _syncPage() async {
+    if (_sliding || !_pages.hasClients || _pages.position.isScrollingNotifier.value) return;
+    if ((_pages.page ?? state.tab.toDouble()).round() == state.tab) return;
+    _sliding = true;
+    await _pages.animateToPage(state.tab, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+    _sliding = false;
+    if (mounted) _syncPage();
+  }
+
   @override
   void initState() {
     super.initState();
     state.addListener(_onState);
+    WidgetsBinding.instance.addPostFrameCallback((_) => WhatsNew.check(context, state));
   }
 
   @override
   void dispose() {
     state.removeListener(_onState);
+    _pages.dispose();
     super.dispose();
   }
 
   void _onState() {
     if (!mounted) return;
+    _syncPage();
+    // the hub's version is known only once it answers: a changed one gets its "what's new" box
+    final hub = '${state.hubFw}+${state.hubBuild}';
+    if (state.hubFw != null && hub != _hubSeen) {
+      _hubSeen = hub;
+      WhatsNew.check(context, state);
+    }
     final err = state.lastError;
     if (err != null) {
       state.clearError();
@@ -297,15 +322,6 @@ class _ShellState extends State<Shell> {
     if (alert != null && const {'temp', 'load', 'automation', 'missed', 'cycle', 'auto_off'}.contains(alert.type)) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(eventText(state, alert))));
     }
-  }
-
-  void _swipeTab(BuildContext context, DragEndDetails d) {
-    final v = d.primaryVelocity ?? 0;
-    if (v.abs() < 600) return;                    // a slow drag is something else (a slider, a list), not a tab swipe
-    final rtl = Directionality.of(context) == TextDirection.rtl;
-    final next = rtl ? v > 0 : v < 0;
-    final i = state.tab + (next ? 1 : -1);
-    if (i >= 0 && i < 4) state.setTab(i);
   }
 
   @override
@@ -330,12 +346,14 @@ class _ShellState extends State<Shell> {
           child: Scaffold(
           extendBody: true,
           backgroundColor: C.bg,
-          // a swipe left or right moves to the next tab (the direction follows the language: in Arabic the tabs run right to left)
+          // the pages slide with the finger (in Arabic they run right to left, as the bar does); each page keeps its state
           body: GlassWash(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragEnd: (d) => _swipeTab(context, d),
-              child: IndexedStack(index: state.tab, children: pages),
+            child: PageView(
+              controller: _pages,
+              onPageChanged: (i) {
+                if (!_sliding && i != state.tab) state.setTab(i);
+              },
+              children: [for (final p in pages) _KeepPage(child: p)],
             ),
           ),
           bottomNavigationBar: SafeArea(
@@ -418,4 +436,24 @@ class _NavGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       C.glass ? BackdropFilter(filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24), child: child) : child;
+}
+
+/// keeps a tab page alive while another one is shown (as the IndexedStack did)
+class _KeepPage extends StatefulWidget {
+  final Widget child;
+  const _KeepPage({required this.child});
+
+  @override
+  State<_KeepPage> createState() => _KeepPageState();
+}
+
+class _KeepPageState extends State<_KeepPage> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
 }

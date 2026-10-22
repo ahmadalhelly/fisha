@@ -16,6 +16,11 @@ extension AppStateSettingsLink on AppState {
 
   Future<void> saveSettings(HubSettings s) async {
     final passChanged = s.hubPass != settings.hubPass;
+    // another hub: the old one's firmware is not this one's (it would also give a false "what's new")
+    if (s.hubId.toUpperCase() != settings.hubId.toUpperCase()) {
+      hubFw = null;
+      hubBuild = 0;
+    }
     settings = s;
     await _prefs?.setString('settings', jsonEncode(s.toJson()));
     _syncActiveHub();

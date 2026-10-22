@@ -545,10 +545,13 @@ void loop() {
   stg("energy");
   exCollect();
   cloudTodoPump();
-  stg("mqtt");
+  stg("tz");
   tzTick();
+  stg("outlog");
   outletLogTick();
+  stg("scen");
   scenTick();
+  stg("mqtt");
   mqttHealth();
   mqttMemTick();
   mqttProcess();

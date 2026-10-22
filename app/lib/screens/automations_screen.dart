@@ -262,7 +262,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 4),
           Text(
             Tr.isAr
-                ? 'عدد الثواني/القراءات المتتالية قبل الفصل عند تجاوز الحدود (محفوظة في الـ Hub وفلاش المشترك F1.0.90)'
+                ? 'عدد الثواني قبل الفصل عند تجاوز الحدود. محفوظة في الهاب وفي المشترك.'
                 : 'Consecutive seconds/readings before disconnecting on overload/voltage trip',
             style: TextStyle(color: C.muted, fontSize: 12, height: 1.5),
           ),
