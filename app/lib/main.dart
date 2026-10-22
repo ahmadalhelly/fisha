@@ -299,6 +299,15 @@ class _ShellState extends State<Shell> {
     }
   }
 
+  void _swipeTab(BuildContext context, DragEndDetails d) {
+    final v = d.primaryVelocity ?? 0;
+    if (v.abs() < 600) return;                    // a slow drag is something else (a slider, a list), not a tab swipe
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    final next = rtl ? v > 0 : v < 0;
+    final i = state.tab + (next ? 1 : -1);
+    if (i >= 0 && i < 4) state.setTab(i);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -321,7 +330,14 @@ class _ShellState extends State<Shell> {
           child: Scaffold(
           extendBody: true,
           backgroundColor: C.bg,
-          body: GlassWash(child: IndexedStack(index: state.tab, children: pages)),
+          // a swipe left or right moves to the next tab (the direction follows the language: in Arabic the tabs run right to left)
+          body: GlassWash(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragEnd: (d) => _swipeTab(context, d),
+              child: IndexedStack(index: state.tab, children: pages),
+            ),
+          ),
           bottomNavigationBar: SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(22, 0, 22, 14),

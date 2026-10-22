@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme.dart';
-import 'strip_card.dart' show levelColor;
 
 class WifiArcs extends StatelessWidget {
   final int? rssi;
@@ -17,16 +16,16 @@ class WifiArcs extends StatelessWidget {
     Color color;
     if (rssi! >= -55) {
       litLevel = 3;
-      color = levelColor(0);
+      color = C.accent.withValues(alpha: 0.8);   // strong: the app's mint, softened
     } else if (rssi! >= -67) {
       litLevel = 2;
-      color = levelColor(1);
+      color = C.accent2;                        // good: sky blue
     } else if (rssi! >= -75) {
       litLevel = 1;
-      color = levelColor(2);
+      color = C.warn;                           // weak: amber
     } else {
       litLevel = 0;
-      color = levelColor(3);
+      color = C.danger;                         // poor: red
     }
 
     return CustomPaint(

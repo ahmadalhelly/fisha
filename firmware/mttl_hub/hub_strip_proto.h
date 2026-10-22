@@ -304,7 +304,7 @@ void pollStrips() {
         s.cfgSyncStep = 2;
         continue;
       } else if (s.cfgSyncStep == 2) {
-        if (timeOk()) sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
+        if (timeOk()) { sendLine(s, "up:time:" + String((unsigned long)time(nullptr))); s.timeSyncAt = millis(); }
         s.cfgSyncStep = 3;
         continue;
       } else if (s.cfgSyncStep == 3) {
@@ -322,6 +322,7 @@ void pollStrips() {
     else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
     else if (stripFwNum(s.fw) >= 90 && (pollCount % 3600 == 0) && timeOk() && !s.txq.length()) {
       sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
+      s.timeSyncAt = millis();
     }
   }
 }

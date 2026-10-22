@@ -14,6 +14,7 @@ import 'services/firmware_upload.dart';
 import 'services/google_sync.dart';
 import 'services/mqtt_factory.dart';
 import 'services/outlet_history.dart';
+import 'services/sync_parts.dart';
 import 'services/widget_data.dart';
 
 part 'state/account_sync.dart';
@@ -24,6 +25,7 @@ part 'state/hub_firmware.dart';
 part 'state/hub_lock.dart';
 part 'state/local_link.dart';
 part 'state/mirror_events.dart';
+part 'state/multi_hub.dart';
 part 'state/notifications.dart';
 part 'state/prefs.dart';
 part 'state/schedules.dart';
@@ -196,6 +198,8 @@ class AppState extends ChangeNotifier {
   bool hubTimeOk = false;
 
   String? hubFw;
+  /// every hub this phone knows (see state/multi_hub.dart)
+  List<HubProfile> hubs = [];
   int hubBuild = 0; // the CI run number of the hub firmware, 0 when it does not report one
 
   // hub lock: the hub refused this phone (no key, or a key it no longer knows)
@@ -220,6 +224,8 @@ class AppState extends ChangeNotifier {
 
   int protHoldS = 3;
 
+  String tzZone = ''; // the hub's time zone id ('' = a fixed offset)
+  bool tzDst = false; // summer time is in force there now
   int tzOffsetMin = 120; // Default: Egypt Standard Time (UTC+2 = +120 min)
 
   bool hubHasStripProt = false;
@@ -357,9 +363,6 @@ class AppState extends ChangeNotifier {
 
   String _lastSyncSig = '';
 
-  // per-phone keys that must not travel between devices through the Google copy
-  static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps', 'notifyFilter'};
-
   /// how often the automatic sync uploads (minutes): 0 = whenever something changed (checked every 10 min)
   int syncEveryMin = 0;
 
@@ -370,6 +373,9 @@ class AppState extends ChangeNotifier {
 
   /// how many past copies to keep on Drive (the rest are pruned after each upload).
   int syncKeepVersions = 5;
+
+  /// which kinds of data the Google copy carries (see [SyncParts.cats]); all of them until the owner turns some off
+  Set<String> syncCats = SyncParts.allIds;
 
   // secrets a backup file must not carry in plain text (the Google copy lives in the app's private Drive folder)
   static const _secretPrefs = {'otaPass'};

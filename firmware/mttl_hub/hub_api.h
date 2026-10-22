@@ -578,6 +578,11 @@ ApiRes api(String path, const String& b) {
     return okRes();
   }
   if (path == "config") {
+    if (jsonHas(b, "tz_zone")) {                 // checked first, so a bad zone leaves everything else untouched
+      String z0 = jsonValue(b, "tz_zone");
+      z0.trim();
+      if (z0.length() && !tzPosixFor(z0.c_str())) return errRes("unknown zone");
+    }
     if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 40, 90); cfg.putUChar("tmax", tempMax); }
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
@@ -587,7 +592,16 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
     if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
     if (jsonHas(b, "hold_s")) { protHoldS = (uint8_t)constrain((int)jsonValue(b, "hold_s").toInt(), 1, 60); cfg.putUChar("phold", protHoldS); }
-    if (jsonHas(b, "tz_min")) {
+    if (jsonHas(b, "tz_zone")) {                 // a zone from the app's list ("" = back to the fixed offset)
+      String z = jsonValue(b, "tz_zone");
+      z.trim();
+      strlcpy(tzZone, z.c_str(), sizeof tzZone);
+      cfg.putString("tzzone", z);
+      applyHubTimezone();
+      cfg.putShort("tzmin3", tzOffsetMin);
+    } else if (jsonHas(b, "tz_min")) {           // a fixed offset replaces any zone
+      tzZone[0] = 0;
+      cfg.putString("tzzone", "");
       tzOffsetMin = (int16_t)constrain((int)jsonValue(b, "tz_min").toInt(), -720, 840);
       cfg.putShort("tzmin3", tzOffsetMin);
       applyHubTimezone();
@@ -600,7 +614,21 @@ ApiRes api(String path, const String& b) {
     stateDirty = true;
     return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
                  ",\"v_min\":" + String(vMin) + ",\"v_max\":" + String(vMax) +
-                 ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) + "}");
+                 ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) +
+                 ",\"tz_zone\":\"" + String(tzZone) + "\",\"tz_dst\":" + (tzNowDst() ? "true" : "false") + "}");
+  }
+  if (path == "outlet_log") {                   // {"mac","outlet":0..4,"days":1..30} -> the cycles of that outlet, newest first
+    String m = jsonValue(b, "mac");
+    if (!m.length()) return errRes("mac required");
+    return okRes(outletLogJson(m, jsonValue(b, "outlet").toInt(), jsonHas(b, "days") ? jsonValue(b, "days").toInt() : 7));
+  }
+  if (path == "scen_list") return okRes(scenListJson());
+  if (path == "scen_save") return scenSave(b);
+  if (path == "scen_delete") return scenDelete((uint16_t)jsonValue(b, "id").toInt());
+  if (path == "time_sync") {                     // send every strip the time and the offset again now
+    for (int i = 0; i < MAX_STRIPS; i++)
+      if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) strips[i].cfgSyncStep = 1;
+    return okRes("{}");
   }
   if (path == "notify") {                        // {"ntfy":"topic","types":bitmask} and/or {"mac","mask"}
     if (jsonHas(b, "ntfy")) {

@@ -4,6 +4,12 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 
 ## Changelog
 
+### 1.2.0
+- Time zone: the zone list (`TZ_ZONES`) with each zone's summer-time rule; the offset in force follows it (`tzTick`) and is sent to the strips (`up:tz`) when it changes; `config` accepts `tz_zone`, `time_sync` sends the time to every strip now; `tsync_s` per strip.
+- Outlet log: every finished on/off cycle (start, end, Wh, source) in two rotating files, about 30 days; `outlet_log` returns the newest cycles of an outlet.
+- Scenarios: up to 8, flat JSON lines in `/scen.txt`; triggers reading / outlet / time / power back / cloud down, conditions time window, days, outlet state, actions through the hub timers; `scen_list`, `scen_save`, `scen_delete`.
+- A send that fails with `ENOMEM` (no 1.5 KB buffer at that instant) waits and retries like `EAGAIN`; before it marked the socket broken and dropped the strip ("socket stuck").
+
 ### 1.1.9 (built by the CI)
 - Review fixes for the 1.1.8 update mode: it starts only after the caller is authorised, also while chunks are still arriving, a cloud restart request waits until the update ends, "offline" is published before MQTT is stopped, the memory gate waits while a TLS job runs, and a resumed chunk upload can only go back, never forward.
 - The hub reports its CI run number (`build` in /api/health and the info topic, `hub_build` in the state) so the app can tell a newer build of the same version.

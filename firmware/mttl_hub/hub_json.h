@@ -40,7 +40,7 @@ String stripJson(int i) {
   }
   outs += "]";
   return "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"label\":\"" + jsonEsc(s.label) +
-         "\",\"model\":\"" + s.model + "\",\"fw\":\"" + s.fw + "\",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
+         "\",\"model\":\"" + s.model + "\",\"fw\":\"" + s.fw + "\",\"tsync_s\":" + (s.timeSyncAt ? String((millis() - s.timeSyncAt) / 1000) : String("-1")) + ",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
          ",\"power_w\":" + String(pw, 2) + ",\"energy_kwh\":" + String(en, 3) +
          ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
          ",\"current_a\":" + (anyReal ? String(ampsSum, 2) : (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2))) +
@@ -88,7 +88,7 @@ String stateHeadJson() {
              ",\"v_protect\":" + (vProt ? "true" : "false") + ",\"v_restore\":" + (vRestore ? "true" : "false") +
              ",\"v_max\":" + String(vMax) + ",\"v_min\":" + String(vMin) +
              ",\"a_protect\":" + (aProt ? "true" : "false") + ",\"a_max\":" + String(aMax, 1) +
-             ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) +
+             ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) + ",\"tz_zone\":\"" + String(tzZone) + "\",\"tz_dst\":" + (tzNowDst() ? "true" : "false") +
              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +
              "\",\"wifi_test\":\"" + wifiTestState + "\",\"wifi_test_ssid\":\"" + jsonEsc(wifiTestMsg) + "\"}" +
              ",\"cloud\":{\"up\":" + (mqttUp ? "true" : "false") + ",\"err\":\"" + mqttErr + "\",\"has_pass\":" + (secMqtt.length() ? "true" : "false") +

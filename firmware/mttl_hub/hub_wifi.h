@@ -356,6 +356,7 @@ void setup() {
   if (stripFwSize) { stripFwOk = stripFwCheck(stripFwSize, stripFwWhy); if (!stripFwOk) Serial.printf("[strip-ota] stored file refused: %s\n", stripFwWhy.c_str()); }
   connectWiFi();
   applyHubTimezone();
+  scenLoad();
 
   const char* hk[] = {"X-Token", "X-User"};
   web.collectHeaders(hk, 2);
@@ -533,6 +534,9 @@ void loop() {
   exCollect();
   cloudTodoPump();
   stg("mqtt");
+  tzTick();
+  outletLogTick();
+  scenTick();
   mqttHealth();
   mqttMemTick();
   mqttProcess();

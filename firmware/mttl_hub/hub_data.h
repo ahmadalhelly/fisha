@@ -53,6 +53,7 @@ struct Strip {
   uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
   bool connOk = false;                           // strip answered connect_ok to a network handed over on its link
   bool wifiHandoverSent = false;                 // true only when up:connect: was actually sent to this strip
+  uint32_t timeSyncAt = 0;                       // millis() when up:time was last sent (0 = never)
   uint8_t cfgSyncStep = 0;                       // paced F1.0.90 sync: 1=tz, 2=time, 3=limits, 4=sched, 0=done
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
   // real per-outlet current (up:power_report:<ch>:current answers in mA). One power_report request in flight per strip.
@@ -115,6 +116,7 @@ uint16_t vMax = 260;
 uint16_t vMin = 180;                               // under-voltage limit (170..260)
 float aMax = 16.0f;
 uint8_t protHoldS = 3;                             // consecutive readings/seconds before protection trip (1..60, default 3)
+char tzZone[16] = "";                              // time zone id from the app's list ("" = the fixed offset below)
 int16_t tzOffsetMin = 180;                         // timezone offset in minutes from UTC (default +180 = Egypt UTC+3)
 volatile uint32_t rebootAt = 0;
 

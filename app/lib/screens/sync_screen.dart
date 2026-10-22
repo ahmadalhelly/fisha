@@ -4,11 +4,15 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
+import '../services/backup_crypto.dart';
+import '../services/backup_secret.dart';
 import '../services/file_io.dart';
 import '../services/google_sync.dart';
+import '../services/sync_parts.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -28,6 +32,8 @@ class _SyncScreenState extends State<SyncScreen> {
   bool _app = true;
   bool _hub = true;
   bool _busy = false;
+  // backup file encryption (this phone only): on/off, fingerprint before the saved password is used, password saved
+  bool _encOn = false, _bioOn = false, _hasPw = false;
 
   List<SyncVersion>? _versions; // null = not loaded yet
   bool _versionsLoading = false;
@@ -37,6 +43,7 @@ class _SyncScreenState extends State<SyncScreen> {
   void initState() {
     super.initState();
     if (!kIsWeb && s.accountType == 'google') _loadVersions();
+    _loadEnc();
   }
 
   Set<String> get _selectedParts => {
@@ -60,6 +67,111 @@ class _SyncScreenState extends State<SyncScreen> {
 
   // ---------- manual ----------
 
+  Future<void> _loadEnc() async {
+    final p = await SharedPreferences.getInstance();
+    final has = await BackupSecret.exists();
+    if (mounted) {
+      setState(() {
+        _encOn = p.getBool('backupEnc') ?? false;
+        _bioOn = p.getBool('backupBio') ?? false;
+        _hasPw = has;
+      });
+    }
+  }
+
+  Future<void> _setEnc(bool v) async {
+    if (v && !_hasPw) {
+      final pw = await _askPassword(Tr.isAr ? 'باسورد النسخة الاحتياطية' : 'Backup password', confirm: true);
+      if (pw == null) return;
+      try {
+        await BackupSecret.write(pw);
+      } catch (_) {
+        _snack(Tr.isAr ? 'مقدرتش أحفظ الباسورد في تخزين الموبايل الآمن.' : 'Could not save the password in the secure storage.');
+        return;
+      }
+      _hasPw = true;
+    }
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('backupEnc', v);
+    if (mounted) setState(() => _encOn = v);
+  }
+
+  Future<void> _setBio(bool v) async {
+    if (v && !await authenticateBio(Tr.isAr ? 'تأكيد البصمة' : 'Confirm your fingerprint')) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('backupBio', v);
+    if (mounted) setState(() => _bioOn = v);
+  }
+
+  Future<void> _changePw() async {
+    if (_bioOn && !await authenticateBio(Tr.isAr ? 'تأكيد البصمة لتغيير الباسورد' : 'Confirm your fingerprint to change the password')) return;
+    final pw = await _askPassword(Tr.isAr ? 'باسورد جديد للنسخة' : 'New backup password', confirm: true);
+    if (pw == null) return;
+    try {
+      await BackupSecret.write(pw);
+    } catch (_) {
+      _snack(Tr.isAr ? 'مقدرتش أحفظ الباسورد.' : 'Could not save the password.');
+      return;
+    }
+    if (mounted) setState(() => _hasPw = true);
+    _snack(Tr.isAr ? 'الباسورد اتغيّر. الملفات القديمة لسه بتفتح بالباسورد اللي اتشفّرت بيه.' : 'Password changed. Older files still open with the password they were sealed with.');
+  }
+
+  /// the saved password (after the fingerprint when that is on), or null when there is none or the fingerprint failed
+  Future<String?> _storedPassword() async {
+    if (!await BackupSecret.exists()) return null;
+    if (_bioOn && !await authenticateBio(Tr.isAr ? 'تأكيد البصمة لفتح باسورد النسخة' : 'Confirm your fingerprint to use the backup password')) return null;
+    return BackupSecret.read();
+  }
+
+  /// asks for a password (twice when [confirm]); at least 6 characters; null when cancelled
+  Future<String?> _askPassword(String title, {bool confirm = false}) async {
+    final a = TextEditingController(), b = TextEditingController();
+    String? err;
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: C.surface,
+          title: Text(title, style: const TextStyle(fontSize: 18)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: a,
+              obscureText: true,
+              autofocus: true,
+              decoration: InputDecoration(labelText: Tr.isAr ? 'الباسورد' : 'Password'),
+            ),
+            if (confirm)
+              TextField(
+                controller: b,
+                obscureText: true,
+                decoration: InputDecoration(labelText: Tr.isAr ? 'أكّد الباسورد' : 'Confirm the password'),
+              ),
+            if (err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(err!, style: TextStyle(color: C.danger, fontSize: 12.5))),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+            TextButton(
+              onPressed: () {
+                if (a.text.length < 6) {
+                  setD(() => err = Tr.isAr ? 'الباسورد 6 حروف على الأقل.' : 'At least 6 characters.');
+                } else if (confirm && a.text != b.text) {
+                  setD(() => err = Tr.isAr ? 'الباسوردين مش زي بعض.' : 'The two passwords differ.');
+                } else {
+                  Navigator.pop(ctx, a.text);
+                }
+              },
+              child: Text(Tr.isAr ? 'تمام' : 'OK', style: TextStyle(color: C.accent, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+      ),
+    );
+    a.dispose();
+    b.dispose();
+    return r;
+  }
+
   String _backupFileName() {
     final now = DateTime.now();
     String p2(int n) => n.toString().padLeft(2, '0');
@@ -75,8 +187,24 @@ class _SyncScreenState extends State<SyncScreen> {
     await _run(() async {
       try {
         final data = await s.exportBackup(parts: parts);
-        final bytes = Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent('  ').convert(data)));
-        final res = await FilePicker.platform.saveFile(fileName: _backupFileName(), bytes: bytes);
+        var name = _backupFileName();
+        Uint8List bytes;
+        if (_encOn) {
+          var pw = await _storedPassword();
+          if (pw == null && !_hasPw) {
+            pw = await _askPassword(Tr.isAr ? 'باسورد النسخة الاحتياطية' : 'Backup password', confirm: true);
+            if (pw != null) {
+              await BackupSecret.write(pw);
+              _hasPw = true;
+            }
+          }
+          if (pw == null) return;
+          bytes = Uint8List.fromList(await BackupCrypto.encrypt(data, pw));
+          name = name.replaceFirst('.json', '.enc.json');
+        } else {
+          bytes = Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent('  ').convert(data)));
+        }
+        final res = await FilePicker.platform.saveFile(fileName: name, bytes: bytes);
         if (res != null || kIsWeb) {
           if (res != null && !kIsWeb) {
             try {
@@ -114,9 +242,30 @@ class _SyncScreenState extends State<SyncScreen> {
 
     Map<String, dynamic> j;
     try {
-      final decoded = jsonDecode(utf8.decode(bytes));
+      Object? decoded = jsonDecode(utf8.decode(bytes));
+      if (BackupCrypto.isEncrypted(decoded)) {
+        // a sealed file: the saved password first (after the fingerprint), then the one typed here
+        Map<String, dynamic>? plain;
+        final env = Map<String, dynamic>.from(decoded as Map);
+        final saved = await _storedPassword();
+        if (saved != null) plain = await BackupCrypto.decrypt(env, saved);
+        if (plain == null) {
+          if (!mounted) return;
+          final pw = await _askPassword(Tr.isAr ? 'باسورد الملف' : 'File password');
+          if (pw == null) return;
+          plain = await BackupCrypto.decrypt(env, pw);
+        }
+        if (plain == null) {
+          _snack(Tr.isAr ? 'الباسورد غلط.' : 'Wrong password.');
+          return;
+        }
+        decoded = plain;
+      }
       if (decoded is! Map<String, dynamic> || decoded['fisha_backup'] != 1) throw const FormatException();
       j = decoded;
+    } on FormatException catch (e) {
+      _snack(e.message.contains('damaged') ? (Tr.isAr ? 'الملف اتعدّل أو اتلف.' : 'The file was changed or damaged.') : t('backup_err_invalid'));
+      return;
     } catch (_) {
       _snack(t('backup_err_invalid'));
       return;
@@ -301,6 +450,43 @@ class _SyncScreenState extends State<SyncScreen> {
     );
   }
 
+  /// what the Google copy carries: one switch per kind of data
+  Widget _partsCard() {
+    final all = s.syncCats.length == SyncParts.cats.length;
+    return section(Tr.isAr ? 'إيه اللي يتزامن' : 'What to sync', [
+      InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => s.setSyncCats(all ? <String>{} : SyncParts.allIds),
+        child: Row(children: [
+          Expanded(child: Text(Tr.isAr ? 'الكل' : 'Everything', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14))),
+          Switch(
+            value: all,
+            activeTrackColor: C.accent,
+            onChanged: (v) => s.setSyncCats(v ? SyncParts.allIds : <String>{}),
+          ),
+        ]),
+      ),
+      for (final c in SyncParts.cats)
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => s.setSyncCats(s.syncCats.contains(c.id) ? ({...s.syncCats}..remove(c.id)) : {...s.syncCats, c.id}),
+          child: Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(Tr.isAr ? c.ar : c.en, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                Text(Tr.isAr ? c.subAr : c.subEn, style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
+              ]),
+            ),
+            Switch(
+              value: s.syncCats.contains(c.id),
+              activeTrackColor: C.accent,
+              onChanged: (v) => s.setSyncCats(v ? {...s.syncCats, c.id} : ({...s.syncCats}..remove(c.id))),
+            ),
+          ]),
+        ),
+    ]);
+  }
+
   Widget _scheduleCard() {
     return section(t('sync_schedule'), [
       for (final m in AppState.syncChoices)
@@ -412,19 +598,49 @@ class _SyncScreenState extends State<SyncScreen> {
               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 28), children: [
                 if (!kIsWeb) ...[_googleCard(), const SizedBox(height: 14)],
                 if (signedIn) ...[
+                  _partsCard(),
+                  const SizedBox(height: 14),
                   _scheduleCard(),
                   const SizedBox(height: 14),
                   _keepCard(),
                   const SizedBox(height: 14),
                   _versionsCard(),
                   const SizedBox(height: 14),
-                  Text(
-                      Tr.isAr
-                          ? 'المزامنة بتشمل كل حاجة: الأسماء والأيقونات والغرف والسيناريوهات، والجدولة والأتمتة، والحماية وحدود الأمبير، والعائلة، وسجل الاستهلاك، والإعدادات.'
-                          : 'Sync covers everything: names, icons, rooms and scenes, schedules and automations, protection and amp limits, family, usage history and settings.',
-                      style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
                   const SizedBox(height: 14),
                 ],
+                section(Tr.isAr ? 'تشفير ملف النسخة الاحتياطية' : 'Backup file encryption', [
+                  Row(children: [
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(Tr.isAr ? 'تشفير الملف بباسورد' : 'Encrypt the file with a password', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        Text(Tr.isAr ? 'AES-256. الباسورد بيتحفظ في تخزين الموبايل الآمن وبتكتبه مرة واحدة.' : 'AES-256. The password is kept in the secure storage of the phone; you type it once.',
+                            style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
+                      ]),
+                    ),
+                    Switch(value: _encOn, activeTrackColor: C.accent, onChanged: _busy ? null : _setEnc),
+                  ]),
+                  if (_encOn)
+                    Row(children: [
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(Tr.isAr ? 'فتح الباسورد بالبصمة' : 'Open the password with the fingerprint', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                          Text(Tr.isAr ? 'البصمة مربوطة بالموبايل ده. على موبايل جديد هتكتب الباسورد.' : 'The fingerprint belongs to this phone. On a new phone you type the password.',
+                              style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
+                        ]),
+                      ),
+                      Switch(value: _bioOn, activeTrackColor: C.accent, onChanged: _busy ? null : _setBio),
+                    ]),
+                  if (_encOn && _hasPw)
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: TextButton(
+                        onPressed: _busy ? null : _changePw,
+                        style: TextButton.styleFrom(foregroundColor: C.accent, padding: EdgeInsets.zero),
+                        child: Text(Tr.isAr ? 'تغيير الباسورد' : 'Change the password', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                ]),
+                const SizedBox(height: 14),
                 section(t('sync_manual_section'), [
                   CheckboxListTile(
                     value: _app,

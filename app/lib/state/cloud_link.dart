@@ -225,6 +225,8 @@ extension AppStateCloudLink on AppState {
         }
         protHoldS = (cfg['hold_s'] as num?)?.toInt() ?? protHoldS;
         tzOffsetMin = (cfg['tz_min'] as num?)?.toInt() ?? tzOffsetMin;
+        tzZone = (cfg['tz_zone'] ?? tzZone).toString();
+        tzDst = cfg['tz_dst'] == true;
         ntfyTopic = (cfg['ntfy'] ?? ntfyTopic).toString();
         notifyTypes = (cfg['ntypes'] as num?)?.toInt() ?? notifyTypes;
         hubSsid = (cfg['ssid'] ?? hubSsid).toString();

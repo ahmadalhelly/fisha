@@ -89,6 +89,7 @@ extension AppStateBackup on AppState {
             'a_max': aMax,
             'hold_s': protHoldS,
             'tz_min': tzOffsetMin,
+            'tz_zone': tzZone,
           },
           'ntfy': ntfyTopic,
           'notifyTypes': notifyTypes,
@@ -250,7 +251,11 @@ extension AppStateBackup on AppState {
         for (final k in ['v_max', 'v_min', 'a_max', 'hold_s', 'tz_min'])
           if (cfg[k] is num) k: cfg[k],
       };
+      // a zone (with its summer-time rule) wins over the fixed offset; sending both would clear the zone on the hub
+      final zone = (cfg['tz_zone'] ?? '').toString();
+      if (zone.isNotEmpty) prot.remove('tz_min');
       if (prot.isNotEmpty) await api('config', prot);
+      if (zone.isNotEmpty) await api('config', {'tz_zone': zone});
       final ntfy = (cfg['ntfy'] ?? cfg['ntfy_topic'])?.toString();
       final nt = cfg['notifyTypes'] ?? cfg['notify_types'] ?? cfg['ntypes'];
       final ntypes = nt == null ? null : num.tryParse('$nt')?.toInt();

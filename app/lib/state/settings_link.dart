@@ -18,6 +18,7 @@ extension AppStateSettingsLink on AppState {
     final passChanged = s.hubPass != settings.hubPass;
     settings = s;
     await _prefs?.setString('settings', jsonEncode(s.toJson()));
+    _syncActiveHub();
     if (passChanged) _passPushedValue = '';
     await restart();
   }

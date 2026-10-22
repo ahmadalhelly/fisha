@@ -200,7 +200,8 @@ bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   while (len) {
     int r = lwip_send(fd, p, len, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; continue; }
-    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && millis() - t0 < maxMs) { delay(1); continue; }
+    // ENOMEM = lwIP could not get a 1.5 KB buffer this instant (a fragmented heap); the socket is fine, so wait like for EAGAIN
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM) && millis() - t0 < maxMs) { delay(1); continue; }
     return false;
   }
   return true;
@@ -216,7 +217,7 @@ int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   while (len) {
     int r = lwip_send(fd, p, len, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; sent += r; continue; }
-    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM)) {   // ENOMEM: no buffer right now, not a broken socket
       if (millis() - t0 < maxMs) { delay(1); continue; }
       return sent;
     }
@@ -278,7 +279,52 @@ int stripFwNum(const String& fw) {
   return fw.substring(p + 5).toInt();
 }
 
+// the zones the app offers, with their POSIX rule (the daylight-saving switch dates are in it). Egypt: summer time from
+// the last Friday of April 00:00 to the last Thursday of October 24:00.
+struct TzZone { const char* id; const char* posix; };
+const TzZone TZ_ZONES[] = {
+  {"cairo", "EET-2EEST,M4.5.5/0,M10.5.4/24"}, {"riyadh", "<+03>-3"},   {"kuwait", "<+03>-3"},     {"doha", "<+03>-3"},
+  {"baghdad", "<+03>-3"},                     {"amman", "<+03>-3"},    {"istanbul", "<+03>-3"},   {"dubai", "<+04>-4"},
+  {"muscat", "<+04>-4"},                      {"delhi", "<+0530>-5:30"}, {"casablanca", "<+01>-1"}, {"tunis", "CET-1"},
+  {"algiers", "CET-1"},                       {"khartoum", "CAT-2"},   {"london", "GMT0BST,M3.5.0/1,M10.5.0"},
+  {"paris", "CET-1CEST,M3.5.0,M10.5.0/3"},    {"newyork", "EST5EDT,M3.2.0,M11.1.0"}, {"utc", "UTC0"},
+};
+const char* tzPosixFor(const char* id) {
+  for (const TzZone& z : TZ_ZONES) if (!strcmp(z.id, id)) return z.posix;
+  return nullptr;
+}
+// days since 1970-01-01 of a calendar date (no library call, no time zone involved)
+static int64_t tzDays(int y, unsigned m, unsigned d) {
+  y -= m <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return (int64_t)era * 146097 + (int64_t)doe - 719468;
+}
+// the offset from UTC in force right now, in minutes (daylight saving included): the local clock read as if it were UTC,
+// minus the real UTC time
+int16_t tzNowMin() {
+  time_t now = time(nullptr);
+  struct tm l;
+  localtime_r(&now, &l);
+  int64_t loc = tzDays(l.tm_year + 1900, l.tm_mon + 1, l.tm_mday) * 86400 + l.tm_hour * 3600 + l.tm_min * 60 + l.tm_sec;
+  return (int16_t)((loc - (int64_t)now) / 60);
+}
+bool tzNowDst() {
+  time_t now = time(nullptr);
+  struct tm l;
+  localtime_r(&now, &l);
+  return l.tm_isdst > 0;
+}
+
 void applyHubTimezone() {
+  const char* posix = tzZone[0] ? tzPosixFor(tzZone) : nullptr;
+  if (posix) {
+    configTzTime(posix, "pool.ntp.org", "time.google.com");
+    if (timeOk()) tzOffsetMin = tzNowMin();
+    return;
+  }
   // POSIX TZ sign is inverted relative to UTC offset: UTC+2 (+120 min) is "UTC-2"
   int16_t m = tzOffsetMin;
   char sign = (m >= 0) ? '-' : '+';
@@ -289,6 +335,21 @@ void applyHubTimezone() {
   if (mm == 0) snprintf(tzBuf, sizeof(tzBuf), "UTC%c%d", sign, hh);
   else snprintf(tzBuf, sizeof(tzBuf), "UTC%c%d:%02d", sign, hh, mm);
   configTzTime(tzBuf, "pool.ntp.org", "time.google.com");
+}
+
+// every 30 s: with a zone chosen, the offset in force follows the daylight-saving rule; when it changes, every strip
+// is sent the new offset (and the schedules that depend on it) through the normal paced sync
+void tzTick() {
+  static uint32_t last = 0;
+  if (!tzZone[0] || !timeOk() || millis() - last < 30000) return;
+  last = millis();
+  int16_t o = tzNowMin();
+  if (o == tzOffsetMin) return;
+  tzOffsetMin = o;
+  cfg.putShort("tzmin3", tzOffsetMin);
+  for (int i = 0; i < MAX_STRIPS; i++)
+    if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) strips[i].cfgSyncStep = 1;
+  stateDirty = true;
 }
 
 void sendChildLock(Strip& s) {

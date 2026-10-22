@@ -13,6 +13,9 @@ class ReportTable {
   final List<String> total;
   final List<double> widths; // column shares, sum 1
   final bool rtl;
+  /// optional bar chart drawn above the table (oldest bar on the left): label under the bar, value above it
+  final List<(String, double)> chart;
+  final String chartTitle;
   const ReportTable({
     required this.title,
     required this.subtitle,
@@ -21,6 +24,8 @@ class ReportTable {
     required this.total,
     required this.widths,
     required this.rtl,
+    this.chart = const [],
+    this.chartTitle = '',
   });
 }
 
@@ -153,9 +158,42 @@ TextPainter _tp(String text, double size, Color color, bool rtl, {bool bold = fa
   return p;
 }
 
+/// the bars of [t.chart] under a small title; returns the y below the chart. The time axis always runs from the left.
+double _drawBars(Canvas c, ReportTable t, double y0) {
+  const h = 140.0;
+  final w = _pw - _margin * 2;
+  if (t.chartTitle.isNotEmpty) {
+    final tp = _tp(t.chartTitle, 11, const Color(0xFF333333), t.rtl, bold: true, maxW: w);
+    tp.paint(c, Offset(_margin, y0));
+  }
+  final base = y0 + 18 + h;
+  final n = t.chart.length;
+  final maxV = t.chart.fold<double>(0, (a, e) => e.$2 > a ? e.$2 : a);
+  final slot = w / n;
+  final bw = (slot * 0.62).clamp(2.0, 26.0);
+  c.drawLine(Offset(_margin, base), Offset(_pw - _margin, base), Paint()..color = const Color(0xFF999999)..strokeWidth = 0.8);
+  final step = n <= 16 ? 1 : (n / 12).ceil();
+  for (var k = 0; k < n; k++) {
+    final v = t.chart[k].$2;
+    final bh = maxV <= 0 ? 0.0 : v / maxV * (h - 16);
+    final x = _margin + slot * k + (slot - bw) / 2;
+    c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, base - bh, bw, bh), const Radius.circular(2)), Paint()..color = const Color(0xFF3F3F3F));
+    if (n <= 16) {
+      final vp = _tp(v.toStringAsFixed(1), 8, const Color(0xFF333333), false, maxW: slot, align: TextAlign.center);
+      vp.paint(c, Offset(_margin + slot * k, base - bh - 11));
+    }
+    if (k % step == 0) {
+      final lp = _tp(t.chart[k].$1, 8, const Color(0xFF555555), false, maxW: slot * step, align: TextAlign.center);
+      lp.paint(c, Offset(_margin + slot * k - (slot * step - slot) / 2, base + 3));
+    }
+  }
+  return base + 26;
+}
+
 Future<Uint8List> buildPdf(ReportTable t) async {
   final usable = _ph - _margin * 2;
-  final first = ((usable - 90) / _rowH).floor();
+  final chartH = t.chart.isEmpty ? 0.0 : 210.0;
+  final first = ((usable - 90 - chartH) / _rowH).floor();
   final other = (usable / _rowH).floor();
   final pages = <List<List<String>>>[];
   final all = [...t.rows, t.total];
@@ -180,6 +218,7 @@ Future<Uint8List> buildPdf(ReportTable t) async {
       final st = _tp(t.subtitle, 12, const Color(0xFF555555), t.rtl, maxW: _pw - _margin * 2);
       st.paint(c, Offset(_margin, y));
       y += 38;
+      if (t.chart.isNotEmpty) y = _drawBars(c, t, y);
     }
     void drawRow(List<String> cells, {bool bold = false, Color? fill}) {
       if (fill != null) c.drawRect(Rect.fromLTWH(_margin, y, _pw - _margin * 2, _rowH), Paint()..color = fill);

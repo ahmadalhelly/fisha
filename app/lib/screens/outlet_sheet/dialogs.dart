@@ -49,6 +49,12 @@ List<Widget> _linkedRules(BuildContext ctx, AppState state, String mac, int n, b
   ];
 }
 
+void _openLog(BuildContext ctx, AppState state, String mac, int outlet) {
+  final nav = Navigator.of(ctx);
+  nav.pop();
+  nav.push(MaterialPageRoute(builder: (_) => OutletLogScreen(state: state, mac: mac, outlet: outlet)));
+}
+
 void _openRule(BuildContext ctx, AppState state, String mac, int outlet) {
   Navigator.of(ctx).push(MaterialPageRoute(builder: (_) => AutomationEditor(state: state, presetMac: mac, presetOutlet: outlet)));
 }

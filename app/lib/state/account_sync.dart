@@ -21,6 +21,13 @@ extension AppStateAccountSync on AppState {
     _notify();
   }
 
+  Future<void> setSyncCats(Set<String> cats) async {
+    syncCats = {...cats};
+    await _prefs?.setStringList('syncCats', syncCats.toList());
+    _lastSyncSig = '';                          // the copy changes with the choice: upload it at the next sync
+    _notify();
+  }
+
   /// Every saved copy on Drive, newest first; throws on a Drive error.
   Future<List<SyncVersion>> listGoogleVersions() => GoogleSync.I.listVersions();
 
@@ -30,7 +37,7 @@ extension AppStateAccountSync on AppState {
     if (!settings.isShared && mode != ConnMode.offline && _hubNvs.isNotEmpty) await _refreshMirror();
     final b = await exportBackup(parts: {'app'}, withSecrets: true);
     final app = b['app'];
-    if (app is Map) app.removeWhere((k, _) => AppState._noSyncKeys.contains(k));
+    if (app is Map) b['app'] = SyncParts.filterApp(Map<String, dynamic>.from(app), syncCats);
     return b;
   }
 
@@ -99,8 +106,9 @@ extension AppStateAccountSync on AppState {
       final b = await GoogleSync.I.download(id);
       if (b == null) return t('g_no_data');
       final app = b['app'];
-      if (app is Map) app.removeWhere((k, _) => AppState._noSyncKeys.contains(k));
+      if (app is Map) b['app'] = SyncParts.filterApp(Map<String, dynamic>.from(app), syncCats);
       final r = await importBackup(b, parts: {'app'});
+      await _applyMirrorToHub((b['app'] as Map?)?['hubMirror']);
       _lastSyncSig = jsonEncode(b['app']);
       await markSynced();
       if (_syncTimer == null) _startAutoSync();
@@ -108,6 +116,24 @@ extension AppStateAccountSync on AppState {
     } catch (e) {
       return _googleErr(e);
     }
+  }
+
+  /// After a restore the names, protection and history of the copy are put on the hub too (merged, nothing deleted),
+  /// when this phone is the owner's, the hub is reachable and the copy is of this same hub. Schedules, automations
+  /// and members are not re-added here: that would duplicate what the hub already has (an erased hub gets them
+  /// through the mirror restore).
+  Future<void> _applyMirrorToHub(dynamic item) async {
+    if (settings.isShared || mode == ConnMode.offline || item is! Map || item['v'] is! String) return;
+    try {
+      final m = jsonDecode(item['v'] as String);
+      if (m is! Map || (m['hub_id'] ?? '').toString() != settings.hubId.toUpperCase()) return;
+      final hub = <String, dynamic>{
+        for (final k in ['strips', 'energy', 'config'])
+          if (m[k] != null) k: m[k],
+      };
+      if (hub.isEmpty) return;
+      await importBackup({'fisha_backup': 1, 'hub': hub}, parts: {'hub'});
+    } catch (_) {}
   }
 
   Future<void> useLocalAccount() async {
@@ -136,6 +162,8 @@ extension AppStateAccountSync on AppState {
     timers = [];
     ownerPhones = [];
     pairRequests = [];
+    hubs = [];
+    await _prefs?.remove('hubs');
     await saveSettings(HubSettings());
     await setAccount('');
   }

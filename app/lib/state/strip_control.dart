@@ -228,8 +228,28 @@ extension AppStateStripControl on AppState {
       'a_protect': aProtect,
       'a_max': aMax,
       'hold_s': protHoldS,
-      'tz_min': tzOffsetMin,
+      if (tzZone.isEmpty) 'tz_min': tzOffsetMin,    // with a zone chosen the hub keeps following its summer-time rule
     }));
+  }
+
+  /// a zone from the list (see TzZones): the hub applies its summer-time rule and tells the strips
+  Future<void> setTimeZone(String zone) async {
+    tzZone = zone;
+    _notify();
+    _fail(await api('config', {'tz_zone': zone}));
+  }
+
+  /// a fixed offset in minutes (no summer time); it replaces any zone
+  Future<void> setFixedOffset(int minutes) async {
+    tzZone = '';
+    tzOffsetMin = minutes;
+    _notify();
+    _fail(await api('config', {'tz_min': minutes}));
+  }
+
+  /// sends every strip the time and the offset again now
+  Future<void> syncTimeNow() async {
+    _fail(await api('time_sync'));
   }
 
   Future<CmdResult> setOutletAmpLimit(String mac, int outlet, double maxA) async {

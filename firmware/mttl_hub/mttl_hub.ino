@@ -11,6 +11,7 @@ struct HubUser;
 struct ELog; struct PeakLog; struct SseClient; struct PubMark;   // for the Arduino-generated prototypes
 struct ApiRes;
 struct OwnerDev;
+struct OLogRec; struct Scen;
 struct PairReq;
 
 /*
@@ -104,7 +105,7 @@ volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
 String wifiOkMacs;                              // strips that answered connect_ok during the move (kept by MAC, not by socket slot)
 String wifiMoveInfo;                            // what happened to each strip in the last move (shown in /api/health)
-const char* FW_VERSION = "1.1.9";
+const char* FW_VERSION = "1.2.0";
 // the CI run number of this build (the workflow writes fisha_build.h); 0 for a build made by hand. The app uses it to
 // tell a newer build of the same version from the one installed.
 #if __has_include("fisha_build.h")
@@ -164,7 +165,9 @@ const int      ELOG_DAYS = 90;
 #include "hub_notify.h"
 #include "hub_nvs.h"
 #include "hub_control.h"
+#include "hub_outlog.h"
 #include "hub_strip_proto.h"
+#include "hub_scen.h"
 #include "hub_json.h"
 #include "hub_auth.h"
 #include "hub_api.h"

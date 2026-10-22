@@ -25,6 +25,7 @@ import 'update_center_screen.dart';
 import 'lock_screen.dart';
 import '../services/update_service.dart';
 import 'settings_screen.dart' show appVersion, appBuild;
+import 'hubs_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final AppState state;
@@ -129,7 +130,7 @@ class _HomeScreenState extends State<HomeScreen> {
           listenable: s,
           builder: (context, _) {
             final strips = s.strips;
-            final header = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_header(), _lockBanner(), _updateBanner()]);
+            final header = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_header(), _hubChip(), _lockBanner(), _updateBanner()]);
             final pad = EdgeInsets.fromLTRB(18, 12, 18, navInset(context) + 76);
             Widget body;
             if (strips.isEmpty) {
@@ -234,6 +235,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // a small banner when the hub or the app has a newer build; closing it hides it until the next version
+  /// the name of the hub in use; shown only when there are several, and opens the switcher
+  Widget _hubChip() {
+    if (s.hubs.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: ActionChip(
+          avatar: Icon(Icons.router_outlined, size: 18, color: C.accent),
+          label: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(s.activeHubName.isEmpty ? (Tr.isAr ? 'الهاب' : 'Hub') : s.activeHubName),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more, size: 18),
+          ]),
+          onPressed: () => showHubSwitcher(context, s),
+        ),
+      ),
+    );
+  }
+
   Widget _updateBanner() {
     if (kIsWeb) return const SizedBox.shrink();
     final u = UpdateService.instance;

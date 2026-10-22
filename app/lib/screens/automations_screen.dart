@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'time_zone_screen.dart';
 import '../widgets/common.dart';
 
 part 'automations/editor.dart';
@@ -255,31 +256,23 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             onChanged: (v) => s.setStripProtection(holdSeconds: v.round()),
           ),
           Divider(height: 22, color: C.border),
-          Row(children: [
-            Icon(Icons.public, color: C.accent),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                Tr.isAr ? 'المنطقة الزمنية ومزامنة ساعة المشترك' : 'Timezone & Strip Clock Sync',
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-              ),
+          InkWell(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => TimeZoneScreen(state: s))),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                Icon(Icons.public, color: C.accent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    Tr.isAr ? 'الوقت والمنطقة الزمنية' : 'Time and time zone',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
+                ),
+                Icon(Icons.chevron_left, color: C.muted),
+              ]),
             ),
-            DropdownButton<int>(
-              value: const [0, 60, 120, 180, 240].contains(s.tzOffsetMin) ? s.tzOffsetMin : 120,
-              dropdownColor: C.surface2,
-              underline: const SizedBox.shrink(),
-              items: [
-                DropdownMenuItem(value: 120, child: Text(Tr.isAr ? 'مصر القياسي (UTC+2)' : 'Egypt (UTC+2)')),
-                DropdownMenuItem(value: 180, child: Text(Tr.isAr ? 'التوقيت الصيفي / السعودية (UTC+3)' : 'Summer / KSA (UTC+3)')),
-                DropdownMenuItem(value: 240, child: Text(Tr.isAr ? 'الإمارات (UTC+4)' : 'UAE (UTC+4)')),
-                DropdownMenuItem(value: 60, child: Text('UTC+1')),
-                DropdownMenuItem(value: 0, child: Text('UTC+0')),
-              ],
-              onChanged: (val) {
-                if (val != null) s.setStripProtection(tzMinutes: val);
-              },
-            ),
-          ]),
+          ),
           const SizedBox(height: 6),
         ]),
       );

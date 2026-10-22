@@ -11,6 +11,10 @@ import '../widgets/hub_setup_sheet.dart';
 import 'about_screen.dart';
 import 'account_screen.dart';
 import 'sync_screen.dart';
+import 'scenarios_screen.dart';
+import 'hubs_screen.dart';
+import 'time_zone_screen.dart';
+import '../services/tz_zones.dart';
 import 'connection_screen.dart';
 import 'firmware_screen.dart';
 import 'guide_screen.dart';
@@ -119,6 +123,14 @@ class SettingsScreen extends StatelessWidget {
                 if (HubSetup.supported && st.isOwner)
                   _row(context, Icons.add_circle_outline, C.accent, _tr('إضافة هاب', 'Add a hub'), _tr('هاب جديد أو اتغيّرت شبكته', 'New hub, or its Wi-Fi changed'),
                       () => showHubSetup(context, st)),
+                if (st.isOwner)
+                  _row(context, Icons.router_outlined, C.accent, _tr('الهابات', 'Hubs'), st.hubs.length > 1 ? '${st.hubs.length}' : '', () => _open(context, HubsScreen(state: st))),
+                if (st.can(Perm.auto))
+                  _row(context, Icons.bolt, C.warn, _tr('السيناريوهات', 'Scenarios'), _tr('لو ... اعمل ... وإلا', 'If ... do ... otherwise'), () => _open(context, ScenariosScreen(state: st))),
+                if (st.isOwner)
+                  _row(context, Icons.public, C.accent2, _tr('الوقت والمنطقة الزمنية', 'Time and time zone'),
+                      TzZones.byId(st.tzZone) == null ? TzZones.offsetText(st.tzOffsetMin) : (Tr.isAr ? TzZones.byId(st.tzZone)!.ar : TzZones.byId(st.tzZone)!.en),
+                      () => _open(context, TimeZoneScreen(state: st))),
                 _row(context, Icons.link, C.accent, _tr('الاتصال', 'Connection'), conn, () => _open(context, ConnectionScreen(state: st)),
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),

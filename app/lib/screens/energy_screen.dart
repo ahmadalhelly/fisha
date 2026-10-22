@@ -2,9 +2,11 @@ import 'dart:math' as math;
 
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 
 import '../app_state.dart';
 import '../i18n.dart';
@@ -138,6 +140,21 @@ class _EnergyScreenState extends State<EnergyScreen> {
   }
 
   // the selected period as a CSV (Excel opens it): one row per day, strip and outlet, with kWh and cost
+  final GlobalKey _chartKey = GlobalKey();
+
+  /// the daily chart on screen as a PNG (on its own background so it reads in either theme)
+  Future<Uint8List?> _chartPng() async {
+    try {
+      final b = _chartKey.currentContext?.findRenderObject();
+      if (b is! RenderRepaintBoundary) return null;
+      final img = await b.toImage(pixelRatio: 3);
+      final data = await img.toByteData(format: ui.ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _export() async {
     final days = _period;
     if (days.isEmpty) return;
@@ -146,7 +163,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
       showDragHandle: true,
       builder: (ctx) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          for (final f in const [('pdf', Icons.picture_as_pdf_outlined, 'PDF'), ('docx', Icons.description_outlined, 'Word (DOCX)'), ('csv', Icons.table_chart_outlined, 'CSV / Excel')])
+          for (final f in [('pdf', Icons.picture_as_pdf_outlined, 'PDF'), ('docx', Icons.description_outlined, 'Word (DOCX)'), ('csv', Icons.table_chart_outlined, 'CSV / Excel'), ('png', Icons.image_outlined, _tr('صورة الجراف (PNG)', 'Chart image (PNG)'))])
             ListTile(leading: Icon(f.$2, color: C.accent), title: Text(f.$3), onTap: () => Navigator.pop(ctx, f.$1)),
         ]),
       ),
@@ -172,8 +189,25 @@ class _EnergyScreenState extends State<EnergyScreen> {
     final header = [_tr('اليوم', 'Date'), _tr('المشترك', 'Strip'), _tr('المخرج', 'Outlet'), 'kWh', t('egp')];
     final totalRow = [_tr('الإجمالي', 'Total'), '', '', total.toStringAsFixed(3), (total * s.tariff).toStringAsFixed(2)];
     final base = 'fisha-energy-${days.last}-${days.first}';
+    // the bars of the PDF: the kWh of each day (oldest first) for the strips and outlet chosen
+    final perDay = <int, double>{};
+    for (final r in rows) {
+      final d = int.tryParse(r[0].replaceAll('-', '')) ?? 0;
+      perDay[d] = (perDay[d] ?? 0) + (double.tryParse(r[3]) ?? 0);
+    }
+    final chart = [for (final d in days.reversed) ('${d % 100}', perDay[d] ?? 0.0)];
     Uint8List bytes;
     try {
+      if (fmt == 'png') {
+        final png = await _chartPng();
+        if (png == null) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('الجراف مش ظاهر دلوقتي', 'The chart is not on screen'))));
+          return;
+        }
+        final r = await FilePicker.platform.saveFile(fileName: '$base.png', bytes: png);
+        if (mounted && r != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('اتحفظت صورة الجراف', 'Chart image saved'))));
+        return;
+      }
       if (fmt == 'csv') {
         final b = StringBuffer('\uFEFF${header.join(',')}\r\n');
         for (final r in rows) {
@@ -190,6 +224,8 @@ class _EnergyScreenState extends State<EnergyScreen> {
           total: totalRow,
           widths: const [0.2, 0.34, 0.12, 0.17, 0.17],
           rtl: Tr.isAr,
+          chart: fmt == 'pdf' ? chart : const [],
+          chartTitle: _tr('الاستهلاك اليومي (kWh)', 'Daily use (kWh)'),
         );
         bytes = fmt == 'pdf' ? await buildPdf(table) : buildDocx(table);
       }
@@ -452,7 +488,13 @@ class _EnergyScreenState extends State<EnergyScreen> {
                   Builder(builder: (_) {
                     final st = _stack(daily);
                     return section(t('daily_usage'), [
-                      _StackBars(key: ValueKey('$_mac/$_outlet/$_range'), days: st.days, labels: st.labels, colors: st.colors, tariff: s.tariff),
+                      RepaintBoundary(
+                        key: _chartKey,
+                        child: ColoredBox(
+                          color: C.surface,
+                          child: _StackBars(key: ValueKey('$_mac/$_outlet/$_range'), days: st.days, labels: st.labels, colors: st.colors, tariff: s.tariff),
+                        ),
+                      ),
                     ]);
                   }),
                   const SizedBox(height: 14),

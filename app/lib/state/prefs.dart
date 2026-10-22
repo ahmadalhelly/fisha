@@ -13,6 +13,8 @@ extension AppStatePrefs on AppState {
         if (!settings.isShared && settings.localHost == '192.168.1.110') settings.localHost = '192.168.1.100';
       } catch (_) {}
     }
+    _loadHubs();
+    _applyPrimaryHub();
     int idx(String k, int len) => (p.getInt(k) ?? 0).clamp(0, len - 1);
     viewMode = ViewMode.values[idx('viewMode', ViewMode.values.length)];
     sortMode = SortMode.values[idx('sortMode', SortMode.values.length)];
@@ -27,6 +29,8 @@ extension AppStatePrefs on AppState {
     syncEveryMin = p.getInt('syncEvery') ?? 0;
     syncPaused = p.getBool('syncPaused') ?? false;
     syncKeepVersions = (p.getInt('syncKeep') ?? 5).clamp(1, 10);
+    final sc = p.getStringList('syncCats');
+    syncCats = sc == null ? SyncParts.allIds : sc.where(SyncParts.allIds.contains).toSet();
     final ls = p.getString('lastSync');
     lastSync = ls == null ? null : DateTime.tryParse(ls);
     userName = p.getString('userName') ?? '';

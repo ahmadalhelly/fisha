@@ -25,7 +25,7 @@ const Map<String, PhIcon> kPhosphorIcons = {
   'monitor': PhIcon(IconData(0xe32e, fontFamily: _l), IconData(0xe32f, fontFamily: _d), IconData(0xe32e, fontFamily: _d)),
   'phone': PhIcon(IconData(0xe1e0, fontFamily: _l), IconData(0xe1e1, fontFamily: _d), IconData(0xe1e0, fontFamily: _d)),
   'tablet': PhIcon(IconData(0xe1e6, fontFamily: _l), IconData(0xe1e7, fontFamily: _d), IconData(0xe1e6, fontFamily: _d)),
-  'router': PhIcon(IconData(0xe0f2, fontFamily: _l), IconData(0xe0f3, fontFamily: _d), IconData(0xe0f2, fontFamily: _d)),
+  // ('router' removed: the glyph here was Phosphor's broadcast / power icon, so the Material router and switch show instead)
   'wifi': PhIcon(IconData(0xe4ea, fontFamily: _l), IconData(0xe4eb, fontFamily: _d), IconData(0xe4ea, fontFamily: _d)),
   'speaker': PhIcon(IconData(0xe44a, fontFamily: _l), IconData(0xe44b, fontFamily: _d), IconData(0xe44a, fontFamily: _d)),
   'headphones': PhIcon(IconData(0xe2a6, fontFamily: _l), IconData(0xe2a7, fontFamily: _d), IconData(0xe2a6, fontFamily: _d)),
@@ -42,7 +42,7 @@ const Map<String, PhIcon> kPhosphorIcons = {
   'power': PhIcon(IconData(0xe946, fontFamily: _l), IconData(0xe947, fontFamily: _d), IconData(0xe946, fontFamily: _d)),
   'bolt': PhIcon(IconData(0xe2de, fontFamily: _l), IconData(0xe2df, fontFamily: _d), IconData(0xe2de, fontFamily: _d)),
   'outlet': PhIcon(IconData(0xeb56, fontFamily: _l), IconData(0xeb57, fontFamily: _d), IconData(0xeb56, fontFamily: _d)),
-  'switch': PhIcon(IconData(0xe3da, fontFamily: _l), IconData(0xe3db, fontFamily: _d), IconData(0xe3da, fontFamily: _d)),
+  // ('switch' removed: the glyph here was Phosphor's broadcast / power icon, so the Material router and switch show instead)
   'cable': PhIcon(IconData(0xeb5a, fontFamily: _l), IconData(0xeb5b, fontFamily: _d), IconData(0xeb5a, fontFamily: _d)),
   'lightbulb': PhIcon(IconData(0xe2dc, fontFamily: _l), IconData(0xe2dd, fontFamily: _d), IconData(0xe2dc, fontFamily: _d)),
   'lamp': PhIcon(IconData(0xe638, fontFamily: _l), IconData(0xe639, fontFamily: _d), IconData(0xe638, fontFamily: _d)),

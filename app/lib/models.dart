@@ -111,6 +111,7 @@ class Strip {
   final bool hasSchedule; // whole-strip schedule
   final bool hasRule; // whole-strip rule
   final bool masterLock; // child lock on the strip's own physical master button (strip fw F1.0.82)
+  final int tsyncS; // seconds since the hub last sent this strip the time (-1 = never)
 
   const Strip({
     required this.mac,
@@ -126,6 +127,7 @@ class Strip {
     this.hasSchedule = false,
     this.hasRule = false,
     this.masterLock = false,
+    this.tsyncS = -1,
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -151,6 +153,7 @@ class Strip {
       hasSchedule: j['sched'] == true,
       hasRule: j['rule'] == true,
       masterLock: j['mlock'] == true,
+      tsyncS: _i(j['tsync_s'], -1),
     );
   }
 

@@ -11,6 +11,7 @@ import '../widgets/notion_icon_picker.dart';
 import '../widgets/strip_card.dart' show timerText, timerIcon, guardedSwitch;
 import 'automations_screen.dart' show AutomationEditor, AutomationsScreen, automationCondText;
 import 'schedules_screen.dart' show daysText, dateText;
+import 'outlet_log_screen.dart';
 
 part 'outlet_sheet/dialogs.dart';
 
@@ -103,6 +104,7 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _tile(Icons.restart_alt, t('cycle_strip'), t('cycle_sub'), !state.hubV2 || !s.online ? null : () => _cycleDialog(ctx, state, s, 0)),
                 if (state.canControl)
                 _tile(Icons.all_inclusive, t('loop'), t('loop_strip_sub'), !state.hubV2 || !s.online ? null : () => _loopDialog(ctx, state, s, 0)),
+                _tile(Icons.history, Tr.isAr ? 'سجل التشغيل' : 'On/off history', Tr.isAr ? 'كل الدورات واستهلاكها' : 'Every cycle and its energy', !state.hubV2 ? null : () => _openLog(ctx, state, s.mac, 0)),
                 if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
                 _switchTile(
@@ -308,6 +310,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                 _tile(Icons.hourglass_bottom, t('countdown'), t('countdown_sub'), !v2 ? null : () => _countdownDialog(ctx, state, s, n)),
                 if (state.canControl)
                 _tile(Icons.all_inclusive, t('loop'), t('loop_sub'), !v2 ? null : () => _loopDialog(ctx, state, s, n)),
+                _tile(Icons.history, Tr.isAr ? 'سجل التشغيل' : 'On/off history', Tr.isAr ? 'الدورات والاستهلاك والتكلفة' : 'Cycles, energy and cost', !v2 ? null : () => _openLog(ctx, state, s.mac, n)),
                 if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_sub'), !v2 ? null : () => _openRule(ctx, state, s.mac, n)),
                 if (state.canAdmin)

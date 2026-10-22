@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../i18n.dart';
 import '../theme.dart';
@@ -149,6 +149,46 @@ class _ManualScreenState extends State<ManualScreen> {
               _tr('الهاب بيظبط ساعة المشترك والمنطقة الزمنية لوحده، والجدولة الذاتية بتمشي عليهم.',
                   'The hub sets the strip clock and the time zone by itself, and the strip\'s own schedules follow them.'),
               how: [(_G.go, _tr('الرئيسية ← الأتمتة', 'Home → Automations'))]),
+        ]),
+        _Sec(_tr('الوقت والسيناريوهات والهابات', 'Time, scenarios and hubs'), [
+          _Item(Icons.public, _tr('الوقت والمنطقة الزمنية', 'Time and time zone'),
+              _tr('اختار منطقتك تلقائي من الموبايل أو بالبحث عن مدينة. الهاب بيغيّر الساعة للتوقيت الصيفي والشتوي لوحده (في مصر آخر جمعة في أبريل وآخر خميس في أكتوبر) وبيبلّغ المشتركات.',
+                  'Pick your zone from the phone or by searching a city. The hub moves the clock for summer and winter time by itself and tells the strips.'),
+              how: [(_G.go, _tr('الإعدادات ← الوقت والمنطقة الزمنية', 'Settings → Time and time zone'))],
+              steps: [
+                _tr('الصفحة بتعرض ساعة الموبايل والهاب وآخر مزامنة لكل مشترك.', 'The page shows the phone and hub clocks and the last sync of each strip.'),
+                _tr('«زامن دلوقتي» بيبعت الوقت لكل المشتركات فوراً.', '"Sync now" sends the time to every strip at once.'),
+              ]),
+          _Item(Icons.history, _tr('سجل تشغيل المخرج', 'Outlet history'),
+              _tr('كل دورة تشغيل لكل مخرج: وقتها ومدتها واستهلاكها وتكلفتها وإيه اللي شغّلها، لآخر 30 يوم. الهاب هو اللي بيسجّل، فالسجل بيكمل حتى لو التطبيق مقفول.',
+                  'Every on/off cycle of every outlet: when, how long, energy, cost and what started it, for the last 30 days. The hub records it, so it keeps going while the app is closed.'),
+              how: [(_G.hold, _tr('ضغطة مطولة على المخرج ← سجل التشغيل', 'Long-press an outlet → On/off history'))],
+              steps: [
+                _tr('الخط الزمني بيبدأ من 00 على الشمال، وتحته جراف الاستهلاك اليومي.', 'The timeline starts at 00 on the left, with the daily energy below it.'),
+                _tr('«تصدير» بيعمل PDF أو CSV أو صورة للرسم.', '"Export" makes a PDF, a CSV or an image of the chart.'),
+              ]),
+          _Item(Icons.bolt, _tr('السيناريوهات', 'Scenarios'),
+              _tr('لو حصل كذا (قراءة فوق أو تحت حد، مخرج اشتغل أو فصل، ميعاد، الكهربا رجعت بعد انقطاع، النت وقع) وبشرط معيّن، اعمل إجراءات: شغّل أو اطفي أو استنى أو أعد تشغيل أو اقفل أو ابعت إشعار. وإلا اعمل حاجة تانية.',
+                  'When something happens (a reading above or below a limit, an outlet goes on or off, a time, the power is back after a cut, the internet is down), and a condition holds, do actions: switch on or off, wait, restart, lock or notify. Otherwise do something else.'),
+              how: [(_G.go, _tr('الإعدادات ← السيناريوهات', 'Settings → Scenarios'))],
+              steps: [
+                _tr('فيه قوالب جاهزة: الشاحن اكتمل، بعد انقطاع الكهربا، السخان، الراوتر.', 'Ready templates: charger finished, after a power cut, heater, router.'),
+                _tr('السيناريوهات بتنفذ في الهاب، فبتوقف لو الهاب فاصل.', 'Scenarios run on the hub, so they pause while the hub is offline.'),
+              ]),
+          _Item(Icons.router_outlined, _tr('أكتر من هاب', 'More than one hub'),
+              _tr('ضيف هابات في بيوت أو شبكات مختلفة، واسم لكل واحد، وخلّي واحد أساسي يفتح عليه التطبيق. الشريحة اللي فوق في الرئيسية بتبدّل بينهم.',
+                  'Add hubs in different homes or networks, name each one and make one primary: the app opens on it. The chip at the top of Home switches between them.'),
+              how: [(_G.go, _tr('الإعدادات ← الهابات', 'Settings → Hubs'))]),
+          _Item(Icons.lock_outline, _tr('تشفير النسخة الاحتياطية', 'Backup encryption'),
+              _tr('الملف بيتشفّر بـ AES-256 بباسورد بتكتبه مرة واحدة ويتحفظ في تخزين الموبايل الآمن، وتقدر تفتحه بالبصمة. على موبايل جديد هتكتب الباسورد.',
+                  'The file is sealed with AES-256 using a password you type once, kept in the phone\'s secure storage and optionally opened with your fingerprint. On a new phone you type it.'),
+              how: [(_G.go, _tr('الإعدادات ← المزامنة والنسخ الاحتياطي', 'Settings → Sync and backup'))]),
+          _Item(Icons.sync, _tr('إيه اللي يتزامن', 'What to sync'),
+              _tr('اختار اللي يتحط في نسخة جوجل: الأسماء، الأيقونات، الغرف والسيناريوهات، المواعيد والأتمتة، الحماية والقفل، سجل الاستهلاك، العيلة، الإشعارات، البصمة، وإعدادات التطبيق.',
+                  'Choose what goes into the Google copy: names, icons, rooms and scenes, schedules and automations, protection and locks, usage history, family, notifications, fingerprint and app settings.'),
+              how: [(_G.go, _tr('الإعدادات ← المزامنة والنسخ الاحتياطي', 'Settings → Sync and backup'))]),
+          _Item(Icons.swipe, _tr('السحب بين التابات', 'Swipe between tabs'),
+              _tr('اسحب يمين أو شمال على أي صفحة رئيسية عشان تنتقل للتاب اللي جنبها.', 'Swipe left or right on any main page to move to the next tab.')),
         ]),
         _Sec(_tr('الاستهلاك والإشعارات', 'Energy and notifications'), [
           _Item(Icons.insights, _tr('الطاقة', 'Energy'),
