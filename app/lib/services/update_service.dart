@@ -18,7 +18,7 @@ class Release {
   /// notes as plain lines: headings and bullets without their markdown marks, empty lines dropped
   List<String> get lines => [
         for (final l in const LineSplitter().convert(notes))
-          if (l.trim().isNotEmpty && !l.startsWith('#') && !l.startsWith('Branch:')) l.trim().replaceFirst(RegExp(r'^[-*]\s+'), ''),
+          if (l.trim().isNotEmpty && !l.startsWith('#') && !l.startsWith('Branch:')) l.trim().replaceFirst(RegExp(r'^([-*]|\d+[.)])\s+'), ''),
       ];
 }
 

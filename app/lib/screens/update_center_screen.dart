@@ -131,10 +131,14 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     return null;
   }
 
-  /// A short, generic line — the version installed now, and the new one available, never the full history.
+  /// The notes of the release (every line of them), under the version: the one installed now and the new one available.
   String _genericNote(String version, Release? r, String tag) {
-    final first = r != null && r.lines.isNotEmpty ? r.lines.first : _tr('تحسينات عامة وإصلاحات', 'General improvements and fixes');
-    return '$version ($tag) — $first';
+    final lines = r?.lines ?? const <String>[];
+    if (lines.isEmpty) return '$version ($tag) — ${_tr('تحسينات عامة وإصلاحات', 'General improvements and fixes')}';
+    if (lines.length == 1) return '$version ($tag) — ${lines.first}';
+    return '$version ($tag)
+${lines.map((l) => '• $l').join('
+')}';
   }
 
   Widget _kindIcon(String kind, {double size = 20}) => Icon(
@@ -300,6 +304,11 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                 style: mono(12, color: u.newer('strip', x.fw) != null ? C.warn : C.muted)),
           ]),
         ),
+      if (u.latest('strip') != null) ...[
+        const SizedBox(height: 6),
+        Text(_genericNote('F${u.latest('strip')!.version}', u.latest('strip'), _tr('جديد', 'New')),
+            style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
+      ],
       const SizedBox(height: 8),
       // the hub downloads our latest strip build itself; the file never passes through the phone
       FilledButton.icon(
