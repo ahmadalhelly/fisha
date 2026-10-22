@@ -18,6 +18,7 @@ bool localNow(struct tm& t);
 int32_t localDay();
 int findStrip(const String& macIn);
 int firstStrip();
+String wifiReasonsJson();
 bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs);
 bool sendStr(WiFiClient& c, const String& s, uint32_t maxMs);
 int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs);

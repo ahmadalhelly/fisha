@@ -189,6 +189,17 @@ int firstStrip() {
 }
 int stripFor(const String& mac) { return mac.length() ? findStrip(mac) : firstStrip(); }
 
+// {"8":3,"36":12}: how often each Wi-Fi drop reason happened since boot
+String wifiReasonsJson() {
+  String j = "{";
+  for (int i = 0; i < 64; i++) {
+    if (!wifiReasonCnt[i]) continue;
+    if (j.length() > 1) j += ",";
+    j += "\"" + String(i) + "\":" + String(wifiReasonCnt[i]);
+  }
+  return j + "}";
+}
+
 // ---------- non-blocking socket writes ---------
 // WiFiClient::write() waits up to 10 x 1 s for room in the send buffer. A phone that went to sleep with the
 // live page open, or a strip that lost power, never drains it, so every write froze the whole hub for seconds:
@@ -197,7 +208,7 @@ bool sendNB(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   int fd = c.fd();
   if (fd < 0 || !c.connected()) return false;
   uint32_t t0 = millis();
-  size_t piece = len;
+  size_t piece = 536;                            // one small buffer at a time; a 1.5 KB one is what a fragmented heap cannot give
   while (len) {
     int r = lwip_send(fd, p, len < piece ? len : piece, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; continue; }
@@ -217,7 +228,7 @@ int sendSome(WiFiClient& c, const char* p, size_t len, uint32_t maxMs) {
   SubT st("sock_send");
   uint32_t t0 = millis();
   int sent = 0;
-  size_t piece = len;
+  size_t piece = 536;
   while (len) {
     int r = lwip_send(fd, p, len < piece ? len : piece, MSG_DONTWAIT);
     if (r > 0) { p += r; len -= r; sent += r; continue; }
