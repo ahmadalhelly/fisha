@@ -177,14 +177,16 @@ void saveAutos() {
 }
 
 void loadGlobals() {
-  tempMax = cfg.getUChar("tmax", 70);
+  tempMax = cfg.getUChar("tmax", 80);
   tempProtect = cfg.getBool("tprot", true);
   vProt = cfg.getBool("vprot", true);
   vRestore = cfg.getBool("vrest", true);
-  vMax = cfg.getUShort("vmax", 250);
-  vMin = cfg.getUShort("vmin", 190);
+  vMax = cfg.getUShort("vmax", 260);
+  vMin = cfg.getUShort("vmin", 180);
   aProt = cfg.getBool("aprot", true);
   aMax = cfg.getFloat("amax", 16.0f);
+  protHoldS = (uint8_t)constrain((int)cfg.getUChar("phold", 3), 1, 60);
+  tzOffsetMin = (int16_t)constrain((int)cfg.getShort("tzmin3", 180), -720, 840);
   schedCount = 0;
   memset(schedSkip, 0, sizeof(schedSkip));
   if (cfg.getBytesLength("schsk") == sizeof(schedSkip)) cfg.getBytes("schsk", schedSkip, sizeof(schedSkip));

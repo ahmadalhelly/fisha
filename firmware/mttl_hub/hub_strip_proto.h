@@ -55,7 +55,7 @@ bool tryParseInfo(int i) {
     if (s.o[k].on) { s.keepHold &= ~bit; continue; }
     if (!(s.keepHold & bit)) keepRestore(s, k + 1);
   }
-  for (int k = 0; k < 4 && !stripOwnsLocks(s.fw); k++) {   // child lock: keep a locked outlet where it belongs (older strip fw)
+  for (int k = 0; k < 4; k++) {                  // child lock: keep a locked outlet where it belongs
     if (!(s.lockMask & (1 << k)) || (s.keepMask & (1 << k))) continue;
     bool want = s.lockState & (1 << k);
     if (s.o[k].on != want) sendLine(s, "up:onoff:" + String(k + 1) + ":" + (want ? "on" : "off"));
@@ -135,16 +135,20 @@ void handleLine(int i, const String& line) {
     int off = offlineMacs.indexOf(mac + ",");
     if (off >= 0) { offlineMacs.remove(off, 13); addEvent("online", mac, 0, ""); }
     sendLine(s, "up:getinfo:all");
-    sendChildLock(s);                                        // F1.0.82 keeps these in its own flash: re-apply on every connect
+    sendChildLock(s);                                        // F1.0.82+ keeps these in its own flash: re-apply on every connect
+    if (stripFwNum(s.fw) >= 90) s.cfgSyncStep = 1;           // queue paced F1.0.90 sync (tz, time, limits, offline sched)
     stateDirty = true;
     return;
   }
   if (line.startsWith("up:getinfo:")) { s.pendingInfo = line; tryParseInfo(i); return; }
   if (line.startsWith("up:power_report:")) { handlePowerReport(s, line); return; }
-  if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover sent on the normal link
+  if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover or F1.0.90 config command
     s.connOk = true;
-    if (wifiTestState == "moving" && wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
-    addEvent("wifipush", s.mac, 0, "connect_ok");
+    if (wifiTestState == "moving" || s.wifiHandoverSent) {
+      s.wifiHandoverSent = false;
+      if (wifiTestState == "moving" && wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
+      addEvent("wifipush", s.mac, 0, "connect_ok");
+    }
     return;
   }
   if (line.startsWith("up:query:")) { s.rssi = line.substring(9).toInt(); s.hasRssi = true; return; }
@@ -165,7 +169,7 @@ void handleLine(int i, const String& line) {
       s.o[ch - 1].on = false;
       keepRestore(s, ch);
       stateDirty = true;
-    } else if (isEvent && (s.lockMask & (1 << (ch - 1))) && !stripOwnsLocks(s.fw)) {
+    } else if (isEvent && (s.lockMask & (1 << (ch - 1)))) {
       bool want = s.lockState & (1 << (ch - 1));
       if (on != want) sendLine(s, "up:onoff:" + String(ch) + ":" + (want ? "on" : "off"));
       addEvent("lock", s.mac, ch, "");
@@ -176,8 +180,6 @@ void handleLine(int i, const String& line) {
       if (isEvent && changed && millis() - s.cmdAt[ch - 1] > 8000) { s.cmdAt[ch - 1] = millis(); addEvent("button", s.mac, ch, on ? "on" : "off"); }
       stateDirty = true;
     }
-  } else if (isEvent && ch == 0 && stripOwnsLocks(s.fw)) {
-    sendLine(s, "up:getinfo:all");                           // master button on F1.0.83+: the strip handled the locks, only refresh
   } else if (isEvent && ch == 0) {
     // the strip's own master button turns everything off while any outlet is on. With a child-locked outlet
     // left on, every press meant "all off": the hub put the locked one back and the free ones (already off) never came
@@ -185,11 +187,6 @@ void handleLine(int i, const String& line) {
     uint8_t freeM = 0x0F & ~s.lockMask;
     if (s.lockMask && freeM && f[1] == "off" && !(s.infoOn & freeM))
       for (int k = 0; k < 4; k++) if (freeM & (1 << k)) sendOnOffF(s, k + 1, true, false);
-    // the master button also switched the locked outlets; put them back right away (the same command the poll below
-    // would send after its answer) so they flip for a moment instead of half a second
-    for (int k = 0; k < 4; k++)
-      if ((s.lockMask & (1 << k)) && !(s.keepMask & (1 << k)))
-        sendLine(s, "up:onoff:" + String(k + 1) + ":" + ((s.lockState & (1 << k)) ? "on" : "off"));
     sendLine(s, "up:getinfo:all");                           // master button: next poll re-applies locks
   }
 }
@@ -260,6 +257,40 @@ void askCurrent(Strip& s) {
   }
 }
 
+void sendStripLimits(Strip& s) {
+  if (stripFwNum(s.fw) < 90) return;
+  uint16_t uv = vProt ? vMin : 150;
+  uint16_t ov = vMax;
+  uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 1000, 16500) : 16500;
+  uint16_t pw = (uint16_t)STRIP_MAX_W;
+  uint8_t  tp = tempProtect ? tempMax : 90;
+  uint8_t  hs = protHoldS;
+  for (int i = 0; i < autoCount; i++) {
+    const Autom& r = autos[i];
+    if (!r.enabled || r.act != 1 || !r.above) continue;
+    if (strlen(r.mac) && !s.mac.equalsIgnoreCase(r.mac)) continue;
+    if (r.metric == 0 && r.watts >= 50.0f && (uint16_t)r.watts < pw) {
+      pw = (uint16_t)r.watts;
+      if (r.holdS >= 1 && r.holdS <= 60) hs = (uint8_t)r.holdS;
+    }
+  }
+  sendLine(s, "up:limits:" + String(uv) + ":" + String(ov) + ":" + String(ma) + ":" +
+              String(pw) + ":" + String(tp) + ":" + String(hs));
+}
+
+void sendStripOfflineSched(Strip& s) {
+  if (stripFwNum(s.fw) < 90) return;
+  for (int i = 0; i < schedCount; i++) {
+    const Sched& c = scheds[i];
+    if (!c.enabled || !s.mac.equalsIgnoreCase(c.mac)) continue;
+    uint8_t days = c.days ? (c.days & 0x7F) : 0x7F;
+    uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
+    sendLine(s, "up:sched:" + String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm));
+    return;
+  }
+  sendLine(s, "up:sched:0:0:0:0");
+}
+
 void pollStrips() {
   if (millis() - lastPoll < POLL_MS) return;
   lastPoll = millis();
@@ -267,9 +298,31 @@ void pollStrips() {
   for (int i = 0; i < MAX_STRIPS; i++) {
     Strip& s = strips[i];
     if (!s.used || !s.identified) continue;
+    if (stripFwNum(s.fw) >= 90 && !s.txq.length() && s.cfgSyncStep > 0) {
+      if (s.cfgSyncStep == 1) {
+        sendLine(s, "up:tz:" + String(tzOffsetMin));
+        s.cfgSyncStep = 2;
+        continue;
+      } else if (s.cfgSyncStep == 2) {
+        if (timeOk()) sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
+        s.cfgSyncStep = 3;
+        continue;
+      } else if (s.cfgSyncStep == 3) {
+        sendStripLimits(s);
+        s.cfgSyncStep = 4;
+        continue;
+      } else if (s.cfgSyncStep == 4) {
+        sendStripOfflineSched(s);
+        s.cfgSyncStep = 0;
+        continue;
+      }
+    }
     sendLine(s, "up:getinfo:all");
     if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
     else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
+    else if (stripFwNum(s.fw) >= 90 && (pollCount % 3600 == 0) && timeOk() && !s.txq.length()) {
+      sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
+    }
   }
 }
 
@@ -382,7 +435,12 @@ void tickTimers() {
       if (x.periodS) x.at = now + x.periodS * 1000; else x.used = false;
     } else if (x.kind == 1) {
       if (x.phase == 0) {
-        sendOnOff(s, x.outlet, false);
+        if (stripFwNum(s.fw) >= 90) {
+          uint32_t offSec = constrain(x.offMs / 1000UL, 1UL, 3600UL);
+          sendLine(s, "up:cycle:" + String(x.outlet) + ":" + String(offSec));
+        } else {
+          sendOnOff(s, x.outlet, false);
+        }
         x.phase = 1;
         x.at = now + x.offMs;
       } else {

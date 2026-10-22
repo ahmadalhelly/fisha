@@ -4,6 +4,16 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 
 ## Changelog
 
+### 1.1.8 (built, not flashed yet)
+- Base: the 1.1.8 source worked out with the F1.0.92 strip firmware (chunked strip upload, timezone +180 with NVS key `tzmin3`, `up:limits` / `up:sched` / `up:tz` / `up:time` sync, `up:cycle`, hold seconds), split back into the `hub_*.h` parts (cut at the part headers, so the order of the text is unchanged).
+- Logic is the 1.1.8 source as it is (owner decision, 2026-10-22): the child lock, timezone, defaults and strip sync are Gemini's. Earlier-tree additions that are not in it were left out on purpose: strip-owned child lock (`stripFwLevel`, `stripOwnsLocks`), `/api/stripfw/prepare` (the chunk upload erases sector by sector; the app treats "unknown action" there as fine). Kept on the owner's word: `/api/heapdiag` (with `hub_allocsites.h`) and `mac=` on `/api/raw`.
+- Memory (the hub's cloud link failed with a refused 16717-byte request, largest free block 2420 bytes: the heap was cut into pieces, not used up):
+  - MQTT is parked when no block of 18 KB is free (checked after 15 s without a connection) and started again only when one is, waiting 5 s, 10 s ... 60 s between tries; the live streams are closed when it is parked. Before, esp-mqtt retried blind every 5 s.
+  - Update mode (a firmware byte in the last 12 s, a strip update, or the hub fetching a file): MQTT is stopped and destroyed and the live streams are closed, and it starts again 6 s after the last firmware byte. `/api/health` shows `upd_mode`, `mqtt_gate`, `mqtt_pause`.
+  - The hub fetching a strip firmware waits for MQTT to be down and tries again (3 times) when the connection itself fails ("server replied -1").
+- App (`hub_firmware.dart`): a failed strip-firmware chunk gets a new socket, then the app asks the hub how much it has (`written`) and goes on from there instead of failing; a "busy" answer is waited out.
+- Build: `platformio.ini` unchanged (26 sockets, 4 KB TLS send buffer, 10 strips).
+
 ### Code split into parts (no behaviour change)
 - `mttl_hub.ino` (version, libraries, configuration, includes) + 14 parts `hub_data.h` ... `hub_wifi.h`, cut only at the old section banners. Text order is unchanged, so static initialisation order is unchanged.
 - Proof: the code and data sections of the built firmware (`.iram0.text`, `.flash.text`, `.dram0.data`, `.flash.appdesc`) are byte-identical to the build of the single file; the only difference in the whole image is the build time string. The host tests pass unchanged through `tests/flatten.py`.

@@ -424,6 +424,7 @@ ApiRes api(String path, const String& b) {
     c.enabled = jsonHas(b, "enabled") ? jsonBool(b, "enabled") : 1;
     strlcpy(c.label, jsonValue(b, "label").c_str(), sizeof c.label);
     saveScheds();
+    if (idx >= 0 && stripFwNum(strips[idx].fw) >= 90) strips[idx].cfgSyncStep = 4;
     return okRes("{\"sid\":" + String(c.id) + "}");
   }
   if (path == "schedule_skip") {                 // {"sid","skip":true|false} skip only the next run
@@ -440,9 +441,12 @@ ApiRes api(String path, const String& b) {
     for (int i = 0; i < schedCount; i++) {
       if (scheds[i].id != id) continue;
       setSchedSkip(id, false);
+      String delMac = String(scheds[i].mac);
       for (int j = i; j < schedCount - 1; j++) scheds[j] = scheds[j + 1];
       schedCount--;
       saveScheds();
+      int sIdx = findStrip(delMac);
+      if (sIdx >= 0 && stripFwNum(strips[sIdx].fw) >= 90) strips[sIdx].cfgSyncStep = 4;
       return okRes();
     }
     return errRes("no such schedule");
@@ -487,6 +491,9 @@ ApiRes api(String path, const String& b) {
     autoWarned[slot] = false;
     autoSince[slot] = 0;
     saveAutos();
+    for (int i = 0; i < MAX_STRIPS; i++) {
+      if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) strips[i].cfgSyncStep = 3;
+    }
     return okRes("{\"aid\":" + String(r.id) + "}");
   }
   if (path == "automation_delete") {
@@ -496,6 +503,9 @@ ApiRes api(String path, const String& b) {
       for (int j = i; j < autoCount - 1; j++) { autos[j] = autos[j + 1]; autoArmed[j] = autoArmed[j + 1]; autoSince[j] = autoSince[j + 1]; }
       autoCount--;
       saveAutos();
+      for (int k = 0; k < MAX_STRIPS; k++) {
+        if (strips[k].used && strips[k].identified && stripFwNum(strips[k].fw) >= 90) strips[k].cfgSyncStep = 3;
+      }
       return okRes();
     }
     return errRes("no such automation");
@@ -576,8 +586,21 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 170, 260); cfg.putUShort("vmin", vMin); }
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
     if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
+    if (jsonHas(b, "hold_s")) { protHoldS = (uint8_t)constrain((int)jsonValue(b, "hold_s").toInt(), 1, 60); cfg.putUChar("phold", protHoldS); }
+    if (jsonHas(b, "tz_min")) {
+      tzOffsetMin = (int16_t)constrain((int)jsonValue(b, "tz_min").toInt(), -720, 840);
+      cfg.putShort("tzmin3", tzOffsetMin);
+      applyHubTimezone();
+    }
+    for (int i = 0; i < MAX_STRIPS; i++) {
+      if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) {
+        strips[i].cfgSyncStep = 1;
+      }
+    }
     stateDirty = true;
-    return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") + ",\"v_min\":" + String(vMin) + ",\"v_max\":" + String(vMax) + "}");
+    return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
+                 ",\"v_min\":" + String(vMin) + ",\"v_max\":" + String(vMax) +
+                 ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) + "}");
   }
   if (path == "notify") {                        // {"ntfy":"topic","types":bitmask} and/or {"mac","mask"}
     if (jsonHas(b, "ntfy")) {

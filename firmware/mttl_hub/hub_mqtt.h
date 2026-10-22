@@ -37,6 +37,17 @@ static void mqttEvent(void*, esp_event_base_t, int32_t id, void* data) {
   }
 }
 
+// The MQTT TLS handshake needs one free block of ~17 KB (the 16717-byte request refused in /api/health: the record buffer).
+// The heap is not used up, it is cut into small pieces, and esp-mqtt retried blind every 5 s. Now the hub parks the client
+// when no block that big is free and lets it try again only when one is (waiting longer each time, up to a minute).
+// During a firmware update the client is taken down completely, which frees its TLS and send buffers for the update.
+const uint32_t MQTT_TLS_NEED = 18432;
+const uint32_t UPD_QUIET_MS = 12000;               // how long after the last firmware byte the hub still counts as updating
+bool mqttGated = false;
+volatile bool mqttPaused = false;
+uint32_t mqttGateN = 0, mqttPauseN = 0, mqttGateAt = 0, mqttGateWaitMs = 5000, mqttDownSince = 0, mqttResumeAt = 0;
+bool updateMode() { return suRunning() || (lastUpdActAt && (uint32_t)(millis() - lastUpdActAt) < UPD_QUIET_MS); }
+
 void mqttStart() {
   if (!secMqttUri.length()) { Serial.println("MQTT    : no server set yet (the app sends it)"); return; }
   uint8_t m[6];
@@ -317,6 +328,7 @@ void clearUserStrips(const HubUser& u, bool all) {
   }
 }
 void mqttRestart() {
+  mqttGated = mqttPaused = false; mqttDownSince = 0;
   mqttLock();
   if (mqtt) { esp_mqtt_client_stop(mqtt); esp_mqtt_client_destroy(mqtt); mqtt = nullptr; }
   mqttUp = false; mqttErrKind = 0; mqttErr = "";
@@ -342,6 +354,58 @@ void publishState() {
   lastStatePub = millis();
   lastRelaySig = relaySignature();
   lastProvPub = provState;
+}
+
+// called every loop: update mode (client down while a firmware goes in) and the memory gate (see above)
+void mqttMemTick() {
+  uint32_t now = millis();
+  if (updateMode()) {
+    mqttResumeAt = now + 6000;
+    sseShedAll();
+    if (!mqttPaused && mqtt) {
+      mqttLock();
+      esp_mqtt_client_stop(mqtt);
+      esp_mqtt_client_destroy(mqtt);
+      mqtt = nullptr;
+      mqttUp = false;
+      mqttUnlock();
+      mqttPaused = true; mqttGated = false; mqttPauseN++;
+      Serial.println("[mqtt] stopped for the firmware update");
+    }
+    return;
+  }
+  if (mqttPaused) {
+    if ((int32_t)(now - mqttResumeAt) < 0) return;
+    mqttPaused = false; mqttDownSince = 0; mqttGateWaitMs = 5000;
+    mqttStart();
+    Serial.println("[mqtt] started again after the update");
+    return;
+  }
+  if (!mqtt) return;
+  if (mqttUp) { mqttDownSince = 0; mqttGated = false; mqttGateWaitMs = 5000; return; }
+  if (!mqttDownSince) mqttDownSince = now;
+  uint32_t big = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (!mqttGated) {
+    if (now - mqttDownSince > 15000 && big < MQTT_TLS_NEED) {
+      mqttLock();
+      esp_mqtt_client_stop(mqtt);
+      mqttUnlock();
+      mqttGated = true; mqttGateN++; mqttGateAt = now;
+      sseShedAll();                                // the live streams are the biggest thing that can be given back
+      Serial.printf("[mqtt] parked: largest free block %u < %u
+", (unsigned)big, (unsigned)MQTT_TLS_NEED);
+    }
+    return;
+  }
+  if (now - mqttGateAt < mqttGateWaitMs) return;
+  mqttGateAt = now;
+  if (big >= MQTT_TLS_NEED) {
+    mqttGated = false; mqttDownSince = now;
+    esp_mqtt_client_start(mqtt);
+  } else {
+    if (mqttGateWaitMs < 60000) mqttGateWaitMs *= 2;
+    sseShedAll();
+  }
 }
 
 void mqttProcess() {

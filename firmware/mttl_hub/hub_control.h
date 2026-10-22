@@ -154,7 +154,7 @@ void voltCheck(Strip& s) {
     s.vOkSince = 0;
     if (s.ovCount < 255) s.ovCount++;
     bool far = s.voltage > vMax + 15 || (underOn && s.voltage < vMin - 15);
-    if (s.vCutMask || (s.ovCount < 2 && !far)) return;   // two readings in a row, or one far outside
+    if (s.vCutMask || (s.ovCount < protHoldS && !far)) return;   // two readings in a row, or one far outside
     bool over = s.voltage > vMax;
     uint8_t cut = 0;
     for (int k = 0; k < 4; k++)                       // over-voltage cuts protected outlets too
@@ -241,7 +241,7 @@ void evalStrip(int i) {
     if (oMaxA > 0 && o.on) {
       if (oAmps >= oMaxA) {
         if (!s.ocoSince[k]) s.ocoSince[k] = now ? now : 1;
-        if (oAmpsEst >= oMaxA * 1.25f || now - s.ocoSince[k] > 3000) {   // 25 % over cuts at once (estimate only: one reading never cuts alone)
+        if (oAmpsEst >= oMaxA * 1.25f || now - s.ocoSince[k] > (uint32_t)protHoldS * 1000UL) {   // 25 % over cuts at once (estimate only: one reading never cuts alone)
           protectCut(s, k);
           addEvent("overcurrent", s.mac, k + 1, String(oAmps, 1) + " A (max " + String(oMaxA, 1) + " A)");
           s.ocoSince[k] = 0;
@@ -271,7 +271,7 @@ void evalStrip(int i) {
     if (sumMax > ampsHold) ampsHold = sumMax; }
   if (aProt && ampsHold > aMax) {
     if (!s.ocSince) s.ocSince = now ? now : 1;
-    if (amps > aMax * 1.15f || now - s.ocSince > 3000) {            // 15 % over cuts at once (estimate only)
+    if (amps > aMax * 1.15f || now - s.ocSince > (uint32_t)protHoldS * 1000UL) {            // 15 % over cuts at once (estimate only)
       for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) protectCut(s, k);
       addEvent("overcurrent", s.mac, 0, String(ampsHold, 1) + " A");
       s.ocSince = 0;
@@ -283,7 +283,7 @@ void evalStrip(int i) {
   // fits; protected outlets are cut only if they alone keep the strip over the limit.
   if (total > STRIP_MAX_W) {
     if (!s.olSince) s.olSince = now ? now : 1;
-    if (total > STRIP_MAX_W * 1.15f || now - s.olSince > 3000) {
+    if (total > STRIP_MAX_W * 1.15f || now - s.olSince > (uint32_t)protHoldS * 1000UL) {
       float left = 0;                              // what is still on now (the current cut above may have run)
       for (int k = 0; k < 4; k++) left += s.o[k].on ? s.o[k].powerW : 0;
       for (int pass = 0; pass < 2 && left > STRIP_MAX_W; pass++)

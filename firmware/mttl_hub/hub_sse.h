@@ -82,6 +82,10 @@ void sseSend(const char* ev, const String& data) {
     }
   }
 }
+// update mode and a parked MQTT client: every live stream is closed so its buffers are free; the app reconnects by itself
+void sseShedAll() {
+  for (int i = 0; i < MAX_SSE; i++) if (sse[i].used) { sse[i].c.stop(); sse[i] = SseClient(); }
+}
 const HubUser* sseUser(const SseClient& x) { return x.userIdx >= 0 && x.userIdx < userCount ? &users[x.userIdx] : nullptr; }
 // one "state" event, streamed straight into the phone's socket a piece at a time (see stateStream)
 bool sseWriteState(WiFiClient& c, const HubUser* u) {

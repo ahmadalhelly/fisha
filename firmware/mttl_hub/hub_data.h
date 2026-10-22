@@ -52,6 +52,8 @@ struct Strip {
   Outlet o[4];
   uint32_t lastRx = 0, infoSeq = 0, connectedAt = 0;
   bool connOk = false;                           // strip answered connect_ok to a network handed over on its link
+  bool wifiHandoverSent = false;                 // true only when up:connect: was actually sent to this strip
+  uint8_t cfgSyncStep = 0;                       // paced F1.0.90 sync: 1=tz, 2=time, 3=limits, 4=sched, 0=done
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)
   // real per-outlet current (up:power_report:<ch>:current answers in mA). One power_report request in flight per strip.
   float curA[4] = {0, 0, 0, 0}, curPw[4] = {0, 0, 0, 0};   // last real current (A) and the outlet's power (W) when it was read
@@ -105,13 +107,15 @@ uint32_t autoSince[MAX_AUTO];
 Ev events[MAX_EVENTS];
 uint8_t evHead = 0, evCount = 0;
 uint32_t nextTimerId = 1;
-uint8_t tempMax = 70;
+uint8_t tempMax = 80;
 bool tempProtect = true;
 // whole-strip protections
 bool vProt = true, vRestore = true, aProt = true;
-uint16_t vMax = 250;
-uint16_t vMin = 190;                               // under-voltage limit (170..260)
+uint16_t vMax = 260;
+uint16_t vMin = 180;                               // under-voltage limit (170..260)
 float aMax = 16.0f;
+uint8_t protHoldS = 3;                             // consecutive readings/seconds before protection trip (1..60, default 3)
+int16_t tzOffsetMin = 180;                         // timezone offset in minutes from UTC (default +180 = Egypt UTC+3)
 volatile uint32_t rebootAt = 0;
 
 WiFiServer stripServer(STRIP_PORT);

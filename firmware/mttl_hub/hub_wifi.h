@@ -221,7 +221,7 @@ void runWifiTest() {
           wifiMoveInfo += had[h].substring(6) + ":";
           if (ok) wifiMoveInfo += "ok " + String((okAt[h] ? okAt[h] - 1 : 0) / 1000.0f, 1) + "s";
           else if (k < 0) wifiMoveInfo += "missed offline";
-          else wifiMoveInfo += "missed no_reply rssi=" + String(strips[k].hasRssi ? strips[k].rssi : 0) + " fw=" + strips[k].fw + " last_rx=" + strips[k].lastLine.substring(0, 50);
+          else wifiMoveInfo += "missed no_reply rssi=" + String(strips[k].hasRssi ? strips[k].rssi : 0) + " fw=" + strips[k].fw;
           wifiMoveInfo += " sends=" + String(sends[h]) + "; ";
         }
         if (!ok) { missed++; addEvent("wifipush", had[h], 0, "missed"); }
@@ -355,7 +355,7 @@ void setup() {
   { Preferences p; p.begin("stripfw", true); stripFwSize = p.getUInt("size", 0); p.end(); }
   if (stripFwSize) { stripFwOk = stripFwCheck(stripFwSize, stripFwWhy); if (!stripFwOk) Serial.printf("[strip-ota] stored file refused: %s\n", stripFwWhy.c_str()); }
   connectWiFi();
-  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
+  applyHubTimezone();
 
   const char* hk[] = {"X-Token", "X-User"};
   web.collectHeaders(hk, 2);
@@ -373,9 +373,9 @@ void setup() {
   web.on("/api/stripfw", HTTP_GET, handleSuState);
   web.on("/api/stripfw/start", HTTP_POST, handleSuStart);
   web.on("/api/stripfw/cancel", HTTP_POST, handleSuCancel);
-  web.on("/api/stripfw/prepare", HTTP_POST, handleSuPrepare);
   web.on("/api/stripfw/upload", HTTP_POST, handleSuUploadDone, handleSuUpload);
   web.on("/api/stripfw/fetch", HTTP_POST, handleSuFetch);
+  web.on("/api/stripfw/chunk", HTTP_POST, handleSuChunk);
   web.onNotFound(handleOther);
   web.begin();
   webRoutesReady = true;
@@ -506,6 +506,11 @@ void loop() {
   stg("web");
   webUri = "";
   web.handleClient();
+  if (lastSuChunkAt && (uint32_t)(millis() - lastSuChunkAt) < 4000) {
+    esp_task_wdt_reset();
+    delay(1);
+    return;
+  }
   stg("strips_rx");
   pumpStrips();
   stg("strips_poll");
@@ -528,11 +533,11 @@ void loop() {
   cloudTodoPump();
   stg("mqtt");
   mqttHealth();
+  mqttMemTick();
   mqttProcess();
   stg("notify");
   sendNotes();
   stg("strip_update");
-  stripFwPrepareTick();
   suTick();
   stg("provision");
   if (provRequested && (int32_t)(millis() - provAt) > 600) runProvision();

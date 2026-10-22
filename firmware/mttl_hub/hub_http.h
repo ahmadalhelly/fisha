@@ -100,6 +100,7 @@ void handleHealth() {
            ",\"alloc_fail_caps\":\"" + String(allocFailCaps, HEX) + "\",\"alloc_fail_free\":" + String(allocFailFree) +
            ",\"alloc_fail_largest\":" + String(allocFailLargest) + ",\"alloc_fail_fn\":\"" + String((const char*)allocFailFn) + "\",\"alloc_fail_task\":\"" + String((const char*)allocFailTask) + "\"" +
            // "heap"/"max_alloc"/"heap_min" count IRAM too, which Strings and network buffers can't use; these are the real numbers
+           ",\"upd_mode\":" + (updateMode() ? "true" : "false") + ",\"mqtt_gate\":" + String(mqttGateN) + ",\"mqtt_pause\":" + String(mqttPauseN) +
            ",\"max_strips\":" + String(MAX_STRIPS) + ",\"sockets\":" + String(CONFIG_LWIP_MAX_SOCKETS) +
            ",\"heap8\":" + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + ",\"heap8_max\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)) +
            ",\"heap8_min\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)) +
@@ -205,12 +206,20 @@ void handleUpdatePage() {
 void handleUpdateDone() {
   if (!otaAuth()) return web.requestAuthentication();
   bool ok = !Update.hasError();
-  web.send(ok ? 200 : 500, "text/plain", ok ? "OK - rebooting\n" : String("FAILED: ") + Update.errorString() + "\n");
+  String err = Update.errorString();
+  if (!ok && !stripFwPart()) {
+    err += " (هذا الهاب يحتاج تفليش بجدول تقسيم Minimal SPIFFS 1.9MB APP with OTA عبر الكابل مرة واحدة)";
+  }
+  web.send(ok ? 200 : 500, "text/plain; charset=utf-8", ok ? "OK - rebooting\n" : String("FAILED: ") + err + "\n");
   if (ok) { delay(600); ESP.restart(); }
 }
+// last moment a firmware byte arrived (hub update, strip upload, strip chunk): the hub is in "update mode" for a while after it
+// (see updateMode() in hub_mqtt.h): MQTT and the live streams step aside so the memory they hold is free for the update
+uint32_t lastUpdActAt = 0;
 void handleUpdateUpload() {
   if (!otaAuth()) return;
   HTTPUpload& u = web.upload();
+  lastUpdActAt = millis();
   if (u.status == UPLOAD_FILE_START) {
     Serial.printf("[ota-web] %s\n", u.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
@@ -226,11 +235,6 @@ void handleUpdateUpload() {
 // ---------- strip firmware flashing (/stripfw) ----------
 uint32_t stripFwWritten = 0;
 bool stripFwErr = false;
-bool stripFwUploadRejected = false;
-volatile bool stripFwPreparing = false;
-bool stripFwPrepared = false;
-uint32_t stripFwEraseAt = 0;
-String stripFwPrepareWhy;
 void handleStripFwPage() {
   if (!otaAuth()) return web.requestAuthentication();
   String h = "<meta name=viewport content='width=device-width,initial-scale=1'><meta charset=utf-8>"
@@ -323,37 +327,40 @@ bool stripFwStore(String& why) {
 }
 void handleStripFwDone() {
   if (!otaAuth()) return web.requestAuthentication();
-  if (stripFwUploadRejected || stripFwPreparing) {
-    stripFwUploadRejected = false;
-    web.send(409, "text/plain", "busy\n");
-    return;
-  }
   String why;
-  const bool ok = stripFwStore(why);
-  stripFwPrepared = false;
-  if (!ok) { web.send(400, "text/plain", "REFUSED: " + why + "\n"); return; }
+  if (!stripFwStore(why)) { web.send(400, "text/plain", "REFUSED: " + why + "\n"); return; }
   web.sendHeader("Location", "/stripfw");
   web.send(303, "text/plain", "OK " + String(stripFwSize) + " bytes\n");
 }
+volatile bool suFetching = false;
+String suFetchUrl = "";
+uint32_t suChunkErased = 0;
+uint32_t lastSuChunkAt = 0;
+
 void stripFwChunk(HTTPUpload& u) {
   const esp_partition_t* part = stripFwPart();
   if (u.status == UPLOAD_FILE_START) {
     stripFwWritten = 0;
-    stripFwErr = !stripFwPrepared || !part || part->size < STRIP_FW_MAX;
-    Serial.printf("[strip-ota] upload %s%s\n", u.filename.c_str(), stripFwErr ? " (storage not prepared)" : "");
+    suChunkErased = 0;
+    stripFwErr = !part || part->size < STRIP_FW_MAX;
+    if (!part) stripFwWhy = "no spare slot (missing OTA partition)";
+    Serial.printf("[strip-ota] upload %s%s\n", u.filename.c_str(), stripFwErr ? " (no spare slot)" : "");
   } else if (u.status == UPLOAD_FILE_WRITE && !stripFwErr) {
     if (stripFwWritten + u.currentSize > STRIP_FW_MAX) { stripFwErr = true; return; }
+    // Erase 4KB sectors incrementally as data arrives so TCP socket never resets
+    while (suChunkErased < stripFwWritten + u.currentSize) {
+      if (esp_partition_erase_range(part, suChunkErased, 4096) != ESP_OK) { stripFwErr = true; return; }
+      suChunkErased += 4096;
+      esp_task_wdt_reset();
+    }
     if (esp_partition_write(part, stripFwWritten, u.buf, u.currentSize) != ESP_OK) { stripFwErr = true; return; }
     stripFwWritten += u.currentSize;
   } else if (u.status == UPLOAD_FILE_ABORTED) {
     stripFwErr = true;
-    stripFwPrepared = false;
   }
 }
 void handleStripFwUpload() {
   if (!otaAuth()) return;
-  if (web.upload().status == UPLOAD_FILE_START) stripFwUploadRejected = stripFwPreparing;
-  if (stripFwUploadRejected) return;
   stripFwChunk(web.upload());
 }
 void handleStripFwFlash() {
@@ -376,7 +383,7 @@ void handleStripFwFlash() {
 // http://<host>/ota.bin on port 80, flashes and reboots. Same command as the setup-mode flasher, no protocol change.
 // One strip at a time: wait for its GET, stream the stored .fwr without blocking the loop, wait for it to dial
 // back in and compare the fw in its bootinfo. The first failure stops the run.
-bool suRunning() { return suPhase != SU_IDLE; }
+bool suRunning() { return suPhase != SU_IDLE || suFetching; }
 
 void suStop(bool failed, const String& msg) {
   SuItem& it = suList[suCur];
@@ -507,7 +514,7 @@ void suTick() {
 // starts a run; macs = the strips to update in order. Returns "" or an error.
 String suStart(const String* macs, int n) {
   if (!stripFwSize || !stripFwOk) return "no valid strip firmware stored";
-  if (stripFwPreparing || stripFwPrepared || suRunning() || provRequested || provState == "running" || provState == "waiting") return "busy";
+  if (suRunning() || provRequested || provState == "running" || provState == "waiting") return "busy";
   if (n <= 0) return "no strip selected";
   suN = 0;
   for (int k = 0; k < n && suN < MAX_STRIPS; k++) {
@@ -526,9 +533,13 @@ String suStart(const String* macs, int n) {
 }
 
 String suJson() {
-  const String why = stripFwPrepareWhy.length() ? stripFwPrepareWhy : stripFwWhy;
-  String j = "{\"size\":" + String(stripFwSize) + ",\"valid\":" + (stripFwOk ? "true" : "false") + ",\"why\":\"" + jsonEsc(why) +
-             "\",\"preparing\":" + (stripFwPreparing ? "true" : "false") + ",\"prepared\":" + (stripFwPrepared ? "true" : "false") + ",\"running\":" + (suRunning() ? "true" : "false") + ",\"items\":[";
+  bool hasSlot = stripFwPart() != nullptr;
+  String j = "{\"size\":" + String(stripFwSize) + ",\"valid\":" + (stripFwOk ? "true" : "false") +
+             ",\"fetching\":" + (suFetching ? "true" : "false") +
+             ",\"has_slot\":" + (hasSlot ? "true" : "false") +
+             ",\"written\":" + String(stripFwWritten) +
+             ",\"why\":\"" + jsonEsc(stripFwWhy) +
+             "\",\"running\":" + (suRunning() ? "true" : "false") + ",\"items\":[";
   for (uint8_t k = 0; k < suN; k++) {
     const SuItem& it = suList[k];
     int pct = it.state == "transfer" && stripFwSize ? (int)((uint64_t)suOff * 100 / stripFwSize) : (it.state == "ok" || it.state == "rebooting" ? 100 : 0);
@@ -585,119 +596,277 @@ void handleSuCancel() {
 bool suUploadAuth = false;
 void handleSuUpload() {
   HTTPUpload& u = web.upload();
-  if (u.status == UPLOAD_FILE_START) {
-    suUploadAuth = authorized() && (apiSrc != 2 || (apiUserIdx >= 0 && apiUserIdx < userCount &&
-        users[apiUserIdx].all && (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW))));
-    stripFwUploadRejected = !suUploadAuth || suRunning() || stripFwPreparing;
-  }
-  if (stripFwUploadRejected) return;
+  if (u.status == UPLOAD_FILE_START) suUploadAuth = authorized() && (apiSrc != 2 || (apiUserIdx >= 0 && apiUserIdx < userCount &&
+      users[apiUserIdx].all && (users[apiUserIdx].role >= 2 || (users[apiUserIdx].rsv & P_SFW))));
+  if (!suUploadAuth || suRunning()) { stripFwErr = true; return; }
+  lastUpdActAt = millis();
   stripFwChunk(u);
 }
 void handleSuUploadDone() {
   if (!sfwOnly()) return;
-  if (stripFwUploadRejected || suRunning() || stripFwPreparing) {
-    stripFwUploadRejected = false;
-    web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}");
-    return;
-  }
+  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
   String why;
-  const bool ok = stripFwStore(why);
-  stripFwPrepared = false;
-  if (!ok) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  if (!stripFwStore(why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
   web.send(200, "application/json", suJson());
 }
-void stripFwPrepareTick() {
-  if (!stripFwPreparing) return;
+// Chunked JSON/Base64 upload endpoint (/api/stripfw/chunk) - Zero-copy & retry-safe
+void handleSuChunk() {
+  lastSuChunkAt = lastUpdActAt = millis();
+  web.sendHeader("Connection", "close");
+  if (!sfwOnly()) return;
+  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
   const esp_partition_t* part = stripFwPart();
   if (!part || part->size < STRIP_FW_MAX) {
-    stripFwPrepareWhy = "no spare slot";
-    stripFwWhy = stripFwPrepareWhy;
-    stripFwPreparing = false;
+    stripFwWhy = "no spare slot (missing OTA partition)";
+    web.send(400, "application/json", "{\"ok\":false,\"error\":\"no spare slot\"}");
     return;
   }
-  if (stripFwEraseAt < STRIP_FW_MAX) {
-    if (esp_partition_erase_range(part, stripFwEraseAt, 4096) != ESP_OK) {
-      stripFwPrepareWhy = "flash erase failed";
-      stripFwWhy = stripFwPrepareWhy;
-      stripFwPreparing = false;
+  const String& b = web.arg("plain");
+  uint32_t off = (uint32_t)jsonValue(b, "off").toInt();
+  uint32_t total = (uint32_t)jsonValue(b, "total").toInt();
+  bool done = jsonBool(b, "done");
+
+  // Locate "b64" value in-place inside b without allocating a second 11KB String on the heap
+  int b64Pos = 0;
+  const unsigned char* b64Ptr = nullptr;
+  size_t b64Len = 0;
+  if (jsonFindMember(b, "b64", b64Pos) && b64Pos < (int)b.length() && b[b64Pos] == '"') {
+    int start = b64Pos + 1;
+    int end = b.indexOf('"', start);
+    if (end > start) {
+      b64Ptr = (const unsigned char*)(b.c_str() + start);
+      b64Len = (size_t)(end - start);
+    }
+  }
+
+  if (off == 0) {
+    stripFwWritten = 0;
+    suChunkErased = 0;
+    stripFwErr = false;
+    stripFwOk = false;
+    stripFwSize = 0;
+    stripFwWhy = "";
+  }
+  if (total == 0 || total > STRIP_FW_MAX || !b64Ptr || b64Len == 0) {
+    stripFwErr = true;
+    web.send(400, "application/json", "{\"ok\":false,\"error\":\"bad chunk offset or size\"}");
+    return;
+  }
+
+  static uint8_t decBuf[16384];
+  size_t decLen = 0;
+  int rc = mbedtls_base64_decode(decBuf, sizeof(decBuf), &decLen, b64Ptr, b64Len);
+  if (rc != 0 || decLen == 0 || off + decLen > STRIP_FW_MAX) {
+    stripFwErr = true;
+    web.send(400, "application/json", "{\"ok\":false,\"error\":\"base64 decode failed\"}");
+    return;
+  }
+
+  // Idempotent retry handling: if the phone retried the exact chunk that was just written, acknowledge it
+  if (off + decLen == stripFwWritten && !done) {
+    web.send(200, "application/json", "{\"ok\":true,\"written\":" + String(stripFwWritten) + "}");
+    return;
+  }
+  // Allow resuming on a 4KB sector boundary if a previous chunk write was interrupted
+  if (off != stripFwWritten) {
+    if ((off & 4095u) == 0 && off <= suChunkErased) {
+      stripFwWritten = off;
+      stripFwErr = false;
+    } else {
+      stripFwErr = true;
+      web.send(400, "application/json", "{\"ok\":false,\"error\":\"bad chunk offset or size\"}");
       return;
     }
-    stripFwEraseAt += 4096;
-    return;
   }
-  stripFwWritten = 0;
-  stripFwErr = false;
-  stripFwSize = 0;
-  stripFwOk = false;
-  stripFwWhy = "";
-  stripFwPrepared = true;
-  stripFwPreparing = false;
-  Preferences p;
-  p.begin("stripfw", false);
-  p.putUInt("size", 0);
-  p.end();
-  Serial.println("[strip-ota] storage prepared");
-}
-void handleSuPrepare() {
-  if (!sfwOnly()) return;
-  if (suRunning() || stripFwPreparing) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
-  const esp_partition_t* part = stripFwPart();
-  if (!part || part->size < STRIP_FW_MAX) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"no spare slot\"}"); return; }
-  stripFwPrepared = false;
-  stripFwPrepareWhy = "";
-  stripFwEraseAt = 0;
-  stripFwPreparing = true;
-  web.send(200, "application/json", suJson());
-}
-// the hub fetches the .fwr itself over HTTP(S), so the file never passes through the phone. Reuses the
-// same spare slot and validation (stripFwCheck) as a phone upload — only where the bytes come from differs.
-bool stripFwFetch(const String& url, String& why) {
-  const esp_partition_t* part = stripFwPart();
-  if (!part || part->size < STRIP_FW_MAX) { why = "no spare slot"; return false; }
-  bool https = url.startsWith("https://");
-  if (!https && !url.startsWith("http://")) { why = "url must start with http:// or https://"; return false; }
-  WiFiClientSecure sc;
-  WiFiClient pc;
-  HTTPClient http;
-  http.setConnectTimeout(8000);
-  http.setTimeout(15000);
-  // GitHub release links answer 302 to their file server; follow it.
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  bool ok = https ? (sc.setInsecure(), http.begin(sc, url)) : http.begin(pc, url);
-  if (!ok) { why = "could not open the url"; return false; }
-  int code = http.GET();
-  if (code != 200) { why = "server replied " + String(code); http.end(); return false; }
-  int len = http.getSize();
-  if (len <= 0 || (uint32_t)len > STRIP_FW_MAX) { why = "file too big or unknown size"; http.end(); return false; }
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buf[1024];
-  uint32_t written = 0, erasedUpTo = 0;
-  uint32_t lastByte = millis();
-  while (http.connected() && written < (uint32_t)len && millis() - lastByte < 15000) {
-    size_t avail = stream->available();
-    if (!avail) { delay(5); esp_task_wdt_reset(); continue; }
-    size_t n = stream->readBytes(buf, min(avail, sizeof buf));
-    if (!n) break;
-    const uint32_t eraseTo = min(STRIP_FW_MAX, (written + n + 4095u) & ~4095u);
-    while (erasedUpTo < eraseTo) {
-      if (esp_partition_erase_range(part, erasedUpTo, 4096) != ESP_OK) { why = "flash erase failed"; http.end(); return false; }
-      erasedUpTo += 4096;
-      esp_task_wdt_reset();
+
+  while (suChunkErased < stripFwWritten + decLen) {
+    if (esp_partition_erase_range(part, suChunkErased, 4096) != ESP_OK) {
+      stripFwErr = true;
+      web.send(500, "application/json", "{\"ok\":false,\"error\":\"flash erase failed\"}");
+      return;
     }
-    if (esp_partition_write(part, written, buf, n) != ESP_OK) { why = "flash write failed"; http.end(); return false; }
-    written += n;
-    lastByte = millis();
+    suChunkErased += 4096;
     esp_task_wdt_reset();
   }
-  http.end();
-  if (written != (uint32_t)len) { why = "download incomplete (" + String(written) + "/" + String(len) + " bytes)"; return false; }
-  stripFwWritten = written;
-  stripFwErr = false;
-  return stripFwStore(why);
+
+  if (esp_partition_write(part, stripFwWritten, decBuf, decLen) != ESP_OK) {
+    stripFwErr = true;
+    web.send(500, "application/json", "{\"ok\":false,\"error\":\"flash write failed\"}");
+    return;
+  }
+  stripFwWritten += decLen;
+
+  if (done) {
+    lastSuChunkAt = 0;
+    String why;
+    if (!stripFwStore(why)) {
+      web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}");
+      return;
+    }
+    web.send(200, "application/json", suJson());
+    return;
+  }
+  web.send(200, "application/json", "{\"ok\":true,\"written\":" + String(stripFwWritten) + "}");
 }
+
+// the hub fetches the .fwr itself over HTTP(S).
+// Fixes "server replied -1":
+// 1) Pauses MQTT TLS session first (two TLS sessions don't fit in ESP32 RAM, see exTask L2475).
+// 2) Resolves GitHub 302 redirect in a separate scope so the first TLS session is freed before opening the second.
+// 3) Erases 4KB flash sectors incrementally during stream read.
+bool stripFwFetch(const String& urlIn, String& why) {
+  const esp_partition_t* part = stripFwPart();
+  if (!part || part->size < STRIP_FW_MAX) { why = "no spare slot"; return false; }
+  String targetUrl = urlIn;
+  targetUrl.trim();
+  bool https = targetUrl.startsWith("https://");
+  if (!https && !targetUrl.startsWith("http://")) { why = "url must start with http:// or https://"; return false; }
+
+  tlsBusy = true;
+  bool mqttPaused = false;
+  mqttLock();
+  if (mqtt) { esp_mqtt_client_stop(mqtt); mqttUp = false; mqttPaused = true; }
+  mqttUnlock();
+  vTaskDelay(pdMS_TO_TICKS(350));
+
+  auto restoreMqtt = [&]() {
+    if (mqttPaused && mqtt) esp_mqtt_client_start(mqtt);
+    tlsBusy = false;
+  };
+
+  // Step 1: If URL is a github.com release URL (which redirects 302 to objects.githubusercontent.com),
+  // resolve the Location header in its own scope and completely free the first TLS client before Step 2.
+  for (int redir = 0; redir < 3; redir++) {
+    bool isHttps = targetUrl.startsWith("https://");
+    String nextLocation = "";
+    int code = -1;
+    {
+      WiFiClientSecure sc;
+      WiFiClient pc;
+      HTTPClient http;
+      http.setConnectTimeout(10000);
+      http.setTimeout(15000);
+      http.setReuse(false);
+      http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+      const char* hdrs[] = {"Location", "location"};
+      http.collectHeaders(hdrs, 2);
+      if (isHttps) {
+        sc.setInsecure();
+        sc.setHandshakeTimeout(12);
+      }
+      bool ok = isHttps ? http.begin(sc, targetUrl) : http.begin(pc, targetUrl);
+      if (!ok) { why = "could not open the url"; restoreMqtt(); return false; }
+      code = http.GET();
+      if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+        nextLocation = http.header("Location");
+        if (!nextLocation.length()) nextLocation = http.header("location");
+        http.end();
+      } else if (code == 200) {
+        int len = http.getSize();
+        if (len <= 0 || (uint32_t)len > STRIP_FW_MAX) {
+          why = "file too big or unknown size";
+          http.end();
+          restoreMqtt();
+          return false;
+        }
+        WiFiClient* stream = http.getStreamPtr();
+        static uint8_t buf[1024];
+        uint32_t written = 0, erasedUpTo = 0;
+        uint32_t lastByte = millis();
+        stripFwWritten = 0;
+        while (http.connected() && written < (uint32_t)len && millis() - lastByte < 20000) {
+          size_t avail = stream->available();
+          if (!avail) { vTaskDelay(pdMS_TO_TICKS(2)); esp_task_wdt_reset(); continue; }
+          size_t n = stream->readBytes(buf, min(avail, sizeof buf));
+          if (!n) break;
+          while (erasedUpTo < written + n) {
+            if (esp_partition_erase_range(part, erasedUpTo, 4096) != ESP_OK) {
+              why = "flash erase failed";
+              http.end();
+              restoreMqtt();
+              return false;
+            }
+            erasedUpTo += 4096;
+            esp_task_wdt_reset();
+          }
+          if (esp_partition_write(part, written, buf, n) != ESP_OK) {
+            why = "flash write failed";
+            http.end();
+            restoreMqtt();
+            return false;
+          }
+          written += n;
+          stripFwWritten = written;
+          lastByte = millis();
+          esp_task_wdt_reset();
+        }
+        http.end();
+        restoreMqtt();
+        if (written != (uint32_t)len) {
+          why = "download incomplete (" + String(written) + "/" + String(len) + " bytes)";
+          return false;
+        }
+        stripFwWritten = written;
+        stripFwErr = false;
+        return stripFwStore(why);
+      } else {
+        http.end();
+        restoreMqtt();
+        why = "server replied " + String(code);
+        return false;
+      }
+    }
+    if (!nextLocation.length()) {
+      restoreMqtt();
+      why = "redirect missing Location header";
+      return false;
+    }
+    targetUrl = nextLocation;
+    vTaskDelay(pdMS_TO_TICKS(150)); // allow lwIP/mbedtls to reclaim the closed socket before connecting to CDN
+  }
+  restoreMqtt();
+  why = "too many redirects";
+  return false;
+}
+
+static void suFetchTask(void*) {
+  String why = "";
+  stripFwWhy = "";
+  bool ok = false;
+  for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+    // the main loop takes MQTT down while this runs (updateMode); wait for that, so its memory is free for this TLS session
+    for (uint32_t t0 = millis(); (mqttUp || (mqtt && !mqttPaused)) && millis() - t0 < 15000;) vTaskDelay(pdMS_TO_TICKS(100));
+    ok = stripFwFetch(suFetchUrl, why);
+    // "server replied -1" / "could not open" = the connection itself failed (TLS memory), not the server: try again
+    if (ok || !(why.startsWith("server replied -") || why.startsWith("could not open"))) break;
+    vTaskDelay(pdMS_TO_TICKS(2000 * (attempt + 1)));
+  }
+  if (!ok && !stripFwWhy.length()) stripFwWhy = why;
+  suFetching = false;
+  stateDirty = true;
+  vTaskDelete(nullptr);
+}
+
 void handleSuFetch() {
   if (!sfwOnly()) return;
-  web.send(501, "application/json", "{\"ok\":false,\"error\":\"download with the Fisha app\"}");
+  if (suRunning()) { web.send(409, "application/json", "{\"ok\":false,\"error\":\"busy\"}"); return; }
+  String b = web.arg("plain");
+  int at = b.indexOf("\"url\"");
+  int a = at >= 0 ? b.indexOf('"', b.indexOf(':', at) + 1) : -1;
+  int e = a >= 0 ? b.indexOf('"', a + 1) : -1;
+  String url = a >= 0 && e > a ? b.substring(a + 1, e) : "";
+  if (!url.length()) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"no url\"}"); return; }
+  // Run in a dedicated FreeRTOS task so the HTTP request returns immediately without phone timeout
+  suFetchUrl = url;
+  suFetching = true;
+  stripFwWhy = "";
+  stripFwWritten = 0;
+  if (xTaskCreatePinnedToCore(suFetchTask, "su_fetch", 12288, nullptr, 1, nullptr, 0) != pdPASS) {
+    suFetching = false;
+    String why;
+    if (!stripFwFetch(url, why)) { web.send(400, "application/json", "{\"ok\":false,\"error\":\"" + jsonEsc(why) + "\"}"); return; }
+  }
+  web.send(200, "application/json", suJson());
 }
 // form on /stripfw: mac=...&mac=... (checkboxes)
 void handleSuForm() {
