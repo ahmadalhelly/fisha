@@ -58,7 +58,7 @@ class HubSettings {
   String sharedUser;
   String sharedName;
   int sharedRole;
-  /// 2.0.18: this phone's key from the hub (hub 2.15.13 lock). Empty until the owner locks the hub from this phone.
+  /// this phone's key from the hub (lock). Empty until the owner locks the hub from this phone.
   String ownerKey;
 
   HubSettings({
@@ -165,7 +165,7 @@ class AppState extends ChangeNotifier {
 
   bool hubOnline = false;
 
-  // the hub's own link to the server, reported by hub 2.9+ over the home Wi-Fi
+  // the hub's own link to the server, reported by the hub over the home Wi-Fi
   bool? hubCloudUp;
 
   String hubCloudErr = '';
@@ -197,10 +197,10 @@ class AppState extends ChangeNotifier {
 
   String? hubFw;
 
-  // 2.0.18 hub lock (hub 2.15.13): the hub refused this phone (no key, or a key it no longer knows)
+  // hub lock: the hub refused this phone (no key, or a key it no longer knows)
   bool hubLocked = false;
 
-  bool? hubClaimed;                              // null: hub older than 2.15.13 or not heard yet
+  bool? hubClaimed;                              // null: hub older or not heard yet
 
   List<OwnerPhone> ownerPhones = [];
 
@@ -208,7 +208,7 @@ class AppState extends ChangeNotifier {
 
   int tempMax = 80;
 
-  // whole-strip protections (hub 2.10+ / F1.0.90+)
+  // whole-strip protections (/ F1.0.90+)
   bool vProtect = true, vRestore = true, aProtect = true;
 
   int vMax = 260;
@@ -296,7 +296,7 @@ class AppState extends ChangeNotifier {
   // internals
   final Map<String, Map<int, bool>> _pending = {};
 
-  // hub 2.15.38 cloud state: a small head (mttl/<hub>/state with "strips":[MACs]) and one retained message per strip
+  // cloud state: a small head (mttl/<hub>/state with "strips":[MACs]) and one retained message per strip
   Map<String, dynamic>? _cloudHead;
 
   final Map<String, Map<String, dynamic>> _cloudStrips = {};
@@ -323,8 +323,7 @@ class AppState extends ChangeNotifier {
 
   int _gen = 0; // bumps on restart so old loops stop
 
-  /// the very first hubs reported 1.x versions without a patch number ("1.0-alpha"). 2.0.29: the public launch
-  /// restarts the hub at 1.0.0 (three numbers), which is a current hub.
+  /// a hub that reports a three-number version (or no 1.x at all) is a current hub; a bare "1.x" is an early test unit.
   bool get hubV2 => hubFw != null && (!hubFw!.startsWith('1.') || RegExp(r'^\d+\.\d+\.\d+$').hasMatch(hubFw!));
 
   bool get hubHasConfig => hubFw != null && hubFw != '1.0-alpha';
@@ -360,15 +359,15 @@ class AppState extends ChangeNotifier {
   // per-phone keys that must not travel between devices through the Google copy
   static const _noSyncKeys = {'lastSync', 'accountType', 'googleEmail', 'pendingOps', 'notifyFilter'};
 
-  /// 2.0.18: how often the automatic sync uploads (minutes): 0 = whenever something changed (checked every 10 min)
+  /// how often the automatic sync uploads (minutes): 0 = whenever something changed (checked every 10 min)
   int syncEveryMin = 0;
 
   static const syncChoices = [0, 60, 1440, 10080];
 
-  /// 2.0.20: pauses automatic sync without signing out of the Google account (a manual "زامن دلوقتي" still works).
+  /// pauses automatic sync without signing out of the Google account (a manual "زامن دلوقتي" still works).
   bool syncPaused = false;
 
-  /// 2.0.20: how many past copies to keep on Drive (the rest are pruned after each upload).
+  /// how many past copies to keep on Drive (the rest are pruned after each upload).
   int syncKeepVersions = 5;
 
   // secrets a backup file must not carry in plain text (the Google copy lives in the app's private Drive folder)
@@ -385,7 +384,7 @@ class AppState extends ChangeNotifier {
     super.dispose();
   }
 
-  // 2.0.18: when the hub's local data can't be read, the cloud copy is used for a while instead of an empty screen
+  // when the hub's local data can't be read, the cloud copy is used for a while instead of an empty screen
   DateTime? _localBadAt;
 
   static Map<String, dynamic>? decodeInvite(String code) {
@@ -408,10 +407,10 @@ class AppState extends ChangeNotifier {
   static const notifyBitTypes = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added', 'test',
       'button', 'remote', 'online', 'offline', 'voltage'];
 
-  /// The hub's own events that have no switch in notification settings; they go to the system log only (2.0.11).
+  /// The hub's own events that have no switch in notification settings; they go to the system log only.
   static bool isSystemEvent(String type) => type != 'test' && !notifyBitTypes.contains(type) && !safetyTypes.contains(type);
 
-  /// Safety cuts (hub 2.15.9+): always sent to the phone, whatever the switches or mutes, so they sit in "My notifications".
+  /// Safety cuts: always sent to the phone, whatever the switches or mutes, so they sit in "My notifications".
   static const safetyTypes = {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail', 'pair'};
 
   static const notifyTypeKeys = ['temp', 'load', 'auto_off', 'automation', 'schedule', 'missed', 'timer', 'cycle', 'lock', 'added'];
@@ -455,7 +454,7 @@ class AppState extends ChangeNotifier {
     return false;
   }
 
-  // The hub reports a storage id ('nvs', fw 2.15+) that changes only when its saved data is erased (e.g. a full
+  // The hub reports a storage id ('nvs') that changes only when its saved data is erased (e.g. a full
   // flash). Then the family members, schedules, rules and names come back from this copy by themselves.
   String _hubNvs = '';
 
@@ -467,7 +466,7 @@ class AppState extends ChangeNotifier {
 
   Timer? _mirrorDebounce;
 
-  // 2.0.25: the home-screen widgets (main "أ" with graph + per-strip "شكل المشترك") are drawn natively from one JSON
+  // the home-screen widgets (main "أ" with graph + per-strip "شكل المشترك") are drawn natively from one JSON
   final List<double> _wHist = [];
 
   DateTime? _wEnergyAt;

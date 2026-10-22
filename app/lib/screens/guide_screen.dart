@@ -59,7 +59,7 @@ class GuideScreen extends StatelessWidget {
         _Part(Icons.shield_outlined, _tr('الشبكة والأمان', 'Network and security'), _tr('مهم عشان المشتركات ماتفصلش:', 'Keeps the strips connected:'), [
           _Step(_tr('عنوان الـ Hub', 'Hub address'), _tr('الافتراضي 192.168.1.100. لو كان عندك Hub قديم على 192.168.1.110 التطبيق بينقله لوحده.', 'The default is 192.168.1.100. An older hub on 192.168.1.110 is moved over by the app.')),
           _Step(_tr('منافذ المشتركات', 'Strip ports'),
-              _tr('المشتركات بتتصل بالـ Hub على 10086، واللي اتحدثت لفيرموير 1.0.116 أو أحدث بتتصل على 21197. الـ Hub من 2.13.1 بيسمع على الاتنين.', 'Strips dial the hub on 10086; strips on firmware 1.0.116 or newer dial 21197. Hub 2.13.1 and newer listen on both.'),
+              _tr('المشتركات بتتصل بالـ Hub على 10086، واللي اتحدثت بآخر تحديث OTA بتتصل على 21197. الـ Hub بيسمع على الاتنين.', 'Strips dial the hub on 10086; strips updated by the latest OTA dial 21197. The hub listens on both.'),
               '10086  21197'),
           _Step(_tr('امنع النت عن المشتركات', 'Block the strips from the internet'),
               _tr('من صفحة الراوتر امنع الإنترنت عن أجهزة الـ MAC اللي بتبدأ بـ 88:D0:39. ده بيمنع أي تحديث من السحابة يغيّر فيرموير المشترك ويفصله عن الـ Hub. التحكم المحلي والتحكم من برا شغالين عادي لأنهم بيعدّوا على الـ Hub.',
@@ -87,10 +87,10 @@ class GuideScreen extends StatelessWidget {
         _Part(Icons.build_outlined, _tr('لو حاجة مش شغالة', 'Troubleshooting'), _tr('أشهر المشاكل:', 'Common problems:'), [
           _Step(_tr('التطبيق بيقول غير متصل', 'The app says offline'), _tr('اتأكد إن الموبايل على نفس الواي فاي وإن عنوان الـ Hub صح، أو إن بيانات السيرفر صح.', 'Same Wi-Fi and the right hub address, or the right server details.')),
           _Step(_tr('كل المشتركات فصلت مرة واحدة', 'All strips dropped at once'),
-              _tr('غالباً المشتركات اتحدثت من السحابة وغيّرت المنفذ لـ 21197. حدّث الـ Hub لـ 2.13.1 أو أحدث، وامنع النت عن المشتركات من الراوتر.', 'Most likely a cloud update moved them to port 21197. Update the hub to 2.13.1 or newer and block the strips from the internet in the router.')),
+              _tr('غالباً المشتركات اتحدثت من السحابة وغيّرت المنفذ لـ 21197. حدّث الـ Hub لآخر نسخة، وامنع النت عن المشتركات من الراوتر.', 'Most likely a cloud update moved them to port 21197. Update the hub to the latest version and block the strips from the internet in the router.')),
           _Step(_tr('المشترك مش ظاهر في البحث', 'The strip is not found'), _tr('ارجع وضع الإعداد (10 ثواني لحد الرمش السريع) وقرّبه من الـ Hub.', 'Put it back in setup mode (10 s, fast blinking) and move it closer.')),
           _Step(_tr('اتضاف بس ما ظهرش', 'Added but not showing'), _tr('افصل المشترك من الكهربا 10 ثواني ورجّعه. ولو لسه، اتأكد إن الشبكة 2.4GHz.', 'Unplug it for 10 s. If still missing, check the network is 2.4 GHz.')),
-          _Step(_tr('رفع الفيرموير فشل', 'Firmware upload failed'), _tr('اتأكد إنك على نفس الواي فاي. باسورد التحديث الافتراضي هو fisha- وبعده رقم MAC الـ Hub، أو الباسورد اللي إنت غيّرته.', 'Make sure you are on the same Wi-Fi. The default update password is fisha- followed by the hub MAC, or the one you set.')),
+          _Step(_tr('رفع الفيرموير فشل', 'Firmware upload failed'), _tr('اتأكد إنك على نفس الواي فاي. باسورد التحديث الافتراضي هو fisha- وبعده رقم MAC الـ Hub، أو الباسورد اللي إنت غيّرته. أثناء التحديث الـ Hub بيوقف التحكم من برا البيت والبث اللحظي مؤقتاً، وبيرجعهم لوحده بعد ما يخلص. لو الاتصال اتقطع في النص، التطبيق بيكمل من آخر جزء وصل.', 'Make sure you are on the same Wi-Fi. The default update password is fisha- followed by the hub MAC, or the one you set. During an update the hub pauses remote control and the live stream and brings them back by itself. If the connection drops half way, the app continues from the last part that arrived.')),
         ]),
       ];
 

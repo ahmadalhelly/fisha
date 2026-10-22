@@ -61,9 +61,9 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     UpdateService.instance.check(); // at most every 6 hours
-    // 2.0.24: a hub in setup mode nearby gets the pairing card
+    // a hub in setup mode nearby gets the pairing card
     WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) HubSetupWatcher.start(context, s); });
-    // 2.0.27: a tap on an outlet's name in the strip widget opens its sheet here (same options as a long press)
+    // a tap on an outlet's name in the strip widget opens its sheet here (same options as a long press)
     WidgetsBinding.instance.addPostFrameCallback((_) => _widgetOpen());
     _life = AppLifecycleListener(onResume: _widgetOpen);
     s.addListener(_checkPairs);
@@ -88,7 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _push(Widget w) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => w));
 
-  // 2.0.18: a phone asking for access opens the approval sheet once, on whichever screen the owner is
+  // a phone asking for access opens the approval sheet once, on whichever screen the owner is
   final _shownPairs = <int>{};
   bool _pairOpen = false;
   void _checkPairs() {
@@ -205,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 2.0.18: an open hub (2.15.13+, no owner phone yet) is shown until it is locked
+  // an open hub (no owner phone yet) is shown until it is locked
   Widget _lockBanner() {
     if (s.isShared || s.hubClaimed != false) return const SizedBox.shrink();
     return Padding(
@@ -233,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 2.0.16: a small banner when the hub or the app has a newer build; closing it hides it until the next version
+  // a small banner when the hub or the app has a newer build; closing it hides it until the next version
   Widget _updateBanner() {
     if (kIsWeb) return const SizedBox.shrink();
     final u = UpdateService.instance;

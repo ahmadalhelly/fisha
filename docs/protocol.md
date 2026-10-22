@@ -14,7 +14,7 @@
 | strip→hub | `up:onoff:<n>:on|off` ack, `up:event:onoff:<0-4>:on|off` physical button |
 | hub→strip | `up:power_report:1:vol` → `up:power_report:<ch>:<mV>` · `up:query:wifirssi` → `up:query:<rssi>` |
 
-## Hub v2.2
+## Hub
 - HTTP :8080 — `GET /api/state`, `GET /api/health`, `GET /api/raw?cmd=`, `POST /api/<action>` with a flat JSON body → `{"ok","error","data"}`
 - Live :8081 — `GET /events` (SSE): `event: state` on every change, `event: event` for alerts, `: hb` every 15 s
 - MQTT `mttl/<HUB_ID>/` — `status` (LWT), `info`, `state` (retained), `event`, `cmd` ← `{"id","path":"/api/<action>",...}`, `cmd/ack` → `{"id","ok","error","data"}`

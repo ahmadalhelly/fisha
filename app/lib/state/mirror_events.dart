@@ -29,7 +29,7 @@ extension AppStateMirrorEvents on AppState {
     try {
       final nvs = _hubNvs;
       var users = await _exportUsers();
-      // 2.0.10: the family list can vanish from a hub whose storage was not erased (a save refused by a full NVS),
+      // the family list can vanish from a hub whose storage was not erased (a save refused by a full NVS),
       // so the storage id stays the same and the copy below used to be overwritten with the empty list. Now an
       // empty list that this phone did not empty brings the saved members back.
       final old = _mirror;
@@ -60,7 +60,7 @@ extension AppStateMirrorEvents on AppState {
       final hub = b['hub'];
       if (users == null || hub is! Map<String, dynamic> || nvs != _hubNvs) return;
       hub['users'] = users;
-      // 2.0.25: a strip the hub couldn't answer for right now keeps the energy history saved in the last copy,
+      // a strip the hub couldn't answer for right now keeps the energy history saved in the last copy,
       // so one offline strip doesn't wipe its stats out of the Google copy
       final oldEn = old != null && (old['hub_id'] ?? '').toString() == settings.hubId.toUpperCase() ? old['energy'] : null;
       if (oldEn is Map) {
@@ -71,7 +71,7 @@ extension AppStateMirrorEvents on AppState {
         hub['energy'] = en;
       }
       final m = {'nvs': nvs, 'hub_id': settings.hubId.toUpperCase(), 'at': DateTime.now().toIso8601String(), ...hub};
-      // 2.0.18: rewritten only when something in it changed, so an unchanged hub doesn't trigger a sync upload
+      // rewritten only when something in it changed, so an unchanged hub doesn't trigger a sync upload
       final same = old != null && jsonEncode({...old}..remove('at')) == jsonEncode({...m}..remove('at'));
       if (!same) await _prefs?.setString('hubMirror', jsonEncode(m));
       _mirrorAt = DateTime.now();
@@ -124,7 +124,7 @@ extension AppStateMirrorEvents on AppState {
       if (!_eventKeys.add(e.key)) return;
       events.insert(0, e);
       if (events.length > 100) events.removeLast();
-      // only what shows under "My notifications" counts on the bell or pops up (2.0.11)
+      // only what shows under "My notifications" counts on the bell or pops up
       if (eventNotifies(e)) {
         unread++;
         lastAlert = e;

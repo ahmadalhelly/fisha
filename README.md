@@ -7,8 +7,8 @@
 
 | المكوّن | الإصدار |
 |---|---|
-| تطبيق Android | 2.0.2 |
-| فيرموير الـ Hub | 2.13.2 |
+| تطبيق Android | 1.1.3 |
+| فيرموير الـ Hub | 1.1.8 |
 
 ---
 
@@ -26,7 +26,7 @@
 
 مواضيع MQTT: `mttl/<HUB_ID>/{status,info,state,event,cmd,cmd/ack}`
 
-> **مهم:** المشتركات اللي اتحدّثت لفيرموير `1.0.116` أو أحدث (تحديث OTA في أكتوبر 2026) بقت بتتصل على البورت `21197` بدل `10086`. الـ Hub من `2.13.1` بيسمع على الاتنين.
+> **مهم:** المشتركات اللي اتحدّثت بآخر تحديث OTA (أكتوبر 2026) بقت بتتصل على البورت `21197` بدل `10086`. الـ Hub بيسمع على الاتنين.
 > **اقفل النت عن المشتركات من الراوتر** (عناوين MAC بتبدأ بـ `88:D0:39`) عشان سحابة الشركة ما تحدّثهاش تاني.
 
 ---
@@ -86,7 +86,7 @@
 
 - **شبكة الإعداد:** لو الـ Hub ما قدرش يدخل الواي فاي، بيفتح شبكة `Fisha-Hub-XXXX` (الباسورد هو باسورد التحديث، أو `fisha1234` لو لسه ما اتحددش). ادخل عليها وافتح `http://192.168.4.1` واختار الشبكة.
 - **باسورد السيرفر:** من التطبيق: الإعدادات ← الاتصال ← باسورد الـ Hub على السيرفر، وإنت على واي فاي البيت.
-- **التحديث:** أول مرة بكابل USB. بعد كده من التطبيق (الإعدادات ← تحديث فيرموير الـ Hub) بملف `.bin` من Arduino IDE: `Sketch → Export Compiled Binary`، أو من المتصفح على `http://192.168.1.100:8080/update`.
+- **التحديث:** أول مرة بكابل USB. بعد كده من التطبيق (الإعدادات ← تحديث فيرموير الـ Hub) بملف `.bin` (صورة التحديث، من غير بارتشن)، أو من المتصفح على `http://192.168.1.100:8080/update`. الصورة الكاملة `...-FULL-flash-0x0.bin` للتفليش الأول على الهاب الجديد أو الممسوح فقط، وبتمسح الإعدادات.
 
 ---
 
@@ -155,7 +155,7 @@ flutter build apk --release
 
 | المشكلة | السبب | الحل |
 |---|---|---|
-| المشتركات فاصلة بعد تحديث | المشترك بقى بيتصل على `21197` | ارفع فيرموير `2.13.1` أو أحدث، واقفل النت عن المشتركات |
+| المشتركات فاصلة بعد تحديث | المشترك بقى بيتصل على `21197` | حدّث الـ Hub لآخر نسخة، واقفل النت عن المشتركات |
 | التطبيق "غير متصل" في البيت | عنوان الـ Hub غلط | الإعدادات ← الاتصال: `192.168.1.100` |
 | التحكم من بره مش شغال | الـ Hub مش متصل بالسيرفر | الإعدادات ← الاتصال: شوف حالة السيرفر واكتب باسورد الـ Hub تاني |
 | "دخول جوجل مش متظبط" | OAuth client أو SHA-1 ناقص | راجع Google Cloud Console |
@@ -167,10 +167,8 @@ flutter build apk --release
 
 | الإصدار | التغييرات |
 |---|---|
-| Hub 2.13.2 | الباسوردات خرجت من الكود، وصلاحيات البث اللحظي (SSE) بقت بتطابق المستخدم المدعو بالظبط |
-| Hub 2.13.1 | بيسمع على `21197`، إصلاحات إضافة المشتركات وحد التيار وصلاحيات SSE، والعنوان بقى `.100` |
-| Hub 2.11 | منافذ غير حاجزة، إشعارات ntfy في الخلفية، المستخدمين المدعوين على شبكة البيت |
-| App 2.0.2 | إصلاح مزامنة جوجل (رسائل خطأ واضحة، مفيش مسح للنسخة بالغلط، مفيش ملفات مكررة)، نسخة الملف من غير باسوردات، عنوان الـ Hub `.100` |
+| Hub 1.1.8 | رفع فيرموير المشترك على قطع 4KB مع إعادة محاولة، وضع تحديث بيقفل MQTT والبث اللحظي مؤقتاً أثناء التحديث، وبوابة قبل اتصال TLS بتمنع تكرار فشل الذاكرة، توقيت مصر +3 افتراضياً، ومزامنة حدود الحماية والجدولة مع المشترك F1.0.92 |
+| App 1.1.3 | رفع فيرموير المشترك بيكمل من آخر قطعة وصلت للهاب لو الاتصال انقطع |
 
 ---
 
@@ -183,8 +181,8 @@ An **ESP32 Hub** replaces the LG cloud: strips dial the hub over TCP on the home
 
 | Component | Version |
 |---|---|
-| Android app | 2.0.2 |
-| Hub firmware | 2.13.2 |
+| Android app | 1.1.3 |
+| Hub firmware | 1.1.8 |
 
 ## Architecture
 
@@ -200,7 +198,7 @@ An **ESP32 Hub** replaces the LG cloud: strips dial the hub over TCP on the home
 
 MQTT topics: `mttl/<HUB_ID>/{status,info,state,event,cmd,cmd/ack}`
 
-> Strips on firmware `1.0.116` or newer (an OTA in Oct 2026) dial port `21197` instead of `10086`; hub `2.13.1`+ listens on both. Block the strips (`88:D0:39:*`) from the internet on the router so the vendor cloud cannot update them again.
+> Strips updated by the latest OTA (Oct 2026) dial port `21197` instead of `10086`; the hub listens on both. Block the strips (`88:D0:39:*`) from the internet on the router so the vendor cloud cannot update them again.
 
 ## Repository layout
 
@@ -240,7 +238,7 @@ The sketch must sit in a folder with the same name (`mttl_hub/mttl_hub.ino`).
 
 - **Setup network:** if the hub cannot join Wi-Fi it opens `Fisha-Hub-XXXX` (password = update password, or `fisha1234` if none is set). Join it, open `http://192.168.4.1` and pick your network.
 - **Server password:** in the app, Settings → Connection → hub server password, while on the home Wi-Fi.
-- **Updates:** first flash over USB; later from the app (Settings → Update hub firmware) with a `.bin` from `Sketch → Export Compiled Binary`, or at `http://192.168.1.100:8080/update`.
+- **Updates:** first flash over USB; later from the app (Settings → Update hub firmware) with the update `.bin` (no partition table), or at `http://192.168.1.100:8080/update`. The `...-FULL-flash-0x0.bin` image is for the first flash of a new or erased hub only and wipes the settings.
 
 ## Setup
 
@@ -296,7 +294,7 @@ flutter build apk --release
 
 | Problem | Cause | Fix |
 |---|---|---|
-| Strips offline after an update | Strip now dials `21197` | Hub `2.13.1`+, block the strips from the internet |
+| Strips offline after an update | Strip now dials `21197` | Update the hub to the latest version, block the strips from the internet |
 | App shows offline at home | Wrong hub address | Settings → Connection: `192.168.1.100` |
 | Remote control not working | Hub not connected to the broker | Settings → Connection: check the server status, re-enter the hub password |
 | "Google sign-in is not set up" | Missing OAuth client / SHA-1 | Google Cloud Console |
@@ -305,13 +303,3 @@ flutter build apk --release
 ---
 
 By **[@ahmadalhelly](https://github.com/ahmadalhelly)**
-
-## سجل تعديلات 2026-10-15
-
-- حذف نسخة الويب (آيفون) بالكامل: صفحة /app ولانشرها من فيرموير الهاب (هاب 2.15.21)، وملفات بناء الويب من الريبو الخاص (CI، WEB.md، web_overrides، configure_web.py). السبب: طلب المستخدم إيقاف نسخة الويب نهائيًا بدل تجميدها فقط.
-
-## سجل تعديلات 2026-10-15 (٢)
-
-- مركز التحديثات: تصميم جديد (حلقة حالة عامة + بنود قابلة للطي للتطبيق والهاب والمشتركات)، وملخص التحديث يعرض النسخة الحالية والسابقة فقط بسطر عام بدون تفاصيل تقنية. تحديث فيرموير المشترك بقى بند داخل نفس الشاشة (لسه بيحتاج اختيار الملف من الهاتف؛ لسه الهاب نفسه مش بيجيب الملف تلقائيًا).
-- صفحة مزامنة جديدة (المزامنة والنسخ الاحتياطي) تجمع النسخ اليدوية ومزامنة جوجل درايف في مكان واحد: تفعيل/تعطيل المزامنة التلقائية بدون الخروج من حساب جوجل، اختيار عدد النسخ المحفوظة على درايف (١-١٠)، وعرض النسخ القديمة لاختيار أي واحدة للاستعادة. مزامنة جوجل بقت بتحفظ كل مرة في ملف منفصل بدل الكتابة فوق نفس الملف، وتمسح الأقدم تلقائيًا بعد كل نسخة حسب العدد المختار.
-- تطبيق 2.0.20.

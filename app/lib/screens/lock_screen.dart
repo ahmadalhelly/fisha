@@ -24,7 +24,7 @@ Future<String?> _googleIn(BuildContext context, AppState s) async {
   return null;
 }
 
-/// 2.0.18: shown instead of the app when the hub (2.15.13+) refuses this phone. The phone asks for access with the
+/// shown instead of the app when the hub refuses this phone. The phone asks for access with the
 /// signed-in Google account, shows a number, and the owner picks the same number on their phone.
 class AccessScreen extends StatefulWidget {
   final AppState state;
@@ -308,7 +308,7 @@ class HubLockScreen extends StatelessWidget {
       false => (Icons.lock_open_outlined, C.warn, _tr('مفتوح', 'Open'),
           _tr('أي حد على واي فاي البيت يقدر يشوف ويتحكم في مشتركاتك.', 'Anyone on the home Wi-Fi can see and control your strips.')),
       null => (Icons.system_update_alt, C.muted, _tr('محتاج تحديث للهاب', 'Hub update needed'),
-          _tr('القفل محتاج فيرموير الهاب 2.15.13 أو أحدث، ومحتاج تكون على واي فاي البيت.', 'The lock needs hub firmware 2.15.13 or newer, on the home Wi-Fi.')),
+          _tr('القفل محتاج آخر فيرموير للهاب، ومحتاج تكون على واي فاي البيت.', 'The lock needs the latest hub firmware, on the home Wi-Fi.')),
     };
     return Container(
       padding: const EdgeInsets.all(16),

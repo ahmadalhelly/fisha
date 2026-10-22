@@ -30,7 +30,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   AppState get s => widget.state;
   bool _busy = false;
   bool _native = false;
-  Map<String, dynamic>? _svc; // 2.0.10: what the background service last reported
+  Map<String, dynamic>? _svc; // what the background service last reported
   Timer? _svcTimer;
 
   @override

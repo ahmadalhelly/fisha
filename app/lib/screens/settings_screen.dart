@@ -74,7 +74,7 @@ class SettingsScreen extends StatelessWidget {
             children: [
               Text(t('settings'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
               const SizedBox(height: 18),
-              // 2.0.22: your account on top (Google photo, name, email, role); below it only what your role allows
+              // your account on top (Google photo, name, email, role); below it only what your role allows
               _profileCard(context, st),
               const SizedBox(height: 18),
               _group(_tr('الحساب', 'Account'), [
@@ -113,7 +113,7 @@ class SettingsScreen extends StatelessWidget {
                 if (!kIsWeb && st.can(Perm.wifi))
                   _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
                     () => _open(context, WifiScreen(state: st))),
-                // 2.0.24: set up a new hub (or one whose Wi-Fi changed) from inside the app
+                // set up a new hub (or one whose Wi-Fi changed) from inside the app
                 if (HubSetup.supported && st.isOwner)
                   _row(context, Icons.add_circle_outline, C.accent, _tr('إضافة هاب', 'Add a hub'), _tr('هاب جديد أو اتغيّرت شبكته', 'New hub, or its Wi-Fi changed'),
                       () => showHubSetup(context, st)),
@@ -121,7 +121,7 @@ class SettingsScreen extends StatelessWidget {
                     dot: st.mode == ConnMode.offline ? C.danger : C.green),
                 _row(context, Icons.notifications_outlined, C.warn, t('notif_title'),
                     st.ntfyTopic.isEmpty ? t('notif_off_state') : t('notif_on_state'), () => _open(context, NotificationsScreen(state: st))),
-                // 2.0.16: latest hub and app builds, with how many are newer than what runs here
+                // latest hub and app builds, with how many are newer than what runs here
                 if (!kIsWeb)
                   ListenableBuilder(
                     listenable: UpdateService.instance,
@@ -133,7 +133,7 @@ class SettingsScreen extends StatelessWidget {
                           dot: n > 0 ? C.danger : null);
                     },
                   ),
-                // 2.0.18: hub lock (owner only)
+                // hub lock (owner only)
                 if (st.isOwner)
                   _row(context, st.hubClaimed == true ? Icons.lock_outline : Icons.lock_open_outlined, st.hubClaimed == false ? C.warn : C.accent,
                       _tr('قفل الهاب', 'Hub lock'),

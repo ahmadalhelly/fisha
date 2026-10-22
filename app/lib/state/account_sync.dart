@@ -25,7 +25,7 @@ extension AppStateAccountSync on AppState {
   Future<List<SyncVersion>> listGoogleVersions() => GoogleSync.I.listVersions();
 
   Future<Map<String, dynamic>> _syncPayload() async {
-    // 2.0.18: the copy of the hub's data (rules, schedules, names, protection, family) is refreshed first, so the
+    // the copy of the hub's data (rules, schedules, names, protection, family) is refreshed first, so the
     // upload carries everything as it is now, not as it was at the last 15-minute refresh
     if (!settings.isShared && mode != ConnMode.offline && _hubNvs.isNotEmpty) await _refreshMirror();
     final b = await exportBackup(parts: {'app'}, withSecrets: true);
@@ -131,7 +131,7 @@ extension AppStateAccountSync on AppState {
         await GoogleSync.I.signOut();
       } catch (_) {}
     }
-    // 2.0.18: signing out leaves nothing behind: no hub key, no family login, no strips on screen
+    // signing out leaves nothing behind: no hub key, no family login, no strips on screen
     _strips = [];
     timers = [];
     ownerPhones = [];

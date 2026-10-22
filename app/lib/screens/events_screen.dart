@@ -191,7 +191,7 @@ class _EventsScreenState extends State<EventsScreen> {
         ]),
       );
 
-  // 2.0.13: log filter chip with an icon and how many events it holds
+  // log filter chip with an icon and how many events it holds
   Widget _chip(String key, String label, IconData? icon, int n) {
     final on = _filter == key;
     return Padding(
@@ -296,7 +296,7 @@ class _EventsScreenState extends State<EventsScreen> {
   }
 }
 
-/// 2.0.13: "My notifications / System log" switch: a track with a sliding pill and a thin glowing line under it.
+/// "My notifications / System log" switch: a track with a sliding pill and a thin glowing line under it.
 class _TabSwitch extends StatelessWidget {
   final bool system;
   final int newCount;

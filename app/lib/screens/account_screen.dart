@@ -158,7 +158,7 @@ class _AccountScreenState extends State<AccountScreen> {
               const SizedBox(height: 14),
               section(t('g_sync'), [
                 Text(s.lastSync == null ? t('g_never') : t('g_last', {'x': _fmt(s.lastSync!)}), style: TextStyle(color: C.textSoft, fontSize: 13)),
-                // 2.0.20: schedule, past copies, and pause moved to one page (Settings > المزامنة والنسخ الاحتياطي)
+                // schedule, past copies, and pause moved to one page (Settings > المزامنة والنسخ الاحتياطي)
                 OutlinedButton.icon(
                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SyncScreen(state: s))),
                   icon: const Icon(Icons.cloud_sync_outlined),

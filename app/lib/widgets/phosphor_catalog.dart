@@ -125,7 +125,7 @@ const Map<String, PhIcon> kPhosphorIcons = {
   'wind': PhIcon(IconData(0xe5d2, fontFamily: _l), IconData(0xe5d3, fontFamily: _d), IconData(0xe5d2, fontFamily: _d)),
   'armchair': PhIcon(IconData(0xe012, fontFamily: _l), IconData(0xe013, fontFamily: _d), IconData(0xe012, fontFamily: _d)),
   'food': PhIcon(IconData(0xeaa4, fontFamily: _l), IconData(0xeaa5, fontFamily: _d), IconData(0xeaa4, fontFamily: _d)),
-  // appliances (2.0.9)
+  // appliances
   'coffee_grinder': PhIcon(IconData(0xe1c0, fontFamily: _l), IconData(0xe1c1, fontFamily: _d), IconData(0xe1c0, fontFamily: _d)),
   'water_heater': PhIcon(IconData(0xe5ca, fontFamily: _l), IconData(0xe5cb, fontFamily: _d), IconData(0xe5ca, fontFamily: _d)),
   'heater': PhIcon(IconData(0xe620, fontFamily: _l), IconData(0xe621, fontFamily: _d), IconData(0xe620, fontFamily: _d)),

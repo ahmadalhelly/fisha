@@ -9,7 +9,7 @@ class _MasterSocket extends StatefulWidget {
   State<_MasterSocket> createState() => _MasterSocketState();
 }
 
-// 2.0.13: hold the master, it stretches into a capsule; slide right for "all on", left for "all off", lift to pick.
+// hold the master, it stretches into a capsule; slide right for "all on", left for "all off", lift to pick.
 // Lifting in the middle cancels. All off offers only "all on", all on only "all off", mixed both.
 class _MasterSocketState extends State<_MasterSocket> {
   AppState get state => widget.state;
@@ -314,7 +314,7 @@ class _SocketPainter extends CustomPainter {
       canvas.drawCircle(c, r - 6, Paint()
         ..color = haloColor.withValues(alpha: 0.08 + 0.22 * load)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-      // 2.0.21: the ring used a flat solid color here while every outlet fades it with a SweepGradient — that made
+      // the ring used a flat solid color here while every outlet fades it with a SweepGradient — that made
       // the master button noticeably more vivid than the outlets and hid the gradient detail. Same treatment now.
       final sweep = 2 * math.pi * math.max(0.04, load);
       canvas.drawArc(
@@ -339,7 +339,7 @@ class _SocketPainter extends CustomPainter {
     if (on && !isMaster) {
       // glow
       canvas.drawCircle(c, r - 6, Paint()
-        ..color = ringColor.withValues(alpha: 0.22)   // 2.0.18: back to the clear glow of a switched-on socket
+        ..color = ringColor.withValues(alpha: 0.22)   // back to the clear glow of a switched-on socket
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
       // load arc
       final sweep = 2 * math.pi * math.max(0.12, load);
@@ -370,7 +370,7 @@ class _SocketPainter extends CustomPainter {
         ..shader = RadialGradient(
           colors: innerOn
               ? (isMaster
-                  // 2.0.25: the master's face was too solid a green and swallowed the power icon
+                  // the master's face was too solid a green and swallowed the power icon
                   ? [ringColor.withValues(alpha: dark ? 0.16 : 0.12), dark ? C.surface2 : C.surface]
                   : [ringColor.withValues(alpha: dark ? 0.35 : 0.25), dark ? C.tileOn : C.accentBg])
               : (dark ? [C.surface2, C.tile] : [C.surface, C.miniOff]),

@@ -39,7 +39,7 @@ class NotifyService {
 
   static Future<bool> isEnabled() async => (await SharedPreferences.getInstance()).getBool(_prefKey) ?? false;
 
-  /// Starts the service if the user turned native notifications on. 2.0.10: also restarts a running service that
+  /// Starts the service if the user turned native notifications on. Also restarts a running service that
   /// has heard nothing from the hub for 3 minutes (it lost the server and did not get it back by itself).
   static Future<void> resume() async {
     if (!await isEnabled()) return;
@@ -117,7 +117,7 @@ class _NotifyHandler extends TaskHandler {
   MqttServerClient? _client;
   String _base = '';
   Map<String, dynamic> _state = {};
-  final Map<String, Map<String, dynamic>> _strips = {}; // hub 2.15.38: mttl/<hub>/s/<MAC>
+  final Map<String, Map<String, dynamic>> _strips = {}; // mttl/<hub>/s/<MAC>
   int _id = 1;
   Map<String, dynamic>? _filter; // the app's copy of the user's choices (prefs 'notifyFilter'), when the hub state is missing
   final _seen = <String>[]; // recent events, so one held back by the hub and sent on reconnect never shows twice
@@ -195,7 +195,7 @@ class _NotifyHandler extends TaskHandler {
         }
       });
       c.subscribe('$_base/state', MqttQos.atMostOnce);
-      c.subscribe('$_base/s/+', MqttQos.atMostOnce); // hub 2.15.38: each strip on its own topic
+      c.subscribe('$_base/s/+', MqttQos.atMostOnce); // each strip on its own topic
       c.subscribe('$_base/event', MqttQos.atLeastOnce);
     } catch (_) {
       // no internet right now; the repeat event retries
@@ -255,7 +255,7 @@ class _NotifyHandler extends TaskHandler {
     final fTypes = (_filter?['types'] as num?)?.toInt();
     final types = cfg is Map && cfg['ntypes'] is num ? (cfg['ntypes'] as num).toInt() : (fTypes ?? 0xFFFFFFFF);
     final bit = _types.indexOf(type);
-    final safety = const {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail', 'pair'}.contains(type); // always shown (hub 2.15.9)
+    final safety = const {'overvolt', 'undervolt', 'overcurrent', 'overload', 'trip_fail', 'pair'}.contains(type); // always shown
     if (!safety && type != 'test' && (bit < 0 || types & (1 << bit) == 0)) return;
     final strip = mac.isEmpty ? null : _strip(mac);
     final fMasks = _filter?['masks'];
@@ -365,7 +365,7 @@ class _NotifyHandler extends TaskHandler {
   @override
   void onRepeatEvent(DateTime timestamp) {
     _loadFilter();
-    // 2.0.10: "connected" is not enough: after a network change the client could sit there hearing nothing
+    // "connected" is not enough: after a network change the client could sit there hearing nothing
     // (notifications came back only when the user switched them off and on). The hub publishes its state at least
     // every 30 s, so 3 minutes of silence means a dead link: start a fresh connection.
     final now = DateTime.now().millisecondsSinceEpoch;

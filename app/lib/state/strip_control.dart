@@ -43,7 +43,7 @@ extension AppStateStripControl on AppState {
       _notify();
       return;
     }
-    // A master "all on/off" (outlet 0) leaves child-locked outlets alone — same as the hub (lockSkip, 2.15.23).
+    // A master "all on/off" (outlet 0) leaves child-locked outlets alone — same as the hub (lockSkip).
     // Without this the UI showed the locked outlet flip, then flip back once the real state came back unchanged.
     if (!canControl) {
       lastError = Tr.isAr ? 'صلاحيتك مشاهدة بس' : 'You can view only';
@@ -54,7 +54,7 @@ extension AppStateStripControl on AppState {
         ? [outlet]
         : [for (final o in strip?.outlets ?? const <Outlet>[]) if (!o.locked) o.n];
     if (targets.isEmpty) return;
-    // 2.0.22: a control member's "all on/off" skips overload-protected outlets one by one (the hub refuses them)
+    // a control member's "all on/off" skips overload-protected outlets one by one (the hub refuses them)
     if (outlet == 0 && !can(Perm.prot) && (strip?.outlets.any((o) => o.protected) ?? false)) {
       for (final o in strip!.outlets) {
         if (!o.locked && !o.protected && o.on != on) await setOutlet(mac, o.n, on);

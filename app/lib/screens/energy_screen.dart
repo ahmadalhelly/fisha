@@ -38,11 +38,11 @@ class _DayStat {
   final int date; // yyyymmdd
   final int wh;
   final int peakW; // max peakW across strips (-1 if unknown)
-  final bool missing; // 2.0.10: a calendar day inside the history with no record (kept as an empty slot, not dropped)
+  final bool missing; // a calendar day inside the history with no record (kept as an empty slot, not dropped)
   const _DayStat({required this.date, required this.wh, required this.peakW, this.missing = false});
 }
 
-/// "12.3 W": number and unit always together, left-to-right, the unit a little smaller (2.0.10)
+/// "12.3 W": number and unit always together, left-to-right, the unit a little smaller
 Widget valUnit(String v, String unit, {double size = 13, Color? color, FontWeight weight = FontWeight.w600, Color? unitColor}) => Row(
       mainAxisSize: MainAxisSize.min,
       textDirection: TextDirection.ltr,
@@ -119,7 +119,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
     _allDates = dates.toList()..sort((a, b) => b.compareTo(a));
   }
 
-  /// the calendar days of the selected period, newest first (same for every filter, so shares add up). 2.0.10: a day
+  /// the calendar days of the selected period, newest first (same for every filter, so shares add up). A day
   /// with no record inside the history (e.g. one the hub could not save) stays in the list as a missing day.
   List<int> get _period {
     if (_allDates.isEmpty) return const [];
@@ -137,7 +137,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return out;
   }
 
-  // 2.0.22: the selected period as a CSV (Excel opens it): one row per day, strip and outlet, with kWh and cost
+  // the selected period as a CSV (Excel opens it): one row per day, strip and outlet, with kWh and cost
   Future<void> _export() async {
     final days = _period;
     if (days.isEmpty) return;
@@ -220,7 +220,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
     return t;
   }
 
-  // 2.0.17: every series gets its own hue, never tones of one colour (they blur together in a stacked bar).
+  // every series gets its own hue, never tones of one colour (they blur together in a stacked bar).
   // Strips: hues spread around the wheel. Outlets: the strip's hue plus 90°, 180° and 270° (tetradic).
   static const _palette = [
     Color(0xFF2EE6B0), // teal
@@ -419,7 +419,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
                   _filterCard(),
                 ],
                 const SizedBox(height: 14),
-                // 2.0.15: the total cost first, then the use; the average day and how many days have data under them
+                // the total cost first, then the use; the average day and how many days have data under them
                 Padding(
                   padding: const EdgeInsetsDirectional.only(start: 4, bottom: 8),
                   child: Text('$_filterTitle · ${_tr('آخر', 'last')} $_range ${_tr('يوم', 'days')}',
@@ -639,7 +639,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
     );
   }
 
-  // 2.0.10: name + kWh, bar, then three fixed cells (share · now · peak with its day and time on a second line)
+  // name + kWh, bar, then three fixed cells (share · now · peak with its day and time on a second line)
   Widget _outletRow(_Row r, int total) {
     final share = total == 0 ? 0.0 : r.wh / total;
     final p = r.peak;
@@ -715,7 +715,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
     );
   }
 
-  // 2.0.10: date · bar · kWh on one line, peak and cost under it; a missing day keeps its row
+  // date · bar · kWh on one line, peak and cost under it; a missing day keeps its row
   Widget _dailyRow(_DayStat d, int maxWh) {
     final kwh = d.wh / 1000;
     final ratio = maxWh > 0 ? (d.wh / maxWh).clamp(0.0, 1.0) : 0.0;

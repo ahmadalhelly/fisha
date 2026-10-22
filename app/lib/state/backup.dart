@@ -75,7 +75,7 @@ extension AppStateBackup on AppState {
               ],
             }
         ],
-        // 2.0.23: the daily energy history travels with every backup / Google sync (compact rows yyyymmdd:wh1:wh2:wh3:wh4:peak)
+        // the daily energy history travels with every backup / Google sync (compact rows yyyymmdd:wh1:wh2:wh3:wh4:peak)
         'energy': await _exportEnergy(),
         'config': {
           'temp_max': tempMax,
@@ -102,7 +102,7 @@ extension AppStateBackup on AppState {
   Future<Map<String, String>> _exportEnergy() async {
     final out = <String, String>{};
     for (final s in allStrips) {
-      // 2.0.25: the history lives on the hub, so an offline strip's days are exported too
+      // the history lives on the hub, so an offline strip's days are exported too
       final r = await api('energy', {'mac': s.mac});
       final days = r.data?['days'];
       if (!r.ok || days is! List) continue;
@@ -158,7 +158,7 @@ extension AppStateBackup on AppState {
         }
       }
 
-      // family members (hub 2.15+), with their own passwords so their phones keep working
+      // family members, with their own passwords so their phones keep working
       if (hubData['users'] is List && !settings.isShared) {
         for (final raw in hubData['users']) {
           if (raw is! Map || (raw['pw'] ?? '').toString().isEmpty) continue;
@@ -177,7 +177,7 @@ extension AppStateBackup on AppState {
 
       // strips
       final currentMacs = allStrips.map((s) => s.mac.toUpperCase()).toSet();
-      // energy history (hub 2.15.27+): days the hub already has are never overwritten
+      // energy history: days the hub already has are never overwritten
       final en = hubData['energy'];
       if (en is Map && !settings.isShared) {
         for (final e in en.entries) {
@@ -243,7 +243,7 @@ extension AppStateBackup on AppState {
           if (tempMax != null) 'temp_max': tempMax,
         });
       }
-      // 2.0.18: whole-strip protection (voltage and current limits)
+      // whole-strip protection (voltage and current limits)
       final prot = <String, dynamic>{
         for (final k in ['v_protect', 'v_restore', 'a_protect'])
           if (cfg[k] is bool) k: cfg[k],

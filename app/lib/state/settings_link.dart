@@ -22,7 +22,7 @@ extension AppStateSettingsLink on AppState {
     await restart();
   }
 
-  /// Hands the hub its server password (hub 2.9+, home Wi-Fi only). The hub keeps it and reconnects only if it changed.
+  /// Hands the hub its server password (home Wi-Fi only). The hub keeps it and reconnects only if it changed.
   Future<CmdResult> pushHubPass({bool force = false}) async {
     final p = settings.hubPass;
     if (p.isEmpty || settings.isShared) return CmdResult(false, t('cloud_need_pass'));
@@ -35,7 +35,7 @@ extension AppStateSettingsLink on AppState {
     return api('cloud', {'pass': p, 'host': settings.brokerHost, 'user': 'ESP_hub'});
   }
 
-  /// Owner only: the hub's address on the home network (hub 2.15.20+). The hub restarts to use it.
+  /// Owner only: the hub's address on the home network. The hub restarts to use it.
   Future<CmdResult> pushHubLocalIp(String ip) async {
     if (settings.isShared || !_localFresh) return CmdResult(false, t('err_local_only'));
     return api('cloud', {'lip': ip});

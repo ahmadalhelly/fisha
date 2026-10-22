@@ -70,7 +70,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
   @override
   void didChangePlatformBrightness() => setState(() {});
 
-  // 2.0.10: coming back to the app also checks that the notification service is running and hearing the hub
+  // coming back to the app also checks that the notification service is running and hearing the hub
   @override
   void didChangeAppLifecycleState(AppLifecycleState st) {
     if (st == AppLifecycleState.resumed && _booted) NotifyService.resume().catchError((_) {});
@@ -136,7 +136,7 @@ class _MttlAppState extends State<MttlApp> with WidgetsBindingObserver {
             : s.accountType.isEmpty
                 ? WelcomeScreen(key: const ValueKey('welcome'), state: s)
                 : s.hubLocked
-                    ? AccessScreen(key: const ValueKey('access'), state: s)   // 2.0.18: the hub refuses this phone
+                    ? AccessScreen(key: const ValueKey('access'), state: s)   // the hub refuses this phone
                     : Shell(key: const ValueKey('shell'), state: s),
       ),
     );
@@ -150,7 +150,7 @@ class BootScreen extends StatefulWidget {
   State<BootScreen> createState() => _BootScreenState();
 }
 
-// 2.0.11 splash «د»: the plug settles in (0.92 → 1 with a fade), a soft mint glow opens right behind it, the bolt
+// splash «د»: the plug settles in (0.92 → 1 with a fade), a soft mint glow opens right behind it, the bolt
 // flickers once, then the name, the handle and a small dot that pulses twice. About 0.85 s; static when the system
 // asks for reduced motion.
 class _BootScreenState extends State<BootScreen> with SingleTickerProviderStateMixin {

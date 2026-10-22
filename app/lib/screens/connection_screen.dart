@@ -53,7 +53,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       sharedUser: _s.sharedUser,
       sharedName: _s.sharedName,
       sharedRole: _s.sharedRole,
-      ownerKey: _s.ownerKey,   // 2.0.18: keep this phone's hub key
+      ownerKey: _s.ownerKey,   // keep this phone's hub key
     );
     FocusScope.of(context).unfocus();
     await widget.state.saveSettings(s);

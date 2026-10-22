@@ -40,7 +40,7 @@ class StripCard extends StatelessWidget {
           color: C.card,
           borderRadius: BorderRadius.circular(26),
           border: Border.all(
-            // 2.0.10: a quiet edge and a soft drop shadow instead of a neon glow
+            // a quiet edge and a soft drop shadow instead of a neon glow
             color: online && s.onCount > 0 ? stripTone.withValues(alpha: C.dark ? 0.30 : 0.26) : C.cardEdge,
             width: 1.0,
           ),

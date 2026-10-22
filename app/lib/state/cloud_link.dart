@@ -104,7 +104,7 @@ extension AppStateCloudLink on AppState {
     }
   }
 
-  // hub 2.15.38+: the head lists the strips and each strip comes on its own topic; older hubs send "devices" in the head
+  // the head lists the strips and each strip comes on its own topic; older hubs send "devices" in the head
   void _onCloudHead(String text) {
     Map<String, dynamic> j;
     try {
@@ -144,7 +144,7 @@ extension AppStateCloudLink on AppState {
     _applyStateMap(j, fromLocal: false);
   }
 
-  // hub 2.15.38 SSE "live": the numbers of each online strip once a second, merged into the strips from the last "state"
+  // SSE "live": the numbers of each online strip once a second, merged into the strips from the last "state"
   void _applyLive(String data) {
     try {
       final j = jsonDecode(data) as Map<String, dynamic>;

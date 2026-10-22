@@ -16,7 +16,7 @@ String _dayLabel(int k) {
   return '${Tr.isAr ? ar[d.weekday - 1] : en[d.weekday - 1]} ${d.day}/${d.month}';
 }
 
-/// 2.0.15: one bar per day, stacked by strip (or by outlet when a strip is picked), a dashed average line, an outlined
+/// one bar per day, stacked by strip (or by outlet when a strip is picked), a dashed average line, an outlined
 /// slot for a day with no record, and a detail box with the day's use and cost split by part.
 class _StackBars extends StatefulWidget {
   final List<_StackDay> days; // oldest first

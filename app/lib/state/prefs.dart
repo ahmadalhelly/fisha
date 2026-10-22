@@ -9,7 +9,7 @@ extension AppStatePrefs on AppState {
     if (s != null) {
       try {
         settings = HubSettings.fromJson(jsonDecode(s) as Map<String, dynamic>);
-        // hub moved from .110 to .100 with firmware 2.13.1
+        // the hub address moved from .110 to .100
         if (!settings.isShared && settings.localHost == '192.168.1.110') settings.localHost = '192.168.1.100';
       } catch (_) {}
     }

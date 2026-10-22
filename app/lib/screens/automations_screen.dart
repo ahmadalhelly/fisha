@@ -143,7 +143,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             Icon(Icons.bolt, color: C.warn),
             const SizedBox(width: 10),
             Expanded(child: Text(t('vprot'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
-            // over-voltage is always on (hub 2.14+): no switch, just a badge
+            // over-voltage is always on: no switch, just a badge
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(

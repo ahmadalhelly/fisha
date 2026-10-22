@@ -12,7 +12,7 @@ import '../services/google_sync.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-/// 2.0.20: one page for both kinds of backup — manual export/import, and Google Drive sync (on/off, schedule,
+/// one page for both kinds of backup — manual export/import, and Google Drive sync (on/off, schedule,
 /// and a choice of past copies to restore from). Replaces the old split between BackupScreen and the Google
 /// section of AccountScreen.
 class SyncScreen extends StatefulWidget {

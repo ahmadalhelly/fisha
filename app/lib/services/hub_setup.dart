@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
-/// 2.0.24: sets a new hub up without leaving the app. Android joins the hub's own network (Fisha-Hub-XXXX) through
+/// sets a new hub up without leaving the app. Android joins the hub's own network (Fisha-Hub-XXXX) through
 /// a native channel, the app sends Wi-Fi + address + owner to 192.168.4.1 in one request, then goes back home.
 class HubSetup {
   static const _ch = MethodChannel('fisha/wifi');

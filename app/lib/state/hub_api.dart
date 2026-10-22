@@ -66,7 +66,7 @@ extension AppStateHubApi on AppState {
     return l is List ? l.whereType<Map<String, dynamic>>().map(HubUser.fromJson).toList() : <HubUser>[];
   }
 
-  /// Hub 2.10 runs server work in the background: start it, then wait for the result.
+  /// The hub runs server work in the background: start it, then wait for the result.
   Future<CmdResult> _job(String action, Map<String, dynamic> body) async {
     final r = await api(action, body);
     if (!r.ok || r.data?['job'] != true) return r;

@@ -177,7 +177,7 @@ const Map<String, List<String>> _s = {
   'daily_usage': ['الاستهلاك اليومي', 'Daily usage'],
   'by_outlet': ['حسب المخرج', 'By outlet'],
   'energy_empty': ['لسه مفيش بيانات. الـ Hub بيبدأ يسجل الاستهلاك اليومي أول ما ياخد الوقت من النت.', 'No data yet. The hub starts recording daily usage once it has internet time.'],
-  'energy_old_fw': ['سجل الطاقة محتاج فيرموير الـ Hub v2.0', 'Energy history needs hub firmware v2.0'],
+  'energy_old_fw': ['سجل الطاقة محتاج تحديث فيرموير الـ Hub', 'Energy history needs a hub firmware update'],
   'today': ['النهارده', 'Today'],
   // events
   'events_title': ['السجل', 'Activity'],
@@ -369,7 +369,7 @@ const Map<String, List<String>> _s = {
   'sfw_refused': ['الـ Hub رفض الملف: {x}', 'The hub refused the file: {x}'],
   'sfw_bad_file': ['الملف ده مش فيرموير مشترك MTTL-W01 سليم.', 'This is not a valid MTTL-W01 strip firmware.'],
   'sfw_owner_only': ['التحديث متاح لصاحب الـ Hub بس.', 'Only the hub owner can update strips.'],
-  'sfw_hub_old': ['الـ Hub محتاج فيرموير 2.15.8 أو أحدث عشان يحدّث المشتركات.', 'The hub needs firmware 2.15.8 or newer to update strips.'],
+  'sfw_hub_old': ['الـ Hub محتاج تحديث الفيرموير عشان يحدّث المشتركات.', 'The hub needs a firmware update to update strips.'],
   'sfw_strips': ['المشتركات', 'Strips'],
   'sfw_all': ['تحديد الكل', 'Select all'],
   'sfw_no_strips': ['مفيش مشترك متصل دلوقتي.', 'No strip is connected right now.'],
@@ -447,7 +447,7 @@ const Map<String, List<String>> _s = {
   'backup_err_no_hub': ['الـ Hub غير متصل عشان تستعيد بياناته', 'Hub is offline; cannot restore its data'],
   'backup_skipped': ['تمت الاستعادة بنجاح (تم تخطي {n} مشترك مش موجودين على الـ Hub)', 'Restored successfully (skipped {n} strip(s) not found on hub)'],
   'backup_select_part': ['اختار حاجة واحدة على الأقل عشان تعملها نسخة', 'Select at least one item to backup'],
-  // server link (hub 2.9)
+  // server link
   'f_hub_pass': ['باسورد الـ Hub على السيرفر', 'Hub server password'],
   'f_hub_pass_sub': ['باسورد اليوزر ESP32_hub في EMQX. التطبيق بيبعته للـ Hub لوحده وإنت على واي فاي البيت، ومش محتاج تكتبه في الكود.', 'Password of the ESP32_hub user in EMQX. The app hands it to the hub on the home Wi-Fi; no need to put it in the code.'],
   'cloud_need_pass': ['اكتب باسورد الـ Hub على السيرفر الأول', 'Enter the hub server password first'],
@@ -488,7 +488,7 @@ const Map<String, List<String>> _s = {
   'g_never': ['لسه ماتزامنتش', 'Not synced yet'],
   'g_last': ['آخر مزامنة: {x}', 'Last sync: {x}'],
   'g_note': ['المزامنة بتحصل لوحدها كل شوية لما حاجة تتغير. الملف في فولدر مخفي في درايف بتاعك، ومحدش يقدر يقراه غير التطبيق ده.', 'Sync runs by itself when something changes. The file sits in a hidden folder of your Drive that only this app can read.'],
-  // sync screen (2.0.20): manual backup/restore + Google Drive, merged in one place
+  // sync screen: manual backup/restore + Google Drive, merged in one place
   'sync_title': ['المزامنة والنسخ الاحتياطي', 'Sync & backup'],
   'sync_manual_section': ['يدويًا', 'Manually'],
   'sync_google_section': ['مزامنة جوجل درايف', 'Google Drive sync'],
@@ -563,7 +563,7 @@ const Map<String, List<String>> _s = {
   'leave_title': ['الخروج من الـ Hub المشترك', 'Leave the shared hub'],
   'leave_body': ['هترجع لإعدادات الاتصال الافتراضية بتاعة الـ Hub بتاعك.', 'You go back to the default connection settings for your own hub.'],
   'leave_btn': ['خروج', 'Leave'],
-  // hub 2.10
+  // hub background jobs
   'err_busy': ['الـ Hub مشغول بأمر تاني، جرب كمان شوية', 'The hub is busy with another task; try again shortly'],
   'lock_need_google': ['سجّل بحساب جوجل الأول', 'Sign in with Google first'],
   'lock_no_hub': ['مش لاقي الـ Hub. اتأكد إنك على واي فاي البيت', 'Can\'t reach the hub. Make sure you are on the home Wi-Fi'],

@@ -22,7 +22,7 @@ class Release {
       ];
 }
 
-/// Compares dotted versions numerically ("2.0.16" > "2.0.9"); non-numeric parts count as 0.
+/// Compares dotted versions numerically ("1.10.0" > "1.9.0"); non-numeric parts count as 0.
 int compareVersions(String a, String b) {
   final pa = a.split('.').map((e) => int.tryParse(e) ?? 0).toList();
   final pb = b.split('.').map((e) => int.tryParse(e) ?? 0).toList();
@@ -53,8 +53,8 @@ class UpdateService extends ChangeNotifier {
 
   static String? stripVersion(String firmware) => _stripVersion.firstMatch(firmware)?.group(1);
 
-  /// 2.0.29: the newest build, by CI build number (always rising), not by version name: the public launch restarts
-  /// the versions at 1.0.0, which must still count as newer than the internal 2.x builds.
+  /// the newest build, by CI build number (always rising), not by version name: a version name can restart
+  /// lower than an older build's, which must still count as newer.
   Release? latest(String kind) {
     Release? best;
     for (final r in releases) {
@@ -79,8 +79,7 @@ class UpdateService extends ChangeNotifier {
     return b;
   }
 
-  /// the internal numbering used before the public launch (app 2.0.x, hub 2.13-2.15). Any launch version counts as
-  /// newer than these. Only matters when that old release is no longer listed (see [newer]).
+  /// builds in the older numbering. Any launch version counts as newer than these. Only matters when that old release is no longer listed (see [newer]).
   static bool isPreLaunch(String v) => (int.tryParse(v.split('.').first) ?? 0) == 2;
 
   /// the newer release for [kind] than [current], or null when up to date or unknown

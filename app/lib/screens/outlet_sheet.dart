@@ -213,7 +213,7 @@ void openOutletSheet(BuildContext context, AppState state, String mac, int n) {
                   ),
                   Switch(
                     value: o.on,
-                    // view members only look; control members leave protected outlets alone (hub 2.15.26 refuses it too)
+                    // view members only look; control members leave protected outlets alone (refuses it too)
                     onChanged: state.canControl && (!o.protected || state.can(Perm.prot)) ? (val) => guardedSwitch(ctx, state, s, o, val) : null,
                     activeTrackColor: C.accent,
                   ),

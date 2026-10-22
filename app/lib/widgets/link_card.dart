@@ -17,7 +17,7 @@ class _LinkDay {
   DateTime get date => DateTime.utc(1970).add(Duration(days: day));
 }
 
-/// 2.0.13: the strip's link over the last 7 days (hub 2.15.10+): % connected, drops, longest drop and signal per day.
+/// the strip's link over the last 7 days: % connected, drops, longest drop and signal per day.
 class LinkCard extends StatefulWidget {
   final AppState state;
   final String mac;
@@ -291,7 +291,7 @@ class _LinkCardState extends State<LinkCard> {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: cardBox(),
-        child: Text(_tr('سجل الاتصال محتاج فيرموير الهاب 2.15.10 أو أحدث.', 'Link history needs hub firmware 2.15.10 or newer.'),
+        child: Text(_tr('سجل الاتصال محتاج تحديث فيرموير الهاب.', 'Link history needs a hub firmware update.'),
             style: TextStyle(color: C.muted, fontSize: 12.5)),
       );
     }

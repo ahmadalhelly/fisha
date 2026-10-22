@@ -11,7 +11,7 @@ import 'common.dart';
 
 String _x(String ar, String en) => Tr.isAr ? ar : en;
 
-/// 2.0.24 hub setup (design: pairing card + ring). A card rises over the screen ("we found Fisha Hub near you");
+/// Hub setup (design: pairing card + ring). A card rises over the screen ("we found Fisha Hub near you");
 /// "Set it up" grows the same card to full screen, where only the Wi-Fi password is asked (the network name is the
 /// one the phone is on; address and hub password sit under "advanced" with their defaults).
 Future<void> showHubSetup(BuildContext context, AppState s, {String? hubSsid}) => showModalBottomSheet(
@@ -33,7 +33,7 @@ class HubSetupWatcher {
     if (!HubSetup.supported || _t != null) return;
     Future<void> tick() async {
       if (_open || !context.mounted || s.settings.isShared) return;
-      // 2.0.25: already talking to a hub: nothing to offer (a hub that lost its Wi-Fi leaves the app offline, so it still shows)
+      // already talking to a hub: nothing to offer (a hub that lost its Wi-Fi leaves the app offline, so it still shows)
       if (s.mode != ConnMode.offline && s.settings.hubId.isNotEmpty) return;
       if (!await HubSetup.permission()) return;
       final l = await HubSetup.scanHubs();
@@ -75,7 +75,7 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
   final _home = TextEditingController(), _pw = TextEditingController(), _ip = TextEditingController(), _ota = TextEditingController();
   bool _homeKnown = false;
   bool _showPw = false, _showOta = false;
-  // 2.0.25: opened from Settings while this phone is already linked to a working hub
+  // opened from Settings while this phone is already linked to a working hub
   late bool _linked;
   // the hub found nearby is this phone's own hub (its Wi-Fi changed): Fisha-Hub-XXXX = last 4 of its MAC
   bool get _mine {

@@ -29,7 +29,7 @@ class GoogleSync {
   static final GoogleSync I = GoogleSync._();
 
   static const _scope = 'https://www.googleapis.com/auth/drive.appdata';
-  // 2.0.20: every sync writes its own timestamped file, so old copies stay choosable at restore time
+  // every sync writes its own timestamped file, so old copies stay choosable at restore time
   // instead of being overwritten. The single 'fisha-sync.json' from older builds is still read as a fallback.
   static const _legacyName = 'fisha-sync.json';
   static const _prefix = 'fisha-sync-';

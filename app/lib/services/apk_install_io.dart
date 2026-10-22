@@ -27,7 +27,7 @@ Future<String?> downloadAndInstallApk(String url, int size, void Function(double
     }
     await sink.close();
     if (total > 0 && got < total) return 'net';
-    // 2.0.25: with the app in the background Android refuses to open the installer by itself: a notification does it on tap
+    // with the app in the background Android refuses to open the installer by itself: a notification does it on tap
     if (WidgetsBinding.instance.lifecycleState != null && WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
       await UpdateKeepAlive.installReady(file.path, Tr.isAr ? 'تحديث فيشة جاهز' : 'Fisha update ready',
           Tr.isAr ? 'دوس هنا للتثبيت' : 'Tap to install');

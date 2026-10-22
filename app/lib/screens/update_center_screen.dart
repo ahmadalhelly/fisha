@@ -17,7 +17,7 @@ import 'strip_firmware_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
-/// Update center (2.0.20): one ring for the overall state, then the app, the hub, and the strips, each
+/// Update center: one ring for the overall state, then the app, the hub, and the strips, each
 /// expandable in place. The changelog shown per item is the version installed now and the new one available —
 /// a short, generic line each, never the full release history or the raw commit log.
 class UpdateCenterScreen extends StatefulWidget {
@@ -58,7 +58,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
       _progress['hub'] = null;
       _status['hub'] = _tr('بينزّل الملف…', 'Downloading…');
     });
-    // 2.0.25: keeps going if you switch to another app
+    // keeps going if you switch to another app
     await UpdateKeepAlive.start(_tr('تحديث الـ Hub', 'Updating the hub'), _tr('بينزّل الملف…', 'Downloading…'));
     try {
       await _updateHubRun(r);

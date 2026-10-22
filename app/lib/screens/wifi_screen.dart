@@ -81,7 +81,7 @@ class _WifiScreenState extends State<WifiScreen> {
             ),
             if (s.wifiTest != 'idle') ...[const SizedBox(height: 12), _testCard()],
             if (s.hubV2 && (s.hubFw == '2.0' || s.hubFw == '2.1' || s.hubFw == '2.2' || s.hubFw == '2.3'))
-              emptyCard(_tr('تغيير الشبكة من التطبيق محتاج فيرموير الـ Hub 2.4 أو أحدث.', 'Changing the network from the app needs hub firmware 2.4 or newer.'), icon: Icons.system_update_alt)
+              emptyCard(_tr('تغيير الشبكة من التطبيق محتاج تحديث فيرموير الـ Hub.', 'Changing the network from the app needs a hub firmware update.'), icon: Icons.system_update_alt)
             else
               section(_tr('تغيير الشبكة والربط', 'Connect & change network'), [
                 TextField(controller: _ssid, textDirection: TextDirection.ltr, autocorrect: false, decoration: InputDecoration(labelText: _tr('اسم الشبكة (2.4GHz)', 'Network name (2.4 GHz)'))),

@@ -64,7 +64,7 @@ extension AppStateHubFirmware on AppState {
   /// Uploads a firmware .bin to the hub's /update page; [progress] gets 0..1. Returns null on success or an error text.
   Future<String?> uploadFirmware(List<int> bytes, String password, void Function(double) progress) async {
     if (bytes.length < 100000 || bytes.first != 0xE9) return 'bad_file';
-    // hub 2.15.26: a member allowed to update the hub uses the phone's key instead of the update password
+    // a member allowed to update the hub uses the phone's key instead of the update password
     return uploadFirmwareBytes(_localUri('/update'), bytes, password, progress, headers: settings.isShared ? _localHeaders : null);
   }
 
@@ -150,9 +150,10 @@ extension AppStateHubFirmware on AppState {
     const int chunkSize = 4096; // 4 KB (1 NOR Flash sector; ~5.5 KB Base64 JSON to prevent ESP32 heap8 exhaustion)
     final int total = bytes.length;
     int offset = 0;
-    final client = http.Client();
+    var client = http.Client();
 
     try {
+      outer:
       while (offset < total) {
         final int end = (offset + chunkSize < total) ? (offset + chunkSize) : total;
         final bool isDone = end >= total;
@@ -166,7 +167,9 @@ extension AppStateHubFirmware on AppState {
 
         http.Response? r;
         Object? lastEx;
-        for (int attempt = 0; attempt < 3; attempt++) {
+        bool landed = false; // the hub already has this chunk (only its answer was lost)
+        int busyWaits = 0;
+        for (int attempt = 0; attempt < 6; attempt++) {
           try {
             r = await client
                 .post(
@@ -180,11 +183,50 @@ extension AppStateHubFirmware on AppState {
                 )
                 .timeout(const Duration(seconds: 15));
             lastEx = null;
+            if (r.statusCode == 409 && busyWaits < 5) {
+              // the hub is still taking its cloud link down for the update: wait, do not fail
+              busyWaits++;
+              r = null;
+              await Future.delayed(const Duration(seconds: 1));
+              attempt--;
+              continue;
+            }
             break;
           } catch (e) {
             lastEx = e;
-            await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+            // a fresh socket for the next try, then ask the hub how far it got instead of guessing
+            client.close();
+            client = http.Client();
+            await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+            final st = await stripFwState();
+            final w = st?['written'];
+            if (w is int) {
+              if (w >= end) {
+                landed = true;
+                lastEx = null;
+                break;
+              }
+              if (w < offset) {
+                // the hub is behind (a sector was not kept): go back to the last 4 KB boundary it has
+                offset = w - (w % chunkSize);
+                continue outer;
+              }
+            }
           }
+        }
+
+        if (landed) {
+          offset = end;
+          progress(offset / total);
+          if (isDone) {
+            final st = await stripFwState();
+            if (st != null && st['valid'] == false) {
+              final why = (st['why'] ?? '').toString();
+              return why.isNotEmpty ? why : 'bad_file';
+            }
+            return null;
+          }
+          continue;
         }
 
         if (lastEx != null || r == null) {

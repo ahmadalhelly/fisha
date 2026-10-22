@@ -7,7 +7,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-/// Owner page: people the hub is shared with (hub 2.9+). Adding and removing people works on the home Wi-Fi.
+/// Owner page: people the hub is shared with. Adding and removing people works on the home Wi-Fi.
 class UsersScreen extends StatefulWidget {
   final AppState state;
   const UsersScreen({super.key, required this.state});
@@ -115,7 +115,7 @@ class _UsersScreenState extends State<UsersScreen> {
               Segmented<int>(value: role, items: {0: t('role_0'), 1: t('role_1'), 2: t('role_2')}, onChanged: (v) => setLocal(() => role = v)),
               const SizedBox(height: 6),
               Text(t('role_${role}_sub'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
-              // hub 2.15.26: what this person may do on top of the role (admins already have all of it)
+              // what this person may do on top of the role (admins already have all of it)
               if (role < 2) ...[
                 const SizedBox(height: 12),
                 Text(t('perm_title'), style: TextStyle(color: C.muted, fontSize: 13)),
@@ -279,7 +279,7 @@ class _UsersScreenState extends State<UsersScreen> {
     ]);
   }
 
-  // 2.0.22 (family page "ب"): one expanded card per member: Google photo, name, email, role, strips and extra permissions
+  // family page "ب": one expanded card per member: Google photo, name, email, role, strips and extra permissions
   Widget _memberCard(HubUser u) {
     final extras = [for (final p in [Perm.auto, Perm.prot, Perm.stripFw, Perm.wifi, Perm.hubFw, Perm.export]) if (u.perms & p != 0) t('perm_$p')];
     return Container(

@@ -8,7 +8,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/strip_card.dart';
 
-/// 2.0.27: everything the native strip widget draws, with the same colors the app uses
+/// everything the native strip widget draws, with the same colors the app uses
 /// (load ring, temperature, volts, Wi-Fi arcs, the badges above each outlet).
 String hexOf(Color c) => '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 

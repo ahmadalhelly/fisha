@@ -120,7 +120,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> with TickerProviderStateM
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                // 2.0.24: language follows the phone by default; this switch flips it right here
+                // language follows the phone by default; this switch flips it right here
                 Align(alignment: AlignmentDirectional.topStart, child: _langSwitch()),
                 // logo: a socket face whose ring is drawn in, then current runs along the wire under it
                 Center(

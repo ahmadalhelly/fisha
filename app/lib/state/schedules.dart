@@ -25,12 +25,12 @@ extension AppStateSchedules on AppState {
     if (r.ok) {
       await loadSchedules();
       _mirrorSoon();
-      _stateNow(); // outlet badges follow at once, even on a hub older than 2.15.2
+      _stateNow(); // outlet badges follow at once, even on a hub older
     }
     return r.ok;
   }
 
-  /// Skip only the next run of a schedule (hub 2.15+), or undo that.
+  /// Skip only the next run of a schedule, or undo that.
   Future<bool> skipNextSchedule(Schedule sc, bool skip) async {
     final r = await api('schedule_skip', {'sid': sc.sid, 'skip': skip});
     _fail(r);

@@ -93,7 +93,7 @@ extension AppStateLocalLink on AppState {
           }
         }
       } catch (_) {
-        // hub older than v2.0, or not on this Wi-Fi
+        // an old hub, or not on this Wi-Fi
       }
       client.close();
       if (sseLive) {

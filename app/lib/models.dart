@@ -18,7 +18,7 @@ class Outlet {
   final bool hasSchedule; // an enabled schedule targets this outlet (or the whole strip)
   final bool hasRule; // an enabled watts/temperature rule watches it
   final double ampLimit; // per-outlet current limit (0 = disabled)
-  final double currentA; // current measured by the strip (hub 1.0.2+); -1 = none, use power / voltage
+  final double currentA; // current measured by the strip; -1 = none, use power / voltage
 
   const Outlet({
     required this.n,
@@ -74,7 +74,7 @@ class Outlet {
         currentA: currentA,
       );
 
-  // hub 2.15.38 "live": only the numbers that change with every strip report
+  // "live": only the numbers that change with every strip report
   Outlet withLive({required bool on, required double powerW, required double energyKwh, required int tempC, required int autoOffInS, double currentA = -1}) => Outlet(
         n: n,
         on: on,
@@ -186,7 +186,7 @@ class Strip {
 
   Strip withMasterLock(bool v) => _with(masterLock: v);
 
-  // hub 2.15.38 "live" event: {"mac","v","r","up","o":[[on,W,kWh,°C,auto_off_in_s] x4]}; names, locks etc. stay as they are
+  // "live" event: {"mac","v","r","up","o":[[on,W,kWh,°C,auto_off_in_s] x4]}; names, locks etc. stay as they are
   Strip withLive(Map<String, dynamic> j) {
     final o = j['o'];
     final outs = <Outlet>[];
@@ -259,7 +259,7 @@ class Schedule {
   int date; // yyyymmdd for one-time
   bool enabled;
   String label;
-  bool skip; // hub 2.15+: the next run is skipped once (set with schedule_skip, not saved through schedule_save)
+  bool skip; // the next run is skipped once (set with schedule_skip, not saved through schedule_save)
   Schedule({this.sid = 0, required this.mac, this.outlet = 1, this.on = true, this.days = 0x3E, this.hh = 8, this.mm = 0, this.date = 0, this.enabled = true, this.label = '', this.skip = false});
   factory Schedule.fromJson(Map<String, dynamic> j) => Schedule(
         sid: _i(j['sid']),
@@ -421,13 +421,13 @@ class Perm {
   static const auto = 1, prot = 2, stripFw = 4, wifi = 8, hubFw = 16, export = 32;
 }
 
-/// A person the owner shared the hub with (hub 2.9+). role 0 view · 1 control · 2 admin.
+/// A person the owner shared the hub with. role 0 view · 1 control · 2 admin.
 class HubUser {
   final String id;
   String name;
   int role;
-  int perms; // extra permissions the owner granted on top of the role, see [Perm] (hub 2.15.26+)
-  final String email; // the member's Google email and photo link (hub 2.15.26+)
+  int perms; // extra permissions the owner granted on top of the role, see [Perm]
+  final String email; // the member's Google email and photo link
   final String photo;
   bool all;
   List<String> strips;

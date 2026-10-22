@@ -12,7 +12,7 @@ import '../widgets/common.dart';
 import '../services/update_service.dart';
 import 'manual_screen.dart' show stripFwDisclaimer;
 
-/// Updates strip firmware through the hub (hub 2.15.8+): upload the .fwr once, pick strips (or all), and the hub
+/// Updates strip firmware through the hub: upload the .fwr once, pick strips (or all), and the hub
 /// updates them one at a time over their normal connection, checking each one's version when it comes back.
 class StripFirmwareScreen extends StatefulWidget {
   final AppState state;

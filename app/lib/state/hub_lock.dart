@@ -2,7 +2,7 @@ part of '../app_state.dart';
 
 /// Hub lock, pairing, joining a hub (moved verbatim from app_state.dart; behavior unchanged).
 extension AppStateHubLock on AppState {
-  // ---------- 2.0.18 hub lock (hub 2.15.13) ----------
+  // ---------- hub lock ----------
   void _setLocked(bool v) {
     if (v == hubLocked) return;
     hubLocked = v;
@@ -28,7 +28,7 @@ extension AppStateHubLock on AppState {
     }
   }
 
-  /// 2.0.24: after the in-app hub setup: this hub's id and address, and the owner key when this phone claimed it.
+  /// after the in-app hub setup: this hub's id and address, and the owner key when this phone claimed it.
   Future<void> applyHubSetup({required String hub, required String ip, String key = ''}) async {
     final j = settings.toJson();
     if (hub.length == 12) j['hubId'] = hub.toUpperCase();
