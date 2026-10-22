@@ -115,7 +115,7 @@ bool vProt = true, vRestore = true, aProt = true;
 uint16_t vMax = 260;
 uint16_t vMin = 180;                               // under-voltage limit (170..260)
 float aMax = 16.0f;
-uint8_t protHoldS = 3;                             // consecutive readings/seconds before protection trip (1..60, default 3)
+uint16_t protHoldS = 3;                            // consecutive readings/seconds before protection trip (1..600 as the strip, default 3)
 char tzZone[16] = "";                              // time zone id from the app's list ("" = the fixed offset below)
 int16_t tzOffsetMin = 180;                         // timezone offset in minutes from UTC (default +180 = Egypt UTC+3)
 volatile uint32_t rebootAt = 0;
@@ -146,9 +146,13 @@ size_t low8 = SIZE_MAX;
 const char* low8Where = "";
 uint32_t low8At = 0;
 uint32_t sseDefer = 0;                  // state pushes put off because no 3 KB block was free
+char low8Uri[48] = "";                 // the request being answered when that low point was in the web step
 inline void low8Check(const char* where) {
   size_t f = heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-  if (f < low8) { low8 = f; low8Where = where; low8At = millis(); }
+  if (f < low8) {
+    low8 = f; low8Where = where; low8At = millis();
+    strlcpy(low8Uri, webUri.c_str(), sizeof low8Uri);
+  }
 }
 struct SubT {
   const char* n; uint32_t t;

@@ -186,7 +186,7 @@ void loadGlobals() {
   vMin = cfg.getUShort("vmin", 180);
   aProt = cfg.getBool("aprot", true);
   aMax = cfg.getFloat("amax", 16.0f);
-  protHoldS = (uint8_t)constrain((int)cfg.getUChar("phold", 3), 1, 60);
+  protHoldS = (uint16_t)constrain((int)cfg.getUShort("phold2", cfg.getUChar("phold", 3)), 1, 600);
   tzOffsetMin = (int16_t)constrain((int)cfg.getShort("tzmin3", 180), -720, 840);
   { String z = cfg.getString("tzzone", ""); strlcpy(tzZone, z.c_str(), sizeof tzZone); }
   schedCount = 0;

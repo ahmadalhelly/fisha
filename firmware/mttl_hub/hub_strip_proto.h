@@ -266,14 +266,14 @@ void sendStripLimits(Strip& s) {
   uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 500, 16500) : 16500;
   uint16_t pw = (uint16_t)constrain((int)STRIP_MAX_W, 50, 3680);
   uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 40, 95) : 95;
-  uint8_t  hs = (uint8_t)constrain((int)protHoldS, 1, 60);
+  uint16_t hs = (uint16_t)constrain((int)protHoldS, 1, 600);
   for (int i = 0; i < autoCount; i++) {
     const Autom& r = autos[i];
     if (!r.enabled || r.act != 1 || !r.above) continue;
     if (strlen(r.mac) && !s.mac.equalsIgnoreCase(r.mac)) continue;
     if (r.metric == 0 && r.watts >= 50.0f && (uint16_t)r.watts < pw) {
       pw = (uint16_t)r.watts;
-      if (r.holdS >= 1 && r.holdS <= 60) hs = (uint8_t)r.holdS;
+      if (r.holdS >= 1 && r.holdS <= 600) hs = r.holdS;
     }
   }
   sendLine(s, "up:limits:" + String(uv) + ":" + String(ov) + ":" + String(ma) + ":" +

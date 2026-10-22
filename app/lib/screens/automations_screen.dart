@@ -270,7 +270,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           ValueStepper(
             value: s.protHoldS.toDouble(),
             min: 1,
-            max: 30,
+            max: 600,
             step: 1,
             unit: 's',
             onChanged: (v) => s.setStripProtection(holdSeconds: v.round()),
@@ -314,7 +314,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           ValueStepper(
             value: s.tempMax.toDouble(),
             min: 40,
-            max: 90,
+            max: 95,
             step: 1,
             unit: '°C',
             enabled: s.tempProtect,
