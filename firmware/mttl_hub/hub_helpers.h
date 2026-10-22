@@ -195,7 +195,7 @@ String wifiReasonsJson() {
   for (int i = 0; i < 64; i++) {
     if (!wifiReasonCnt[i]) continue;
     if (j.length() > 1) j += ",";
-    j += "\"" + String(i) + "\":" + String(wifiReasonCnt[i]);
+    j += "\"" + (i < 48 ? String(i) : i < 63 ? String(i + 152) : String("other")) + "\":" + String(wifiReasonCnt[i]);
   }
   return j + "}";
 }

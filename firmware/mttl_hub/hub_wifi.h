@@ -351,14 +351,14 @@ void setup() {
                  if (!provRequested && provState != "running") {
                    uint8_t rs = info.wifi_sta_disconnected.reason;
                    wifiLastReason = rs;
-                   if (WiFi.status() == WL_CONNECTED || !wifiFirstReason) wifiFirstReason = rs;
-                   wifiReasonCnt[rs < 63 ? rs : 63]++;
+                   if (!wifiFirstReason) wifiFirstReason = rs;   // cleared on STA_CONNECTED (this same event task)
+                   wifiReasonCnt[rs < 48 ? rs : (rs >= 200 && rs < 215) ? rs - 152 : 63]++;   // 200.. = ESP-IDF's own codes
                    wifiDiscCount++;
                    wifiDiscAt = millis();
                  }
                },
                ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { provStaEvents++; wifiFirstReason = 0; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
   { Preferences p; p.begin("stripfw", true); stripFwSize = p.getUInt("size", 0); p.end(); }
   if (stripFwSize) { stripFwOk = stripFwCheck(stripFwSize, stripFwWhy); if (!stripFwOk) Serial.printf("[strip-ota] stored file refused: %s\n", stripFwWhy.c_str()); }
   connectWiFi();
@@ -482,9 +482,11 @@ void loop() {
     wifiWasConnected = false;
     if (!wifiLostAt) wifiLostAt = millis();
     // setAutoReconnect(true) already retries; a manual reconnect() every few seconds cut each attempt short (and logged
-    // "station leaving"), so it only steps in when the driver has failed for half a minute
+    // "station leaving"), so it only steps in when the driver has failed for half a minute, or sooner when the driver
+    // is not retrying at all (no new failure for 10 s: the core retries only some reasons, not e.g. 8 or 36)
     static uint32_t lastRecon = 0;
-    if (millis() - wifiLostAt > 30000 && millis() - lastRecon > 20000) {
+    uint32_t waitMs = millis() - wifiDiscAt > 10000 ? 10000 : 30000;
+    if (millis() - wifiLostAt > waitMs && millis() - lastRecon > 20000) {
       lastRecon = millis();
       WiFi.reconnect();
     }
@@ -500,7 +502,6 @@ void loop() {
     startStripListener();
   }
   wifiLostAt = 0;
-  wifiFirstReason = 0;
   // every home Wi-Fi loss goes to the event log with its reason code and how long it lasted,
   // counted from the driver so a drop that heals between two loop passes (a stalled loop) is not missed
   static uint32_t wifiDiscSeen = 0;

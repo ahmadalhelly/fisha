@@ -657,6 +657,10 @@ void handleSuChunk() {
   // took a quarter of the internal RAM that Wi-Fi and the sockets need
   size_t pad = (b64Len >= 1 && b64Ptr[b64Len - 1] == '=') + (b64Len >= 2 && b64Ptr[b64Len - 2] == '=');
   size_t decLen = (b64Len % 4 == 0) ? b64Len / 4 * 3 - pad : 0;
+  // check the whole chunk before writing any piece: a bad character in a late piece must not leave the early ones in
+  // flash (a retry of the chunk would write over them without an erase)
+  size_t need = 0;
+  if (mbedtls_base64_decode(nullptr, 0, &need, b64Ptr, b64Len) != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || need != decLen) decLen = 0;
   if (decLen == 0 || off + decLen > STRIP_FW_MAX) {
     stripFwErr = true;
     web.send(400, "application/json", "{\"ok\":false,\"error\":\"base64 decode failed\"}");

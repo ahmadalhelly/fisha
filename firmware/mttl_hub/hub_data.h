@@ -130,7 +130,7 @@ bool stripListenerReady = false;
 bool wifiWasConnected = false;
 volatile uint8_t wifiLastReason = 0;    // why the hub last lost the home Wi-Fi (ESP-IDF reason code)
 volatile uint8_t wifiFirstReason = 0;   // the reason of the first drop of the current outage (later ones are often our own reconnect)
-volatile uint16_t wifiReasonCnt[64] = {0};  // drops by reason code (codes above 63 count under 63)
+volatile uint16_t wifiReasonCnt[64] = {0};  // drops by reason code: 0..47 as is, 48..62 = codes 200..214, 63 = any other
 volatile uint32_t wifiDiscCount = 0;    // home Wi-Fi disconnects since boot (outside provisioning)
 volatile uint32_t wifiDiscAt = 0;       // millis() of the last of those disconnects
 uint32_t stallMaxMs = 0;                // longest single loop step since boot, and which one
