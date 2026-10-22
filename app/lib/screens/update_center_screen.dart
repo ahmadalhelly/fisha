@@ -41,6 +41,10 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
   }
 
   String? _current(String kind) => kind == 'app' ? appVersion : s.hubFw;
+  int _currentBuild(String kind) => kind == 'app' ? appBuild : s.hubBuild;
+
+  /// "1.2.0 · build 84": the version and the CI build, since one version can come in several builds
+  String _withBuild(String version, int build) => build > 0 ? '$version · ${_tr('بناء', 'build')} $build' : version;
 
   String _when(DateTime t) => '${t.day}/${t.month} · ${fmtTime12(t.hour, t.minute)}';
 
@@ -122,13 +126,18 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
     });
   }
 
-  /// The release whose version matches the one actually installed, if it is still published.
+  /// The release actually installed, if it is still published: the same build first (one version can have
+  /// several builds, each with its own notes), else the same version.
   Release? _releaseFor(String kind, String? version) {
     if (version == null || version.isEmpty) return null;
+    final build = kind == 'strip' ? 0 : _currentBuild(kind);
+    Release? sameVersion;
     for (final r in u.releases) {
-      if (r.kind == kind && compareVersions(r.version, version) == 0) return r;
+      if (r.kind != kind || compareVersions(r.version, version) != 0) continue;
+      if (build > 0 && r.build == build) return r;
+      sameVersion ??= r;
     }
-    return null;
+    return sameVersion;
   }
 
   /// The notes of the release (every line of them), under the version: the one installed now and the new one available.
@@ -182,7 +191,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                         ? (pend
                             ? _tr('في مشتركات محتاجة تحديث', 'Some strips need an update')
                             : _tr('كل المشتركات محدّثة', 'All strips are up to date'))
-                        : ((_current(kind)?.isEmpty ?? true) ? '—' : _current(kind)!),
+                        : ((_current(kind)?.isEmpty ?? true) ? '—' : _withBuild(_current(kind)!, _currentBuild(kind))),
                     textDirection: kind == 'strip' ? null : TextDirection.ltr,
                     style: TextStyle(color: C.muted, fontSize: 11.5),
                   ),
@@ -219,7 +228,7 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                         disabledForegroundColor: C.faint,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      child: Text(pend ? _tr('حدّث لـ ${latest!.version}', 'Update to ${latest.version}') : _tr('آخر نسخة', 'Up to date'),
+                      child: Text(pend ? _tr('حدّث لـ ${_withBuild(latest!.version, latest.build)}', 'Update to ${_withBuild(latest.version, latest.build)}') : _tr('آخر نسخة', 'Up to date'),
                           style: const TextStyle(fontWeight: FontWeight.w700)),
                     ),
                   ),
@@ -229,13 +238,13 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                 ],
                 const SizedBox(height: 10),
                 if (pend && latest != null) ...[
-                  Text(_genericNote(latest.version, latest, _tr('جديد', 'New')), style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
+                  Text(_genericNote(_withBuild(latest.version, latest.build), latest, _tr('جديد', 'New')), style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
                   if (cur != null && cur.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Text(_genericNote(cur, _releaseFor(kind, cur), _tr('الحالي', 'Current')), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
+                    Text(_genericNote(_withBuild(cur, _currentBuild(kind)), _releaseFor(kind, cur), _tr('الحالي', 'Current')), style: TextStyle(color: C.muted, fontSize: 12, height: 1.6)),
                   ],
                 ] else if (cur != null && cur.isNotEmpty)
-                  Text(_genericNote(cur, _releaseFor(kind, cur) ?? latest, _tr('آخر نسخة عندك', 'Your current version')),
+                  Text(_genericNote(_withBuild(cur, _currentBuild(kind)), _releaseFor(kind, cur) ?? latest, _tr('آخر نسخة عندك', 'Your current version')),
                       style: TextStyle(color: C.textSoft, fontSize: 12.5, height: 1.6)),
               ],
             ]),
@@ -415,8 +424,8 @@ class _UpdateCenterScreenState extends State<UpdateCenterScreen> {
                       s.hubs[i].fw.isEmpty
                           ? _tr('نسخته مش معروفة لسه. بدّل له مرة عشان تظهر.', 'Its version is not known yet. Switch to it once.')
                           : u.newer('hub', s.hubs[i].fw, build: s.hubs[i].build) != null
-                              ? _tr('v${s.hubs[i].fw} · فيه تحديث', 'v${s.hubs[i].fw} · update available')
-                              : _tr('v${s.hubs[i].fw} · محدّث', 'v${s.hubs[i].fw} · up to date'),
+                              ? _tr('${_withBuild(s.hubs[i].fw, s.hubs[i].build)} · فيه تحديث', '${_withBuild(s.hubs[i].fw, s.hubs[i].build)} · update available')
+                              : _tr('${_withBuild(s.hubs[i].fw, s.hubs[i].build)} · محدّث', '${_withBuild(s.hubs[i].fw, s.hubs[i].build)} · up to date'),
                       style: TextStyle(
                           color: s.hubs[i].fw.isNotEmpty && u.newer('hub', s.hubs[i].fw, build: s.hubs[i].build) != null ? C.warn : C.muted, fontSize: 12),
                     ),
