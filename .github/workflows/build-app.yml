@@ -150,39 +150,6 @@ jobs:
           files: Fisha-${{ steps.ver.outputs.v }}-${{ github.run_number }}.apk
           body_path: PUBLIC_NOTES.md
 
-      - name: Save build log to the ci-logs branch
-        if: always()
-        continue-on-error: true
-        working-directory: .
-        run: |
-          [ -f build.log ] || echo "no build log" > build.log
-          tail -c 60000 build.log > /tmp/build.log
-          echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > /tmp/STATUS.txt
-          git config user.name "ci-bot"
-          git config user.email "ci-bot@users.noreply.github.com"
-          git checkout --orphan ci-logs-tmp
-          git rm -rf --cached . > /dev/null 2>&1 || true
-          cp /tmp/build.log /tmp/STATUS.txt .
-          git add -f build.log STATUS.txt
-          git commit -m "CI log for run ${{ github.run_number }}"
-          git push -f origin HEAD:ci-logs || true
-
-  # After every build: remove the Actions runs, artifacts and caches of earlier builds of this workflow, so the
-  # storage quota never fills up. Kept: the newest successful run per branch (the release notes compare against it),
-  # runs still in progress, and the caches of this build. Runs before this one only; never the current run.
-  cleanup:
-    needs: build
-    if: always()
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      CUR: ${{ github.run_id }}
-      WF: build-app.yml
-    steps:
       - name: Delete earlier runs, artifacts and caches of this workflow
         continue-on-error: true
         run: |

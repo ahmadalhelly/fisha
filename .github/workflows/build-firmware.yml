@@ -165,41 +165,6 @@ jobs:
           body: |
             - تحديث فيرموير المشترك
 
-      # last step: it switches the checkout to an orphan branch
-      - name: Save build log to the ci-logs-fw branch
-        if: always()
-        continue-on-error: true
-        run: |
-          [ -f build10.log ] || echo "no build log" > build10.log
-          tail -c 60000 build10.log > /tmp/build10.log
-          cp fisha-hub-*.bin /tmp/ 2>/dev/null || true
-          echo "run=${{ github.run_number }} sha=${{ github.sha }} status=${{ job.status }}" > /tmp/STATUS.txt
-          git config user.name "ci-bot"
-          git config user.email "ci-bot@users.noreply.github.com"
-          git checkout -q --orphan ci-logs-fw-tmp
-          git rm -rf -q --cached . > /dev/null 2>&1 || true
-          cp /tmp/build10.log /tmp/STATUS.txt .
-          cp /tmp/fisha-hub-*.bin . 2>/dev/null || true
-          git add -f build10.log STATUS.txt fisha-hub-*.bin 2>/dev/null || git add -f build10.log STATUS.txt
-          git commit -q -m "hub build log, run ${{ github.run_number }}"
-          git push -f origin HEAD:ci-logs-fw || true
-
-  # After every build: remove the Actions runs, artifacts and caches of earlier builds of this workflow, so the
-  # storage quota never fills up. Kept: the newest successful run per branch (the release notes compare against it),
-  # runs still in progress, and the caches of this build. Runs before this one only; never the current run.
-  cleanup:
-    needs: build
-    if: always()
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      REPO: ${{ github.repository }}
-      CUR: ${{ github.run_id }}
-      WF: build-firmware.yml
-    steps:
       - name: Delete earlier runs, artifacts and caches of this workflow
         continue-on-error: true
         run: |
