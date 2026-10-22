@@ -258,7 +258,17 @@ class _EventsScreenState extends State<EventsScreen> {
           builder: (context, _) {
             final mine = _mine;
             final sys = _sys;
-            return RefreshIndicator(
+            // a swipe toward the other tab switches to it (in Arabic the system log is on the left), and the list slides in
+            return GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragEnd: (d) {
+                final v = d.primaryVelocity ?? 0;
+                if (v.abs() < 300) return;
+                final rtl = Directionality.of(context) == TextDirection.rtl;
+                final toSystem = rtl ? v > 0 : v < 0;
+                if (toSystem != _system) setState(() => _system = toSystem);
+              },
+              child: RefreshIndicator(
               color: C.accent,
               onRefresh: s.loadEvents,
               child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 24), children: [
@@ -269,6 +279,19 @@ class _EventsScreenState extends State<EventsScreen> {
                 ),
                 const SizedBox(height: 4),
                 if (!s.hubV2) ...[const SizedBox(height: 8), emptyCard(t('err_old_fw'))],
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 260),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, anim) {
+                    final rtl = Directionality.of(context) == TextDirection.rtl;
+                    final fromRight = (child.key == const ValueKey(true)) != rtl;
+                    return FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(position: Tween(begin: Offset(fromRight ? 0.25 : -0.25, 0), end: Offset.zero).animate(anim), child: child),
+                    );
+                  },
+                  child: Column(key: ValueKey(_system), crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 if (_system && s.hubV2) ...[
                   const SizedBox(height: 10),
                   SingleChildScrollView(
@@ -287,7 +310,10 @@ class _EventsScreenState extends State<EventsScreen> {
                   if (mine.isEmpty) ...[const SizedBox(height: 8), emptyCard(t('events_mine_empty'), icon: Icons.notifications_none)],
                   ..._grouped(mine, (e, i) => _card(e, i < _newCount)),
                 ],
+                  ]),
+                ),
               ]),
+            ),
             );
           },
         ),

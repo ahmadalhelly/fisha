@@ -34,11 +34,11 @@ class AboutScreen extends StatelessWidget {
         (Icons.child_care, _tr('قفل الأطفال', 'Child lock'),
             _tr('بتقفل الأزرار على المشترك نفسه أو على مخرج معيّن، والإعداد بيتحفظ جوه المشترك فيفضل شغال حتى لو الهاب أو النت فاصل.', 'Locks the buttons of the strip or of one outlet. It is stored inside the strip, so it works even when the hub or the internet is down.')),
         (Icons.shield_outlined, _tr('الحماية', 'Protection'),
-            _tr('حد الوات ومهلة الفصل محفوظين جوه المشترك وبيشتغلوا حتى من غير الهاب، ومعاهم حماية ثابتة في المشترك عند 16 أمبير و80 درجة. حدود الفولت والأمبير والحرارة اللي بتختارها بينفذها الهاب، وبيتأكد إن المخرج اتقفل، والإشعار بيوصلك دايماً.', 'The watt limit and the trip delay are stored inside the strip and work without the hub, along with the strip\'s fixed 16 A and 80 °C protection. The voltage, current and temperature limits you choose are enforced by the hub, which checks the outlet really went off; the alert always reaches you.')),
+            _tr('حدود الفولت والتيار والحمل والحرارة بتتنفذ في المشترك لحظياً، والهاب بيتأكد إن المخرج اتقفل ويعيد الأمر لو لزم، والإشعار بيوصلك دايماً.', 'Voltage, current, load and temperature limits are enforced inside the strip instantly; the hub checks the outlet really went off and resends if needed, and the alert always reaches you.')),
         (Icons.restart_alt, _tr('إعادة تشغيل المخرج', 'Outlet restart'),
             _tr('فصل ورجوع بعد مدة تحددها، بزرار أو بتكرار مجدول. الدورة محفوظة جوه المشترك وبتكمل من غير الهاب.', 'Off, then back on after a delay you choose, by button or on a repeating schedule. The cycle is stored in the strip and keeps running without the hub.')),
         (Icons.schedule, _tr('الجدولة', 'Scheduling'),
-            _tr('الهاب بينفذ كل الجداول والمؤقتات. وميعاد واحد بيتحفظ كمان جوه المشترك وبيتنفذ على ساعته لو الهاب فاصل، كل يوم، والهاب بيظبط له الساعة والتوقيت الصيفي لوحده.', 'The hub runs every schedule and timer. One time is also stored in the strip and runs on its own clock, every day, when the hub is offline; the hub keeps that clock set, summer time included.')),
+            _tr('جداول تشغيل وإيقاف ومؤقتات بتتحفظ في المشترك. لو الهاب فاصل المشترك بينفذها على ساعته، والهاب بيظبط له الساعة والتوقيت الصيفي لوحده.', 'On/off schedules and timers are stored in the strip. When the hub is offline the strip runs them on its own clock, which the hub keeps set, including summer time.')),
       ];
 
   static List<(IconData, String)> get _features => [
