@@ -141,10 +141,20 @@ const char* subWhere = "";
 const char* subWorstWhere = "";
 String webUri;                          // the request the web step was answering (named in a "web" stall)
 uint32_t webSlow = 0;                   // answers cut short because the phone stopped reading
+// the lowest internal RAM the loop has seen, and the step that had just run (heap8_min says how low, this says where)
+size_t low8 = SIZE_MAX;
+const char* low8Where = "";
+uint32_t low8At = 0;
+uint32_t sseDefer = 0;                  // state pushes put off because no 3 KB block was free
+inline void low8Check(const char* where) {
+  size_t f = heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+  if (f < low8) { low8 = f; low8Where = where; low8At = millis(); }
+}
 struct SubT {
   const char* n; uint32_t t;
   SubT(const char* n_) : n(n_), t(millis()) {}
   ~SubT() {
+    low8Check(n);
     uint32_t d = millis() - t;
     if (d > subMax) { subMax = d; subWhere = n; }
     if (d > subWorst) { subWorst = d; subWorstWhere = n; }

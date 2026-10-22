@@ -1,5 +1,6 @@
 // Function prototypes for mttl_hub.ino (the list the Arduino/PlatformIO builder would generate), kept explicit now that the code is split into several files.
 String defOta();
+inline void low8Check(const char* where);
 bool isHex(const String& s);
 String jsonEsc(const String& v);
 void jsonSkipWs(const String& body, int& p);

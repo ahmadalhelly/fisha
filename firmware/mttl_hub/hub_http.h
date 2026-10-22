@@ -104,6 +104,8 @@ void handleHealth() {
            ",\"max_strips\":" + String(MAX_STRIPS) + ",\"sockets\":" + String(CONFIG_LWIP_MAX_SOCKETS) +
            ",\"heap8\":" + String(heap_caps_get_free_size(MALLOC_CAP_8BIT)) + ",\"heap8_max\":" + String(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)) +
            ",\"heap8_min\":" + String(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)) +
+           ",\"low8\":" + String(low8 == SIZE_MAX ? 0 : (uint32_t)low8) + ",\"low8_where\":\"" + String(low8Where) + "\",\"low8_ago_s\":" + String(low8At ? (millis() - low8At) / 1000 : 0) +
+           ",\"sse_defer\":" + String(sseDefer) +
            ",\"wifi_drops\":" + String(wifiDiscCount) + ",\"wifi_reason\":" + String(wifiLastReason) + ",\"wifi_first\":" + String(wifiFirstReason) + ",\"wifi_reasons\":" + wifiReasonsJson() +
            ",\"stall_max_ms\":" + String(stallMaxMs) + ",\"stall_where\":\"" + String(stallWhere) + "\",\"stall_sub\":\"" + String(subWorstWhere) + " " + String(subWorst) + " ms\",\"web_slow\":" + String(webSlow) + ",\"wifi_move\":\"" + jsonEsc(wifiMoveInfo) + "\"" + nvsStatsJson() + ",\"fs\":" + (fsOk ? "true" : "false") +
            ",\"reset\":\"" + resetText() + "\",\"job\":" + String((int)exJob.state) + ",\"wifi_rssi\":" + String(WiFi.RSSI()) + "}");

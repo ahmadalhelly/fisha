@@ -232,16 +232,23 @@ void ssePump() {
   // network buffers among them) and nearly every live stream got cut.
   // a strip report only changes numbers, so it sends "live" (~170 bytes a strip); the full state goes out when
   // anything else changed (names, locks, settings, a strip came or went, ...) and every 15 s as a safety net.
+  // with no 3 KB block free the push waits (the flags stay set): the network buffers come first, and the phones
+  // get the state a moment later
+  // (the largest-block query walks the whole heap under its lock, so it is only asked when a push is due and a phone listens)
   if ((stateDirty || liveDirty) && millis() - lastSsePush > 1000) {
-    bool full = stateDirty || millis() - lastSseFull > 15000;
-    if (stateDirty) mqttHeadDirty = true;
-    stateDirty = false;
-    liveDirty = false;
-    lastSsePush = millis();
-    if (full) lastSseFull = millis();
     bool any = false;
     for (int i = 0; i < MAX_SSE; i++) any |= sse[i].used && sse[i].ready;
-    if (any) ssePush(full);
+    if (any && heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL) < 3072) {
+      sseDefer++; lastSsePush = millis() - 750;   // look again in 250 ms
+    } else {
+      bool full = stateDirty || millis() - lastSseFull > 15000;
+      if (stateDirty) mqttHeadDirty = true;
+      stateDirty = false;
+      liveDirty = false;
+      lastSsePush = millis();
+      if (full) lastSseFull = millis();
+      if (any) ssePush(full);
+    }
   }
   if (millis() - lastSseBeat > 15000) {
     lastSseBeat = millis();

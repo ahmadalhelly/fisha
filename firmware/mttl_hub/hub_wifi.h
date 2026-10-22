@@ -410,6 +410,7 @@ void stg(const char* next) {
   uint32_t now = millis(), d = now - stgAt;
   const char* was = stgName;
   stgName = next; stgAt = now;
+  low8Check(was);
   if (d > stallMaxMs) { stallMaxMs = d; stallWhere = was; }
   uint32_t sm = subMax; const char* sw = subWhere;
   subMax = 0; subWhere = "";
