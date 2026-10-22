@@ -392,8 +392,7 @@ void mqttMemTick() {
       mqttUnlock();
       mqttGated = true; mqttGateN++; mqttGateAt = now;
       sseShedAll();                                // the live streams are the biggest thing that can be given back
-      Serial.printf("[mqtt] parked: largest free block %u < %u
-", (unsigned)big, (unsigned)MQTT_TLS_NEED);
+      Serial.printf("[mqtt] parked: largest free block %u < %u\n", (unsigned)big, (unsigned)MQTT_TLS_NEED);
     }
     return;
   }
