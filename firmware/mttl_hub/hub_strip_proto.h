@@ -259,12 +259,14 @@ void askCurrent(Strip& s) {
 
 void sendStripLimits(Strip& s) {
   if (stripFwNum(s.fw) < 90) return;
-  uint16_t uv = vProt ? vMin : 150;
-  uint16_t ov = vMax;
-  uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 1000, 16500) : 16500;
-  uint16_t pw = (uint16_t)STRIP_MAX_W;
-  uint8_t  tp = tempProtect ? tempMax : 90;
-  uint8_t  hs = protHoldS;
+  // every field inside the range the strip accepts (F1.0.93 puts a field outside it back to its default, one by one);
+  // a protection that is off goes to the edge of its range so the strip never trips on it
+  uint16_t uv = vProt ? (uint16_t)constrain((int)vMin, 100, 220) : 100;
+  uint16_t ov = (uint16_t)constrain((int)vMax, 220, 280);
+  uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 500, 16500) : 16500;
+  uint16_t pw = (uint16_t)constrain((int)STRIP_MAX_W, 50, 3680);
+  uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 40, 95) : 95;
+  uint8_t  hs = (uint8_t)constrain((int)protHoldS, 1, 60);
   for (int i = 0; i < autoCount; i++) {
     const Autom& r = autos[i];
     if (!r.enabled || r.act != 1 || !r.above) continue;
@@ -282,8 +284,9 @@ void sendStripOfflineSched(Strip& s) {
   if (stripFwNum(s.fw) < 90) return;
   for (int i = 0; i < schedCount; i++) {
     const Sched& c = scheds[i];
-    if (!c.enabled || !s.mac.equalsIgnoreCase(c.mac)) continue;
-    uint8_t days = c.days ? (c.days & 0x7F) : 0x7F;
+    // a one-time schedule (a date, no weekdays) stays with the hub: the strip would repeat it every day
+    if (!c.enabled || !c.days || !s.mac.equalsIgnoreCase(c.mac)) continue;
+    uint8_t days = c.days & 0x7F;                // bit 0 = Sunday, as tm_wday (the strip uses the same bits)
     uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
     sendLine(s, "up:sched:" + String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm));
     return;
