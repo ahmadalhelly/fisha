@@ -87,6 +87,7 @@ extension AppStateBackup on AppState {
             'v_min': vMin,
             'a_protect': aProtect,
             'a_max': aMax,
+            'w_max': wMax,
             'hold_s': protHoldS,
             'tz_min': tzOffsetMin,
             'tz_zone': tzZone,
@@ -248,7 +249,7 @@ extension AppStateBackup on AppState {
       final prot = <String, dynamic>{
         for (final k in ['v_protect', 'v_restore', 'a_protect'])
           if (cfg[k] is bool) k: cfg[k],
-        for (final k in ['v_max', 'v_min', 'a_max', 'hold_s', 'tz_min'])
+        for (final k in ['v_max', 'v_min', 'a_max', 'w_max', 'hold_s', 'tz_min'])
           if (cfg[k] is num) k: cfg[k],
       };
       // a zone (with its summer-time rule) wins over the fixed offset; sending both would clear the zone on the hub

@@ -14,12 +14,12 @@ String _x(String ar, String en) => Tr.isAr ? ar : en;
 /// Hub setup (design: pairing card + ring). A card rises over the screen ("we found Fisha Hub near you");
 /// "Set it up" grows the same card to full screen, where only the Wi-Fi password is asked (the network name is the
 /// one the phone is on; address and hub password sit under "advanced" with their defaults).
-Future<void> showHubSetup(BuildContext context, AppState s, {String? hubSsid}) => showModalBottomSheet(
+Future<void> showHubSetup(BuildContext context, AppState s, {String? hubSsid, bool forceNew = false}) => showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.55),
-      builder: (_) => HubSetupSheet(state: s, hubSsid: hubSsid),
+      builder: (_) => HubSetupSheet(state: s, hubSsid: hubSsid, forceNew: forceNew),
     );
 
 /// Looks for a hub in setup mode now and then while the home screen is open (only when location is already allowed),
@@ -58,7 +58,9 @@ class HubSetupWatcher {
 class HubSetupSheet extends StatefulWidget {
   final AppState state;
   final String? hubSsid;
-  const HubSetupSheet({super.key, required this.state, this.hubSsid});
+  // opened to add one more hub: never shows the "already linked" card
+  final bool forceNew;
+  const HubSetupSheet({super.key, required this.state, this.hubSsid, this.forceNew = false});
 
   @override
   State<HubSetupSheet> createState() => _HubSetupSheetState();
@@ -90,7 +92,7 @@ class _HubSetupSheetState extends State<HubSetupSheet> {
   void initState() {
     super.initState();
     _hub = widget.hubSsid;
-    _linked = widget.hubSsid == null && s.mode != ConnMode.offline && s.settings.hubId.isNotEmpty;
+    _linked = !widget.forceNew && widget.hubSsid == null && s.mode != ConnMode.offline && s.settings.hubId.isNotEmpty;
     _ip.text = s.settings.localHost.isNotEmpty ? s.settings.localHost : '192.168.1.100';
   }
 

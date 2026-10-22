@@ -178,6 +178,7 @@ void saveAutos() {
 
 void loadGlobals() {
   tempMax = cfg.getUChar("tmax", 80);
+  STRIP_MAX_W = (float)constrain((int)cfg.getUShort("wmax", 3500), 500, 3680);
   tempProtect = cfg.getBool("tprot", true);
   vProt = cfg.getBool("vprot", true);
   vRestore = cfg.getBool("vrest", true);

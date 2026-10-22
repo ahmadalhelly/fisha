@@ -26,6 +26,8 @@ class AboutScreen extends StatelessWidget {
             _tr('AES-256 بباسورد محفوظ وبصمة، واختيار ما يتزامن مع جوجل.', 'AES-256 with a saved password and fingerprint, and a choice of what syncs with Google.')),
         (Icons.swipe, _tr('السحب بين التابات وأيقونات الشبكة', 'Tab swipe and network icons'),
             _tr('اسحب بين التابات. وأيقونات جديدة للراوتر والمودم والسويتش، ولون هادي لإشارة الواي فاي.', 'Swipe between tabs. New router, modem and switch icons and a calmer Wi-Fi signal colour.')),
+        (Icons.tune, _tr('حدود الحماية وأتمتة الهاب كله', 'Protection limits and hub-wide automation'),
+            _tr('أقصى وات للمشترك مع الفولت والأمبير والحرارة في الإعدادات ← حدود الحماية، وقاعدة أتمتة واحدة تتنفذ على كل المشتركات.', 'A maximum wattage per strip with voltage, amps and temperature under Settings → Protection limits, and one automation rule that covers every strip.')),
         (Icons.child_care, _tr('قفل الأطفال', 'Child lock'),
             _tr('بتقفل الأزرار على المشترك نفسه أو على مخرج معيّن، والإعداد بيتحفظ جوه المشترك فيفضل شغال حتى لو الهاب أو النت فاصل.', 'Locks the buttons of the strip or of one outlet. It is stored inside the strip, so it works even when the hub or the internet is down.')),
         (Icons.shield_outlined, _tr('الحماية', 'Protection'),

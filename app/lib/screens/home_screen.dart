@@ -20,7 +20,7 @@ import 'events_screen.dart';
 import 'outlet_sheet.dart' show roomCycleDialog, roomLoopDialog, openOutletSheet, openStripSheet;
 import 'rooms_screen.dart';
 import 'schedules_screen.dart' show ScheduleEditor;
-import 'scenes_screen.dart';
+import 'scenarios_screen.dart';
 import 'update_center_screen.dart';
 import 'lock_screen.dart';
 import '../services/update_service.dart';
@@ -237,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // a small banner when the hub or the app has a newer build; closing it hides it until the next version
   /// the name of the hub in use; shown only when there are several, and opens the switcher
   Widget _hubChip() {
-    if (s.hubs.length < 2) return const SizedBox.shrink();
+    if (s.hubs.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Align(
@@ -342,7 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _summary(),
       const SizedBox(height: 12),
       Row(children: [
-        Expanded(child: _quick(null, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenesScreen(state: s)))),
+        Expanded(child: _quick(null, Tr.isAr ? 'السيناريوهات' : 'Scenarios', () => _push(ScenariosScreen(state: s)))),
         const SizedBox(width: 8),
         Expanded(child: _quick(Icons.schedule, t('q_sched'), () => s.setTab(1))),
         const SizedBox(width: 8),

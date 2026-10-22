@@ -5,6 +5,7 @@ import '../i18n.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'scenes_screen.dart';
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -255,6 +256,27 @@ class _ScenariosScreenState extends State<ScenariosScreen> {
           color: C.accent,
           onRefresh: _load,
           child: ListView(padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ScenesScreen(state: s))),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: cardBox(radius: 18),
+                child: Row(children: [
+                  Icon(Icons.touch_app_outlined, color: C.accent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_tr('مجموعات بضغطة واحدة', 'One-tap groups'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Text(_tr('«خروج من البيت» و«النوم»: تضبط كذا مخرج مرة واحدة.', '"Leaving home", "Night": set several outlets at once.'),
+                          style: TextStyle(color: C.muted, fontSize: 12, height: 1.4)),
+                    ]),
+                  ),
+                  Icon(Icons.chevron_right, color: C.muted),
+                ]),
+              ),
+            ),
             if (_loading) const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator()))
             else if (_failed) emptyCard(_tr('الهاب مش بيرد على السيناريوهات. حدّث الهاب لآخر نسخة.', 'The hub does not answer. Update the hub to the latest version.'), icon: Icons.bolt)
             else ...[

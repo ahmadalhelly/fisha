@@ -225,6 +225,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
           widths: const [0.2, 0.34, 0.12, 0.17, 0.17],
           rtl: Tr.isAr,
           chart: fmt == 'pdf' ? chart : const [],
+          chartPng: fmt == 'pdf' ? await _chartPng() : null,
           chartTitle: _tr('الاستهلاك اليومي (kWh)', 'Daily use (kWh)'),
         );
         bytes = fmt == 'pdf' ? await buildPdf(table) : buildDocx(table);

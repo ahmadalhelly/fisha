@@ -104,18 +104,67 @@ class HubsScreen extends StatelessWidget {
                 ),
             ]),
           ),
-          floatingActionButton: HubSetup.supported
-              ? FloatingActionButton.extended(
-                  backgroundColor: C.accent,
-                  foregroundColor: C.onAccent,
-                  onPressed: () => showHubSetup(context, state),
-                  icon: const Icon(Icons.add),
-                  label: Text(_tr('إضافة هاب', 'Add a hub')),
-                )
-              : null,
+          floatingActionButton: FloatingActionButton.extended(
+            backgroundColor: C.accent,
+            foregroundColor: C.onAccent,
+            onPressed: () => addHubFlow(context, state),
+            icon: const Icon(Icons.add),
+            label: Text(_tr('إضافة هاب', 'Add a hub')),
+          ),
         );
       },
     );
+  }
+}
+
+/// Add a hub: looks for a hub that waits to be set up (its own Fisha-Hub-XXXX network). Found: the setup card opens on it.
+/// Not found: say so, with a retry and a way to type the Wi-Fi by hand.
+Future<void> addHubFlow(BuildContext context, AppState state) async {
+  if (!HubSetup.supported) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_tr('إضافة هاب جديد من تطبيق الأندرويد.', 'Add a hub from the Android app.'))));
+    return;
+  }
+  while (context.mounted) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: C.surface,
+          content: Row(children: [
+            const SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 3)),
+            const SizedBox(width: 16),
+            Expanded(child: Text(_tr('بيدوّر على هاب جديد جنبك…', 'Looking for a new hub nearby…'))),
+          ]),
+        ),
+      ),
+    );
+    List<String> found = const [];
+    if (await HubSetup.permission(ask: true)) found = await HubSetup.scanHubs();
+    if (!context.mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    if (found.isNotEmpty) {
+      await showHubSetup(context, state, hubSsid: found.first, forceNew: true);
+      return;
+    }
+    final again = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        title: Text(_tr('مفيش هاب جديد قدامي', 'No new hub nearby')),
+        content: Text(_tr('وصّل الهاب بالكهربا واستنى دقيقة وقرّب الموبايل منه. الهاب الجديد بيفتح شبكة اسمها Fisha-Hub. ولو الهاب متظبّط على شبكة البيت فعلاً، اكتب بياناته بإيدك.',
+            'Power the hub, wait a minute and bring the phone closer. A new hub opens a network called Fisha-Hub. If it is already on your home network, enter it by hand.')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(t('cancel'), style: TextStyle(color: C.muted))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'hand'), child: Text(_tr('بإيدي', 'By hand'), style: TextStyle(color: C.muted))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'again'), child: Text(_tr('دوّر تاني', 'Search again'), style: TextStyle(color: C.accent, fontWeight: FontWeight.w700))),
+        ],
+      ),
+    );
+    if (again == 'again') continue;
+    if (again == 'hand' && context.mounted) await showHubSetup(context, state, forceNew: true);
+    return;
   }
 }
 
@@ -140,6 +189,14 @@ void showHubSwitcher(BuildContext context, AppState state) {
               state.switchHub(i);
             },
           ),
+        ListTile(
+          leading: Icon(Icons.add_circle_outline, color: C.accent),
+          title: Text(_tr('إضافة هاب', 'Add a hub')),
+          onTap: () {
+            Navigator.pop(ctx);
+            addHubFlow(context, state);
+          },
+        ),
         ListTile(
           leading: Icon(Icons.settings_outlined, color: C.muted),
           title: Text(_tr('إدارة الهابات', 'Manage hubs')),

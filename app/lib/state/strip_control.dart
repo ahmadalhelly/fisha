@@ -208,6 +208,7 @@ extension AppStateStripControl on AppState {
     int? vMinLimit,
     bool? aOn,
     double? aLimit,
+    int? wLimit,
     int? holdSeconds,
     int? tzMinutes,
   }) async {
@@ -217,6 +218,7 @@ extension AppStateStripControl on AppState {
     if (vMinLimit != null) vMin = vMinLimit;
     if (aOn != null) aProtect = aOn;
     if (aLimit != null) aMax = aLimit;
+    if (wLimit != null) wMax = wLimit;
     if (holdSeconds != null) protHoldS = holdSeconds;
     if (tzMinutes != null) tzOffsetMin = tzMinutes;
     _notify();
@@ -227,6 +229,7 @@ extension AppStateStripControl on AppState {
       'v_min': vMin,
       'a_protect': aProtect,
       'a_max': aMax,
+      'w_max': wMax,
       'hold_s': protHoldS,
       if (tzZone.isEmpty) 'tz_min': tzOffsetMin,    // with a zone chosen the hub keeps following its summer-time rule
     }));

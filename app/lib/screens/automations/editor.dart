@@ -18,6 +18,8 @@ class _AutomationEditorState extends State<AutomationEditor> {
   late final TextEditingController _label, _watts, _limit2;
   bool _saving = false;
   String? _roomId;
+  // the rule is for every strip of the hub: 0 = the whole strip, 1..4 = that outlet on each strip
+  int? _allOutlet;
 
   List<String> get _roomMacs {
     final r = s.rooms.where((x) => x.id == _roomId).firstOrNull;
@@ -69,7 +71,8 @@ class _AutomationEditorState extends State<AutomationEditor> {
     if (a.isBoth) a.above = true;
     setState(() => _saving = true);
     var ok = true;
-    for (final mac in _roomId != null ? _roomMacs : [a.mac]) {
+    final macs = _roomId != null ? _roomMacs : (_allOutlet != null ? [for (final st in s.allStrips) st.mac] : [a.mac]);
+    for (final mac in macs) {
       final one = Automation.fromJson(a.toJson())..mac = mac;
       if (_roomId != null && one.label.isEmpty) one.label = s.rooms.firstWhere((r) => r.id == _roomId).name;
       ok = await s.saveAutomation(one) && ok;
@@ -102,7 +105,14 @@ class _AutomationEditorState extends State<AutomationEditor> {
         }
       }
     }
-    final key = _roomId != null ? 'room:$_roomId|0' : '${a.mac}|${a.outlet}';
+    // the same rule on every strip of this hub (a new rule only): the whole strip, or one outlet number
+    if (widget.initial == null && s.allStrips.length > 1) {
+      for (var n = 4; n >= 1; n--) {
+        targets.insert(0, MapEntry('all|$n', Tr.isAr ? 'كل المشتركات · مخرج $n' : 'All strips · outlet $n'));
+      }
+      targets.insert(0, MapEntry('all|0', Tr.isAr ? 'كل المشتركات · المشترك كله' : 'All strips · whole strip'));
+    }
+    final key = _roomId != null ? 'room:$_roomId|0' : (_allOutlet != null ? 'all|$_allOutlet' : '${a.mac}|${a.outlet}');
     return Scaffold(
       backgroundColor: C.bg,
       appBar: AppBar(
@@ -121,6 +131,15 @@ class _AutomationEditorState extends State<AutomationEditor> {
               items: [for (final e in targets) DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))],
               onChanged: (v) {
                 if (v == null) return;
+                if (v.startsWith('all|')) {
+                  setState(() {
+                    _roomId = null;
+                    _allOutlet = int.parse(v.substring(4));
+                    a.outlet = _allOutlet!;
+                  });
+                  return;
+                }
+                _allOutlet = null;
                 if (v.startsWith('room:')) {
                   final id = v.substring(5).split('|').first;
                   final r = s.rooms.firstWhere((x) => x.id == id);

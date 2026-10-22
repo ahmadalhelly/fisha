@@ -86,7 +86,7 @@ String stateHeadJson() {
              ",\"provision\":{\"state\":\"" + provState + "\",\"msg\":\"" + jsonEsc(provMsg) + "\"}" +
              ",\"config\":{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
              ",\"v_protect\":" + (vProt ? "true" : "false") + ",\"v_restore\":" + (vRestore ? "true" : "false") +
-             ",\"v_max\":" + String(vMax) + ",\"v_min\":" + String(vMin) +
+             ",\"v_max\":" + String(vMax) + ",\"v_min\":" + String(vMin) + ",\"w_max\":" + String((int)STRIP_MAX_W) +
              ",\"a_protect\":" + (aProt ? "true" : "false") + ",\"a_max\":" + String(aMax, 1) +
              ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) + ",\"tz_zone\":\"" + String(tzZone) + "\",\"tz_dst\":" + (tzNowDst() ? "true" : "false") +
              ",\"ntfy\":\"" + jsonEsc(ntfyTopic) + "\",\"ntypes\":" + String(notifyTypes) + ",\"ssid\":\"" + jsonEsc(secSsid) +

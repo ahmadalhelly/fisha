@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
 
+import '../theme.dart';
+
 /// One report: a title and a table. Built into DOCX (a hand-made zip of XML) or PDF (pages drawn by Flutter, so Arabic
 /// text is shaped correctly, then wrapped in a minimal PDF), with no extra packages.
 class ReportTable {
@@ -16,6 +18,8 @@ class ReportTable {
   /// optional bar chart drawn above the table (oldest bar on the left): label under the bar, value above it
   final List<(String, double)> chart;
   final String chartTitle;
+  /// the chart as the phone shows it (PNG): when given, the PDF places it instead of drawing bars, in the same colours
+  final Uint8List? chartPng;
   const ReportTable({
     required this.title,
     required this.subtitle,
@@ -26,6 +30,7 @@ class ReportTable {
     required this.rtl,
     this.chart = const [],
     this.chartTitle = '',
+    this.chartPng,
   });
 }
 
@@ -177,7 +182,7 @@ double _drawBars(Canvas c, ReportTable t, double y0) {
     final v = t.chart[k].$2;
     final bh = maxV <= 0 ? 0.0 : v / maxV * (h - 16);
     final x = _margin + slot * k + (slot - bw) / 2;
-    c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, base - bh, bw, bh), const Radius.circular(2)), Paint()..color = const Color(0xFF3F3F3F));
+    c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, base - bh, bw, bh), const Radius.circular(2)), Paint()..color = C.accent);
     if (n <= 16) {
       final vp = _tp(v.toStringAsFixed(1), 8, const Color(0xFF333333), false, maxW: slot, align: TextAlign.center);
       vp.paint(c, Offset(_margin + slot * k, base - bh - 11));
@@ -192,7 +197,23 @@ double _drawBars(Canvas c, ReportTable t, double y0) {
 
 Future<Uint8List> buildPdf(ReportTable t) async {
   final usable = _ph - _margin * 2;
-  final chartH = t.chart.isEmpty ? 0.0 : 210.0;
+  ui.Image? chartImg;
+  var imgH = 0.0, imgW = 0.0;
+  if (t.chartPng != null) {
+    try {
+      final codec = await ui.instantiateImageCodec(t.chartPng!);
+      chartImg = (await codec.getNextFrame()).image;
+      imgW = _pw - _margin * 2;
+      imgH = imgW * chartImg.height / chartImg.width;
+      if (imgH > 330) {
+        imgH = 330;
+        imgW = imgH * chartImg.width / chartImg.height;
+      }
+    } catch (_) {
+      chartImg = null;
+    }
+  }
+  final chartH = chartImg != null ? imgH + 24 : (t.chart.isEmpty ? 0.0 : 210.0);
   final first = ((usable - 90 - chartH) / _rowH).floor();
   final other = (usable / _rowH).floor();
   final pages = <List<List<String>>>[];
@@ -203,7 +224,7 @@ Future<Uint8List> buildPdf(ReportTable t) async {
     pages.add(all.sublist(i, (i + cap).clamp(0, all.length)));
     i += cap;
   }
-  final grays = <Uint8List>[];
+  final rgbs = <Uint8List>[];
   for (var pi = 0; pi < pages.length; pi++) {
     final rec = ui.PictureRecorder();
     final c = Canvas(rec, const Rect.fromLTWH(0, 0, _pw * _scale, _ph * _scale));
@@ -218,7 +239,13 @@ Future<Uint8List> buildPdf(ReportTable t) async {
       final st = _tp(t.subtitle, 12, const Color(0xFF555555), t.rtl, maxW: _pw - _margin * 2);
       st.paint(c, Offset(_margin, y));
       y += 38;
-      if (t.chart.isNotEmpty) y = _drawBars(c, t, y);
+      if (chartImg != null) {
+        c.drawImageRect(chartImg, Rect.fromLTWH(0, 0, chartImg.width.toDouble(), chartImg.height.toDouble()), Rect.fromLTWH(_margin, y, imgW, imgH),
+            Paint()..filterQuality = FilterQuality.high);
+        y += imgH + 24;
+      } else if (t.chart.isNotEmpty) {
+        y = _drawBars(c, t, y);
+      }
     }
     void drawRow(List<String> cells, {bool bold = false, Color? fill}) {
       if (fill != null) c.drawRect(Rect.fromLTWH(_margin, y, _pw - _margin * 2, _rowH), Paint()..color = fill);
@@ -235,7 +262,7 @@ Future<Uint8List> buildPdf(ReportTable t) async {
       y += _rowH;
     }
 
-    drawRow(t.header, bold: true, fill: const Color(0xFFD9EFE8));
+    drawRow(t.header, bold: true, fill: C.accent.withValues(alpha: 0.28));
     final rows = pages[pi];
     for (final r in rows) {
       final isTotal = identical(r, t.total);
@@ -247,13 +274,15 @@ Future<Uint8List> buildPdf(ReportTable t) async {
     final data = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!;
     final px = data.buffer.asUint8List();
     final w = img.width, h = img.height;
-    final gray = Uint8List(w * h);
-    for (var q = 0, o = 0; q < gray.length; q++, o += 4) {
-      gray[q] = ((px[o] * 77 + px[o + 1] * 151 + px[o + 2] * 28) >> 8).clamp(0, 255);
+    final rgb = Uint8List(w * h * 3);
+    for (var q = 0, o = 0, d = 0; q < w * h; q++, o += 4, d += 3) {
+      rgb[d] = px[o];
+      rgb[d + 1] = px[o + 1];
+      rgb[d + 2] = px[o + 2];
     }
-    grays.add(gray);
+    rgbs.add(rgb);
   }
-  return _pdfFromGray(grays, (_pw * _scale).round(), (_ph * _scale).round());
+  return _pdfFromRgb(rgbs, (_pw * _scale).round(), (_ph * _scale).round());
 }
 
 /// zlib stream made of stored blocks (no compression): header, blocks of up to 65535 bytes, Adler-32.
@@ -279,7 +308,7 @@ Uint8List _zlibStored(Uint8List d) {
   return b.toBytes();
 }
 
-Uint8List _pdfFromGray(List<Uint8List> pages, int w, int h) {
+Uint8List _pdfFromRgb(List<Uint8List> pages, int w, int h) {
   final out = BytesBuilder();
   final offsets = <int>[];
   void obj(int n, List<int> body) {
@@ -304,7 +333,7 @@ Uint8List _pdfFromGray(List<Uint8List> pages, int w, int h) {
     obj(base + 1, [...ascii.encode('<< /Length ${content.length} >>\nstream\n'), ...content, ...ascii.encode('\nendstream')]);
     final z = _zlibStored(pages[i]);
     obj(base + 2, [
-      ...ascii.encode('<< /Type /XObject /Subtype /Image /Width $w /Height $h /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${z.length} >>\nstream\n'),
+      ...ascii.encode('<< /Type /XObject /Subtype /Image /Width $w /Height $h /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${z.length} >>\nstream\n'),
       ...z,
       ...ascii.encode('\nendstream')
     ]);

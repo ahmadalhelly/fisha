@@ -222,6 +222,7 @@ extension AppStateCloudLink on AppState {
           vMin = (cfg['v_min'] as num?)?.toInt() ?? vMin;
           aProtect = cfg['a_protect'] != false;
           aMax = (cfg['a_max'] as num?)?.toDouble() ?? aMax;
+          wMax = (cfg['w_max'] as num?)?.toInt() ?? wMax;
         }
         protHoldS = (cfg['hold_s'] as num?)?.toInt() ?? protHoldS;
         tzOffsetMin = (cfg['tz_min'] as num?)?.toInt() ?? tzOffsetMin;

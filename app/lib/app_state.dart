@@ -221,6 +221,7 @@ class AppState extends ChangeNotifier {
   int vMin = 180;
 
   double aMax = 16;
+  int wMax = 3500;
 
   int protHoldS = 3;
 

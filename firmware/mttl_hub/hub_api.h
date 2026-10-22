@@ -591,6 +591,7 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 170, 260); cfg.putUShort("vmin", vMin); }
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
     if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
+    if (jsonHas(b, "w_max")) { STRIP_MAX_W = (float)constrain((int)jsonValue(b, "w_max").toInt(), 500, 3680); cfg.putUShort("wmax", (uint16_t)STRIP_MAX_W); }
     if (jsonHas(b, "hold_s")) { protHoldS = (uint8_t)constrain((int)jsonValue(b, "hold_s").toInt(), 1, 60); cfg.putUChar("phold", protHoldS); }
     if (jsonHas(b, "tz_zone")) {                 // a zone from the app's list ("" = back to the fixed offset)
       String z = jsonValue(b, "tz_zone");
@@ -614,7 +615,7 @@ ApiRes api(String path, const String& b) {
     stateDirty = true;
     return okRes("{\"temp_max\":" + String(tempMax) + ",\"temp_protect\":" + (tempProtect ? "true" : "false") +
                  ",\"v_min\":" + String(vMin) + ",\"v_max\":" + String(vMax) +
-                 ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) +
+                 ",\"w_max\":" + String((int)STRIP_MAX_W) + ",\"hold_s\":" + String(protHoldS) + ",\"tz_min\":" + String(tzOffsetMin) +
                  ",\"tz_zone\":\"" + String(tzZone) + "\",\"tz_dst\":" + (tzNowDst() ? "true" : "false") + "}");
   }
   if (path == "outlet_log") {                   // {"mac","outlet":0..4,"days":1..30} -> the cycles of that outlet, newest first

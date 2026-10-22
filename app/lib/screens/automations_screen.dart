@@ -230,6 +230,26 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           ),
           Divider(height: 22, color: C.border),
           Row(children: [
+            Icon(Icons.bolt, color: C.danger),
+            const SizedBox(width: 10),
+            Expanded(child: Text(Tr.isAr ? 'أقصى قدرة للمشترك (وات)' : 'Maximum strip power (watts)', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+          ]),
+          Text(
+              Tr.isAr
+                  ? 'لو مجموع المخارج عدّى ${s.wMax} وات المشترك بيفصل. الحد محفوظ جوه المشترك كمان.'
+                  : 'The strip cuts when the outlets together pass ${s.wMax} W. The limit is also stored inside the strip.',
+              style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
+          const SizedBox(height: 8),
+          ValueStepper(
+            value: s.wMax.toDouble(),
+            min: 500,
+            max: 3680,
+            step: 50,
+            unit: 'W',
+            onChanged: (v) => s.setStripProtection(wLimit: v.round()),
+          ),
+          Divider(height: 22, color: C.border),
+          Row(children: [
             Icon(Icons.timer_outlined, color: C.accent),
             const SizedBox(width: 10),
             Expanded(

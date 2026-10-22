@@ -105,7 +105,7 @@ volatile bool wifiTestReq = false;
 String wifiTestSsid, wifiTestPass, wifiTestState = "idle", wifiTestMsg;
 String wifiOkMacs;                              // strips that answered connect_ok during the move (kept by MAC, not by socket slot)
 String wifiMoveInfo;                            // what happened to each strip in the last move (shown in /api/health)
-const char* FW_VERSION = "1.2.0";
+const char* FW_VERSION = "1.2.1";
 // the CI run number of this build (the workflow writes fisha_build.h); 0 for a build made by hand. The app uses it to
 // tell a newer build of the same version from the one installed.
 #if __has_include("fisha_build.h")
@@ -142,7 +142,7 @@ MrY=
 
 const uint16_t STRIP_PORT = 10086, STRIP_PORT_ALT = 21197, WEB_PORT = 8080, SSE_PORT = 8081;
 const uint32_t POLL_MS = 2000, STALE_MS = 45000;
-const float STRIP_MAX_W = 3500;                   // user rule: 3500 W per strip in total
+float STRIP_MAX_W = 3500;                   // user rule: 3500 W per strip in total
 // 10 strips need the hub build with more network sockets (firmware/platformio.ini, CONFIG_LWIP_MAX_SOCKETS=26).
 // The stock Arduino build has 16 sockets: the hub itself uses ~13 at most, so it stays at 6 strips there.
 #if defined(FISHA_REQUIRE_10) && CONFIG_LWIP_MAX_SOCKETS < 26      // platformio.ini sets it: the custom libs must really be in use

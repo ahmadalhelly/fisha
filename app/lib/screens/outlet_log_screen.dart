@@ -94,7 +94,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
     return name.isEmpty ? '$strip · ${_tr('مخرج', 'outlet')} ${widget.outlet}' : name;
   }
 
-  String _hm(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  String _hm(DateTime d) => fmtTime12(d.hour, d.minute);
   String _dur(Duration d) {
     final m = d.inMinutes;
     if (m < 60) return _tr('$m د', '${m}m');
@@ -164,7 +164,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
     if (fmt == null) return;
     final now = DateTime.now();
     String two(int n) => n.toString().padLeft(2, '0');
-    String dt(DateTime d) => '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+    String dt(DateTime d) => '${d.year}-${two(d.month)}-${two(d.day)} ${fmtTime12(d.hour, d.minute)}';
     final base = 'fisha-history-${now.year}${two(now.month)}${two(now.day)}';
     try {
       Uint8List bytes;
@@ -199,6 +199,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
             widths: const [0.22, 0.22, 0.1, 0.14, 0.14, 0.18],
             rtl: Tr.isAr,
             chart: [for (final d in days) ('${d.day}', kwh[d] ?? 0.0)],
+            chartPng: await _png(),
             chartTitle: _tr('الاستهلاك اليومي (kWh)', 'Daily use (kWh)'),
           ));
         }
@@ -304,7 +305,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
                       Padding(
                         padding: const EdgeInsets.only(left: 62, top: 2),
                         child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                          for (final h in const ['00', '06', '12', '18', '24']) Text(h, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 10)),
+                          for (final h in Tr.isAr ? const ['12 ص', '6 ص', '12 م', '6 م', '12 ص'] : const ['12AM', '6AM', '12PM', '6PM', '12AM']) Text(h, textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 10)),
                         ]),
                       ),
                       const SizedBox(height: 14),

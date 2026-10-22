@@ -67,7 +67,9 @@ class _TimeZoneScreenState extends State<TimeZoneScreen> {
 
   String _hm(DateTime d, {bool secs = false}) {
     String p(int n) => n.toString().padLeft(2, '0');
-    return '${p(d.hour)}:${p(d.minute)}${secs ? ':${p(d.second)}' : ''}';
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    final ap = Tr.isAr ? (d.hour >= 12 ? 'م' : 'ص') : (d.hour >= 12 ? 'PM' : 'AM');
+    return '$h:${p(d.minute)}${secs ? ':${p(d.second)}' : ''} $ap';
   }
 
   Future<void> _pick(TzZoneInfo z) => _run(() async {

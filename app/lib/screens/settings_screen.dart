@@ -5,13 +5,11 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../theme.dart';
 import '../models.dart';
-import '../services/hub_setup.dart';
 import '../widgets/common.dart';
-import '../widgets/hub_setup_sheet.dart';
 import 'about_screen.dart';
 import 'account_screen.dart';
 import 'sync_screen.dart';
-import 'scenarios_screen.dart';
+import 'automations_screen.dart';
 import 'hubs_screen.dart';
 import 'time_zone_screen.dart';
 import '../services/tz_zones.dart';
@@ -119,14 +117,11 @@ class SettingsScreen extends StatelessWidget {
                 if (!kIsWeb && st.can(Perm.wifi))
                   _row(context, Icons.wifi, C.accent2, _tr('شبكة الواي فاي', 'Wi-Fi network'), st.hubSsid.isEmpty ? '—' : st.hubSsid,
                     () => _open(context, WifiScreen(state: st))),
-                // set up a new hub (or one whose Wi-Fi changed) from inside the app
-                if (HubSetup.supported && st.isOwner)
-                  _row(context, Icons.add_circle_outline, C.accent, _tr('إضافة هاب', 'Add a hub'), _tr('هاب جديد أو اتغيّرت شبكته', 'New hub, or its Wi-Fi changed'),
-                      () => showHubSetup(context, st)),
                 if (st.isOwner)
                   _row(context, Icons.router_outlined, C.accent, _tr('الهابات', 'Hubs'), st.hubs.length > 1 ? '${st.hubs.length}' : '', () => _open(context, HubsScreen(state: st))),
                 if (st.can(Perm.auto))
-                  _row(context, Icons.bolt, C.warn, _tr('السيناريوهات', 'Scenarios'), _tr('لو ... اعمل ... وإلا', 'If ... do ... otherwise'), () => _open(context, ScenariosScreen(state: st))),
+                  _row(context, Icons.shield_outlined, C.danger, _tr('حدود الحماية', 'Protection limits'),
+                      _tr('الفولت والأمبير والوات والحرارة', 'Voltage, amps, watts, temperature'), () => _open(context, AutomationsScreen(state: st))),
                 if (st.isOwner)
                   _row(context, Icons.public, C.accent2, _tr('الوقت والمنطقة الزمنية', 'Time and time zone'),
                       TzZones.byId(st.tzZone) == null ? TzZones.offsetText(st.tzOffsetMin) : (Tr.isAr ? TzZones.byId(st.tzZone)!.ar : TzZones.byId(st.tzZone)!.en),

@@ -72,7 +72,7 @@ class SyncParts {
 
   static const _outletNames = {'n', 'label'};
   static const _outletProtection = {'n', 'locked', 'protected', 'autooff', 'auto_off_min', 'keep_on', 'keepOn', 'amp_limit'};
-  static const _limits = {'temp_max', 'temp_protect', 'v_protect', 'v_restore', 'v_max', 'v_min', 'a_protect', 'a_max', 'hold_s', 'tz_min', 'tz_zone'};
+  static const _limits = {'temp_max', 'temp_protect', 'v_protect', 'v_restore', 'v_max', 'v_min', 'a_protect', 'a_max', 'w_max', 'hold_s', 'tz_min', 'tz_zone'};
 
   /// the hub part of a copy (users, schedules, automations, strips, energy, config) cut down to the chosen kinds.
   /// The bookkeeping keys of the mirror (nvs, hub_id, at) always stay.

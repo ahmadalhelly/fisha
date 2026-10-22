@@ -34,8 +34,8 @@ class _ManualScreenState extends State<ManualScreen> {
   final Set<String> _open = {};
 
   static String get _sfwWarning => _tr(
-      'تنبيه: فيرموير المشترك تعديل غير رسمي على فيرموير الشركة، والتحديث على مسؤوليتك. لو الكهربا أو الواي فاي قطعت وقت التحديث، المشترك ممكن يبطّل يشتغل ويحتاج إصلاح يدوي، وممكن يلغي ضمان الشركة. استخدم الملفات اللي من إصدارات فيشة بس، وجرّب على مشترك واحد الأول، وماتفصلش المشترك ولا الـ Hub لحد ما يخلص.',
-      'Warning: strip firmware is an unofficial modification of the maker\'s firmware, and you update at your own risk. If power or Wi-Fi drops during an update, the strip may stop working and need a manual repair, and it may void the maker\'s warranty. Use only files from Fisha releases, try one strip first, and keep the strip and the hub powered until it finishes.');
+      'تنبيه: فيرموير المشترك تعديل غير رسمي على فيرموير الشركة، والتحديث على مسؤوليتك. لو الكهربا أو الواي فاي قطعت وقت التحديث، المشترك ممكن يبطّل يشتغل ويحتاج إصلاح يدوي،. استخدم الملفات اللي من إصدارات فيشة بس، وجرّب على مشترك واحد الأول، وماتفصلش المشترك ولا الـ Hub لحد ما يخلص.',
+      'Warning: strip firmware is an unofficial modification of the maker\'s firmware, and you update at your own risk. If power or Wi-Fi drops during an update, the strip may stop working and need a manual repair. Use only files from Fisha releases, try one strip first, and keep the strip and the hub powered until it finishes.');
 
   List<_Sec> get _secs => [
         _Sec(_tr('إضافة وضبط المشتركات', 'Adding and setting up strips'), [
@@ -132,10 +132,11 @@ class _ManualScreenState extends State<ManualScreen> {
           _Item(Icons.tune, _tr('حدود الحماية جوه المشترك', 'Protection limits inside the strip'),
               _tr('الفولت الأقل والأعلى، أقصى تيار، أقصى وات، أقصى حرارة، ومهلة الفصل بالثواني. الحدود بتتحفظ داخل إعدادات المشترك وبتتنفذ حتى لو الهاب فاصل.',
                   'Low and high voltage, maximum current, maximum power, maximum temperature and the trip delay. The limits are stored inside the strip and apply even when the hub is offline.'),
-              how: [(_G.go, _tr('الرئيسية ← الأتمتة', 'Home → Automations'))],
+              how: [(_G.go, _tr('الإعدادات ← حدود الحماية', 'Settings → Protection limits'))],
               steps: [
-                _tr('الحدود لكل مشترك.', 'Limits are per strip.'),
-                _tr('أي قاعدة أتمتة بتفصل عند وات معيّن بتنزل للمشترك كحد أمان.', 'An automation that cuts at a power level is also sent to the strip as a safety limit.'),
+                _tr('الحدود لكل مشترك كله، مش لكل مخرج. حد الأمبير لكل مخرج بيتنفذ من الهاب.', 'Limits apply to the whole strip, not per outlet. A per-outlet amp limit is enforced by the hub.'),
+                _tr('أي قاعدة أتمتة بتفصل عند وات أقل بتنزل للمشترك كحد أمان.', 'An automation that cuts at a lower wattage is also sent to the strip as a safety limit.'),
+                _tr('في الأتمتة تقدر تختار «كل المشتركات» عشان نفس القاعدة تتنفذ على الهاب كله.', 'In Automations you can pick "All strips" so one rule covers the whole hub.'),
               ]),
           _Item(Icons.restart_alt, _tr('إعادة تشغيل مخرج أو المشترك كله', 'Restart an outlet or the whole strip'),
               _tr('بيفصل المخرج (أو المشترك كله) عدد ثواني ويرجّعه لوحده، حتى لو الاتصال بالهاب اتقطع. مفيد لمخرج الراوتر.',

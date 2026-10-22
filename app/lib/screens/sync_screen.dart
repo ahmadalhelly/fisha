@@ -128,6 +128,7 @@ class _SyncScreenState extends State<SyncScreen> {
   Future<String?> _askPassword(String title, {bool confirm = false}) async {
     final a = TextEditingController(), b = TextEditingController();
     String? err;
+    var show = false;
     final r = await showDialog<String>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -137,14 +138,21 @@ class _SyncScreenState extends State<SyncScreen> {
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: a,
-              obscureText: true,
+              obscureText: !show,
               autofocus: true,
-              decoration: InputDecoration(labelText: Tr.isAr ? 'الباسورد' : 'Password'),
+              decoration: InputDecoration(
+                labelText: Tr.isAr ? 'الباسورد' : 'Password',
+                suffixIcon: IconButton(
+                  tooltip: show ? (Tr.isAr ? 'إخفاء' : 'Hide') : (Tr.isAr ? 'إظهار' : 'Show'),
+                  icon: Icon(show ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: C.muted, size: 20),
+                  onPressed: () => setD(() => show = !show),
+                ),
+              ),
             ),
             if (confirm)
               TextField(
                 controller: b,
-                obscureText: true,
+                obscureText: !show,
                 decoration: InputDecoration(labelText: Tr.isAr ? 'أكّد الباسورد' : 'Confirm the password'),
               ),
             if (err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(err!, style: TextStyle(color: C.danger, fontSize: 12.5))),
@@ -619,17 +627,19 @@ class _SyncScreenState extends State<SyncScreen> {
                     ),
                     Switch(value: _encOn, activeTrackColor: C.accent, onChanged: _busy ? null : _setEnc),
                   ]),
-                  if (_encOn)
-                    Row(children: [
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(Tr.isAr ? 'فتح الباسورد بالبصمة' : 'Open the password with the fingerprint', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                          Text(Tr.isAr ? 'البصمة مربوطة بالموبايل ده. على موبايل جديد هتكتب الباسورد.' : 'The fingerprint belongs to this phone. On a new phone you type the password.',
-                              style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
-                        ]),
-                      ),
-                      Switch(value: _bioOn, activeTrackColor: C.accent, onChanged: _busy ? null : _setBio),
-                    ]),
+                  Row(children: [
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(Tr.isAr ? 'بصمة الصباع للنسخ والاسترجاع' : 'Fingerprint for backup and restore', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        Text(
+                            _encOn
+                                ? (Tr.isAr ? 'البصمة مربوطة بالموبايل ده. على موبايل جديد هتكتب الباسورد.' : 'The fingerprint belongs to this phone. On a new phone you type the password.')
+                                : (Tr.isAr ? 'فعّل تشفير الملف الأول وبعدين تقدر تقفل الباسورد بالبصمة.' : 'Turn the file encryption on first, then lock the password with your fingerprint.'),
+                            style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
+                      ]),
+                    ),
+                    Switch(value: _bioOn && _encOn, activeTrackColor: C.accent, onChanged: (_busy || !_encOn) ? null : _setBio),
+                  ]),
                   if (_encOn && _hasPw)
                     Align(
                       alignment: AlignmentDirectional.centerStart,

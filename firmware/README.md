@@ -4,6 +4,9 @@ Source: `mttl_hub/mttl_hub.ino` plus the `mttl_hub/hub_*.h` parts it includes in
 
 ## Changelog
 
+### 1.2.1
+- Strip power limit: `config` accepts and returns `w_max` (500-3680 W, default 3500, kept in NVS `wmax`); it is the total-watt cut of the hub and the `up:limits` power field.
+
 ### 1.2.0
 - Time zone: the zone list (`TZ_ZONES`) with each zone's summer-time rule; the offset in force follows it (`tzTick`) and is sent to the strips (`up:tz`) when it changes; `config` accepts `tz_zone`, `time_sync` sends the time to every strip now; `tsync_s` per strip.
 - Outlet log: every finished on/off cycle (start, end, Wh, source) in two rotating files, about 30 days; `outlet_log` returns the newest cycles of an outlet.
