@@ -8,6 +8,7 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../i18n.dart';
+import 'automation_text.dart';
 
 /// Native phone notifications: a small Android foreground service keeps a connection to the
 /// hub's server topic and turns every hub event into a real notification, even when Fisha is closed.
@@ -303,12 +304,20 @@ class _NotifyHandler extends TaskHandler {
       }
     } else if (type == 'automation') {
       final defaultTitle = isAr ? 'أتمتة' : 'Automation';
-      title = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? _outletNames(strip, msg, isAr) : defaultTitle;
       final who = [
         if (stripName.isNotEmpty) stripName,
         if (outletName.isNotEmpty) outletName,
       ].join(' · ');
-      body = who.isNotEmpty ? who : (isAr ? 'أتمتة اتنفذت' : 'Automation ran');
+      final am = AutomationMsg.parse(msg);
+      if (am != null) {
+        // "Automation: Fan guard" / "Light · Voltage 231 V is above the limit 190 V — switched off: Lamp"
+        title = am.title(ar: isAr);
+        final sentence = am.sentence((n) => _outletNameIn(strip, n), ar: isAr).replaceFirst(RegExp(r'^(القاعدة «[^»]*»: |Rule "[^"]*": )'), '');
+        body = who.isEmpty ? sentence : '$who\n$sentence';
+      } else {
+        title = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? _outletNames(strip, msg, isAr) : defaultTitle;
+        body = who.isNotEmpty ? who : (isAr ? 'أتمتة اتنفذت' : 'Automation ran');
+      }
     } else {
       title = switch (type) {
         'temp' => isAr ? 'حرارة عالية' : 'High temperature',
@@ -380,6 +389,16 @@ class _NotifyHandler extends TaskHandler {
     _client?.autoReconnect = false;
     _client?.disconnect();
   }
+}
+
+String _outletNameIn(Map<String, dynamic>? strip, int n) {
+  final outs = strip?['outlets'];
+  if (outs is List) {
+    for (final o in outs) {
+      if (o is Map && (o['n'] as num?)?.toInt() == n && (o['label'] ?? '').toString().isNotEmpty) return o['label'].toString();
+    }
+  }
+  return t('default_outlet', {'n': n});
 }
 
 /// " · o:2,4" at the end of a hub message (the outlets it cut) becomes the outlets' names from the saved strip

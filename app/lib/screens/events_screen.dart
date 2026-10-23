@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../i18n.dart';
 import '../models.dart';
+import '../services/automation_text.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -25,7 +26,7 @@ String eventText(AppState s, HubEvent e) {
     'temp' => t('ev_temp', {'x': m}),
     'load' => t('ev_load', {'x': m}),
     'auto_off' => t('ev_auto_off', {'x': m}),
-    'automation' => t('ev_automation', {'x': m}),
+    'automation' => AutomationMsg.parse(e.msg)?.sentence((n) => s.live(e.mac) == null ? t('default_outlet', {'n': n}) : s.outletName(s.live(e.mac)!, n)) ?? t('ev_automation', {'x': m}),
     'schedule' => t('ev_schedule', {'x': m}),
     'missed' => t('ev_missed', {'x': m}),
     'skipped' => t('ev_skipped', {'x': m}),

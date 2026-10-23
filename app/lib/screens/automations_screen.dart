@@ -127,24 +127,37 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    stripName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          InkWell(
+            onLongPress: s.can(Perm.auto) ? () => _stripMenu(mac, rules, stripName) : null,
+            child: Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      stripName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                  decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(10)),
-                  child: Text('${rules.length}', style: mono(12, color: C.muted)),
-                ),
-              ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(10)),
+                    child: Text('${rules.length}', style: mono(12, color: C.muted)),
+                  ),
+                  const SizedBox(width: 8),
+                  // all of this strip's rules on or off at once
+                  Tooltip(
+                    message: Tr.isAr ? 'تفعيل أو إيقاف كل قواعد المشترك' : 'All of this strip\'s rules on or off',
+                    child: Switch(
+                      value: rules.every((x) => x.enabled),
+                      activeTrackColor: C.accent,
+                      onChanged: s.can(Perm.auto) ? (v) => _setAll(rules, v) : null,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           Divider(height: 1, color: C.border),
@@ -395,6 +408,72 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
       );
 
   /// Long-press on a rule: edit, duplicate or delete.
+  Future<void> _setAll(List<Automation> rules, bool on) async {
+    for (final r in rules) {
+      if (r.enabled == on) continue;
+      r.enabled = on;
+      await s.saveAutomation(r);
+    }
+  }
+
+  /// long press on a strip: copy its rules to another strip, or delete them all
+  Future<void> _stripMenu(String mac, List<Automation> rules, String stripName) async {
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: C.surface,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(stripName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
+          ListTile(
+              leading: Icon(Icons.copy_all_outlined, color: C.accent),
+              title: Text(Tr.isAr ? 'نسخ كل قواعده لمشترك تاني' : 'Copy all its rules to another strip'),
+              onTap: () => Navigator.pop(ctx, 'copy')),
+          ListTile(
+              leading: Icon(Icons.delete_outline, color: C.danger),
+              title: Text(Tr.isAr ? 'حذف كل قواعده' : 'Delete all its rules', style: TextStyle(color: C.danger)),
+              onTap: () => Navigator.pop(ctx, 'del')),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (!mounted || act == null) return;
+    if (act == 'del') {
+      if (!await confirmDialog(context, Tr.isAr ? 'حذف قواعد $stripName' : 'Delete the rules of $stripName', Tr.isAr ? '${rules.length} قاعدة' : '${rules.length} rules', ok: t('delete'), danger: true)) return;
+      for (final r in List.of(rules)) {
+        await s.deleteAutomation(r.aid);
+      }
+      return;
+    }
+    final others = s.allStrips.where((x) => x.mac != mac).toList();
+    if (others.isEmpty) return;
+    final to = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: C.surface,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(Tr.isAr ? 'انسخ لـ…' : 'Copy to…', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          ),
+          for (final st in others) ListTile(leading: Icon(Icons.power_outlined, color: C.accent), title: Text(s.stripName(st)), onTap: () => Navigator.pop(ctx, st.mac)),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (!mounted || to == null) return;
+    for (final r in rules) {
+      await s.saveAutomation(Automation.fromJson(r.toJson())
+        ..aid = 0
+        ..mac = to);
+    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Tr.isAr ? 'اتنسخت ${rules.length} قاعدة' : 'Copied ${rules.length} rules')));
+  }
+
   Future<void> _ruleMenu(Automation a) async {
     final name = a.label.isNotEmpty ? a.label : s.nameForMac(a.mac, a.outlet);
     final act = await showModalBottomSheet<String>(
