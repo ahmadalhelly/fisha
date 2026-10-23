@@ -107,6 +107,11 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _tile(Icons.history, Tr.isAr ? 'سجل التشغيل' : 'On/off history', Tr.isAr ? 'كل الدورات واستهلاكها' : 'Every cycle and its energy', !state.hubV2 ? null : () => _openLog(ctx, state, s.mac, 0)),
                 if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
+                // a cut on the strip's voltage belongs to the whole strip, so it is offered here and not on the outlets
+                if (state.can(Perm.auto))
+                _tile(Icons.bolt_outlined, Tr.isAr ? 'فصل المشترك بالجهد' : 'Cut the strip on voltage',
+                    Tr.isAr ? 'لو الجهد نزل أو طلع عن حد تختاره' : 'When the voltage goes under or over a limit you choose',
+                    !state.hubV2 ? null : () => Navigator.of(ctx).push(MaterialPageRoute(builder: (_) => AutomationEditor(state: state, presetMac: s.mac, presetOutlet: 0, presetMetric: 4)))),
                 // the schedules and rules on the whole strip, like an outlet lists its own
                 ..._linkedRules(ctx, state, s.mac, 0, s.hasSchedule, s.hasRule),
                 _switchTile(

@@ -310,12 +310,13 @@ class Automation {
   int act; // 1 notify, 2 off, 3 both
   bool enabled;
   String label;
-  int metric; // 0 = power (W), 1 = temperature (°C), 2 = either, 3 = current (A); outlet 0 = whole strip
+  int metric; // 0 = power (W), 1 = temperature (°C), 2 = either, 3 = current (A), 4 = voltage (V, whole strip); outlet 0 = whole strip
   double limit2; // °C limit when metric == 2
   Automation({this.aid = 0, required this.mac, this.outlet = 1, this.above = false, this.watts = 5, this.holdS = 600, this.act = 1, this.enabled = true, this.label = '', this.metric = 0, this.limit2 = 70});
   bool get isTemp => metric == 1;
   bool get isBoth => metric == 2;
   bool get isCurrent => metric == 3;
+  bool get isVoltage => metric == 4;
   factory Automation.fromJson(Map<String, dynamic> j) => Automation(
         aid: _i(j['aid']),
         mac: _s(j['mac']).toUpperCase(),

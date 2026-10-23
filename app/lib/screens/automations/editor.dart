@@ -6,7 +6,8 @@ class AutomationEditor extends StatefulWidget {
   final String? presetMac;
   final int? presetOutlet;
   final String? presetRoom;
-  const AutomationEditor({super.key, required this.state, this.initial, this.presetMac, this.presetOutlet, this.presetRoom});
+  final int? presetMetric; // 4 = a whole-strip voltage rule, from the strip card
+  const AutomationEditor({super.key, required this.state, this.initial, this.presetMac, this.presetOutlet, this.presetRoom, this.presetMetric});
 
   @override
   State<AutomationEditor> createState() => _AutomationEditorState();
@@ -42,6 +43,13 @@ class _AutomationEditorState extends State<AutomationEditor> {
             metric: 0,
             limit2: 60,
           );
+    if (i == null && widget.presetMetric == 4) {
+      a.metric = 4;
+      a.outlet = 0;
+      a.above = false;
+      a.watts = 190;
+      a.act = 3;
+    }
     if (i == null && widget.presetRoom != null) {
       _roomId = widget.presetRoom;
       if (_roomMacs.isNotEmpty) {
@@ -136,6 +144,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
                     _roomId = null;
                     _allOutlet = int.parse(v.substring(4));
                     a.outlet = _allOutlet!;
+                    if (a.isVoltage) a.metric = 0;
                   });
                   return;
                 }
@@ -155,6 +164,7 @@ class _AutomationEditorState extends State<AutomationEditor> {
                 setState(() {
                   a.mac = p[0];
                   a.outlet = int.parse(p[1]);
+                  if (a.outlet != 0 && a.isVoltage) a.metric = 0;
                 });
               },
             ),
@@ -168,13 +178,15 @@ class _AutomationEditorState extends State<AutomationEditor> {
                 1: t('metric_temp_s'),
                 2: t('metric_both'),
                 3: Tr.isAr ? 'التيار (A)' : 'Current (A)',
+                // voltage is the whole strip's: only for a whole-strip rule
+                if (a.outlet == 0 && _allOutlet == null) 4: Tr.isAr ? 'الجهد (V)' : 'Voltage (V)',
               },
               onChanged: (v) => setState(() {
                 a.metric = v;
                 if (v == 2) {
                   a.above = true;
                 }
-                _watts.text = v == 3 ? '10' : (v == 1 ? '60' : '1500');
+                _watts.text = v == 3 ? '10' : (v == 1 ? '60' : (v == 4 ? (a.above ? '250' : '190') : '1500'));
                 _limit2.text = '60';
               }),
             ),
@@ -186,7 +198,9 @@ class _AutomationEditorState extends State<AutomationEditor> {
                           ? t('rule_strip_temp')
                           : (a.isCurrent
                               ? (Tr.isAr ? 'حماية تيار المشترك بالكامل' : 'Whole-strip current protection')
-                              : t('rule_strip_power'))),
+                              : a.isVoltage
+                                  ? (Tr.isAr ? 'الجهد بيتقاس للمشترك كله، والفصل بيقفل مخارجه غير المحمية.' : 'Voltage is measured for the whole strip; a cut switches off its unprotected outlets.')
+                                  : t('rule_strip_power'))),
                   style: TextStyle(color: C.muted, fontSize: 12, height: 1.5)),
             if (a.isBoth)
               Text(t('rule_both_hint'), style: TextStyle(color: C.muted, fontSize: 12, height: 1.5))
@@ -202,8 +216,10 @@ class _AutomationEditorState extends State<AutomationEditor> {
                   decoration: InputDecoration(
                     labelText: a.isCurrent
                         ? (Tr.isAr ? 'حد التيار (أمبير)' : 'Current limit (A)')
-                        : (a.isTemp ? t('threshold_temp') : t('threshold')),
-                    suffixText: a.isCurrent ? 'A' : (a.isTemp ? '°C' : 'W'),
+                        : a.isVoltage
+                            ? (Tr.isAr ? 'حد الجهد (100-280 فولت)' : 'Voltage limit (100-280 V)')
+                            : (a.isTemp ? t('threshold_temp') : t('threshold')),
+                    suffixText: a.isCurrent ? 'A' : (a.isVoltage ? 'V' : (a.isTemp ? '°C' : 'W')),
                   ),
                 ),
               ),
@@ -251,6 +267,8 @@ String automationCondText(Automation a) {
     final w = a.watts.toStringAsFixed(a.isCurrent ? 1 : 0);
     final cond = a.isBoth
         ? '${t('when_either')} $w W ${t('or')} ${a.limit2.toStringAsFixed(0)}°C'
+        : a.isVoltage
+            ? 'When the voltage ${a.above ? t('rises_above') : t('drops_below')} $w V'
         : a.isCurrent
             ? 'When current exceeds $w A'
             : '${a.isTemp ? t('when_temp') : t('when_power')} ${a.above ? t('rises_above') : t('drops_below')} $w ${a.isTemp ? '°C' : 'W'}';
@@ -259,6 +277,8 @@ String automationCondText(Automation a) {
   final w = a.watts.toStringAsFixed(a.isCurrent ? 1 : 0);
   final cond = a.isBoth
       ? 'لما الاستهلاك يعدّي $w وات أو الحرارة تعدّي ${a.limit2.toStringAsFixed(0)} درجة'
+      : a.isVoltage
+          ? 'لما الجهد ${a.above ? 'يطلع فوق' : 'ينزل تحت'} $w فولت'
       : a.isCurrent
           ? 'لما التيار يعدّي $w أمبير'
           : a.isTemp

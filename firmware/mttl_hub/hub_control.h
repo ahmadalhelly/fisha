@@ -311,7 +311,7 @@ void evalStrip(int i) {
   bool anyOn = false;
   for (int k = 0; k < 4; k++) { hottest = max(hottest, s.o[k].tempC); anyOn |= s.o[k].on; }
 
-  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A
+  // automations: metric 0 W, 1 °C, 2 W or °C, 3 A, 4 V (whole strip only)
   for (int a = 0; a < autoCount; a++) {
     Autom& r = autos[a];
     if (!r.enabled || !s.mac.equalsIgnoreCase(r.mac) || r.outlet > 4) continue;
@@ -319,7 +319,8 @@ void evalStrip(int i) {
     bool on;
     if (r.outlet == 0) { pw = total; tc = hottest; cur = r.above ? max(ampsShown, ampsMaxShown) : ampsShown; on = anyOn; }
     else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = r.above ? max(outletAmps(s, r.outlet - 1, volts, now), outletAmpsMax(s, r.outlet - 1, volts, now)) : outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
-    float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : pw);
+    float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : (r.metric == 4 ? s.voltage : pw));
+    if (r.metric == 4 && s.voltage < 50) continue;   // no reading yet
     // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
     // Before, it only armed after the load crossed back first: a heater already above, or an outlet already in
@@ -333,9 +334,10 @@ void evalStrip(int i) {
     if (r.above && autoArmed[a] && on && !autoWarned[a]) {
       float warnAt = r.watts * 0.85f;
       if (r.metric == 1) warnAt = max(r.watts - 5.0f, 40.0f);
+      if (r.metric == 4) warnAt = r.watts - 5.0f;
       if (p >= warnAt && p < r.watts) {
         autoWarned[a] = true;
-        addEvent("warn", s.mac, r.outlet, String(p, r.metric == 1 ? 0 : 1) + (r.metric == 1 ? "°C" : (r.metric == 3 ? " A" : " W")) + " (near " + String(r.watts, r.metric == 1 ? 0 : 1) + ")");
+        addEvent("warn", s.mac, r.outlet, String(p, (r.metric == 1 || r.metric == 4) ? 0 : 1) + (r.metric == 1 ? "°C" : (r.metric == 3 ? " A" : (r.metric == 4 ? " V" : " W"))) + " (near " + String(r.watts, (r.metric == 1 || r.metric == 4) ? 0 : 1) + ")");
       }
     }
     if (!cond) { autoSince[a] = 0; continue; }
@@ -351,9 +353,9 @@ void evalStrip(int i) {
             if (s.o[k].on && !(s.protMask & (1 << k))) { sendOnOffF(s, k + 1, false, true); cuts += (cuts.length() ? "," : "") + String(k + 1); }
         } else sendOnOffF(s, r.outlet, false, true);
       }
-      String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : " W");
+      String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : (r.metric == 4 ? " V" : " W"));
       // what was read and the limit it passed ("692 W > 500 W"), the rule's name in front when it has one
-      String what = String(p, (unit == " C") ? 0 : 1) + unit + (r.above ? " > " : " < ") + String(r.metric == 1 ? r.watts : (r.metric == 2 && p == tc ? r.limit2 : r.watts), unit == " A" ? 1 : 0) + unit;
+      String what = String(p, (unit == " C" || unit == " V") ? 0 : 1) + unit + (r.above ? " > " : " < ") + String(r.metric == 1 ? r.watts : (r.metric == 2 && p == tc ? r.limit2 : r.watts), unit == " A" ? 1 : 0) + unit;
       addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
     }
   }

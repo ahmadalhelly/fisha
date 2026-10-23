@@ -475,13 +475,14 @@ ApiRes api(String path, const String& b) {
     m.toUpperCase();
     strlcpy(r.mac, m.c_str(), sizeof r.mac);
     r.outlet = constrain(outlet, 0, 4);
-    r.metric = constrain(jsonValue(b, "metric").toInt(), 0, 3);
+    r.metric = constrain(jsonValue(b, "metric").toInt(), 0, 4);
+    if (r.metric == 4) r.outlet = 0;              // voltage is the whole strip's
     r.limit2 = jsonHas(b, "limit2") ? jsonValue(b, "limit2").toFloat() : 70;
     if (r.metric == 2) r.above = 1;
     if (r.metric != 2) r.above = jsonBool(b, "above");
     r.watts = jsonValue(b, "watts").toFloat();
     // keep thresholds in range: W 0..3500 · °C 0..120 · A 0..16
-    r.watts = r.metric == 1 ? constrain(r.watts, 0.0f, 120.0f) : r.metric == 3 ? constrain(r.watts, 0.0f, 16.0f) : constrain(r.watts, 0.0f, 3500.0f);
+    r.watts = r.metric == 1 ? constrain(r.watts, 0.0f, 120.0f) : r.metric == 3 ? constrain(r.watts, 0.0f, 16.0f) : r.metric == 4 ? constrain(r.watts, 100.0f, 280.0f) : constrain(r.watts, 0.0f, 3680.0f);
     r.limit2 = constrain(r.limit2, 30.0f, 120.0f);
     r.holdS = constrain(jsonValue(b, "hold_s").toInt(), 5, 65535);
     r.act = constrain(jsonValue(b, "act").toInt(), 1, 3);

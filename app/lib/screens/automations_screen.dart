@@ -472,7 +472,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
                 child: Icon(
                     a.isBoth
                         ? Icons.shield_moon_outlined
-                        : (a.isTemp
+                        : a.isVoltage
+                            ? Icons.bolt_outlined
+                            : (a.isTemp
                             ? Icons.thermostat
                             : (a.isCurrent
                                 ? Icons.electric_meter_outlined
