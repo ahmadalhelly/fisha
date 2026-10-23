@@ -265,7 +265,7 @@ void sendStripLimits(Strip& s) {
   uint16_t ov = (uint16_t)constrain((int)vMax, 220, 280);
   uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 500, 16500) : 16500;
   uint16_t pw = (uint16_t)constrain((int)STRIP_MAX_W, 50, 3680);
-  uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 40, 95) : 95;
+  uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 25, 95) : 95;
   uint16_t hs = (uint16_t)constrain((int)protHoldS, 1, 600);
   for (int i = 0; i < autoCount; i++) {
     const Autom& r = autos[i];
@@ -280,18 +280,59 @@ void sendStripLimits(Strip& s) {
               String(pw) + ":" + String(tp) + ":" + String(hs));
 }
 
-void sendStripOfflineSched(Strip& s) {
-  if (stripFwNum(s.fw) < 90) return;
+// The strip keeps one schedule. It gets the weekday schedule of this strip that comes next from now, so a new one is
+// not hidden behind an older one; once that one has run, the next one takes its place (stripSchedTick).
+// A one-time schedule (a date, no weekdays) stays with the hub: the strip would repeat it every day.
+int stripSchedPick(const Strip& s) {
+  int best = -1;
+  long bestIn = 0;
+  struct tm lt;
+  bool tOk = timeOk();
+  if (tOk) { time_t now = time(nullptr); localtime_r(&now, &lt); }
   for (int i = 0; i < schedCount; i++) {
     const Sched& c = scheds[i];
-    // a one-time schedule (a date, no weekdays) stays with the hub: the strip would repeat it every day
     if (!c.enabled || !c.days || !s.mac.equalsIgnoreCase(c.mac)) continue;
-    uint8_t days = c.days & 0x7F;                // bit 0 = Sunday, as tm_wday (the strip uses the same bits)
-    uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
-    sendLine(s, "up:sched:" + String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm));
-    return;
+    if (!tOk) return i;                          // no clock yet: the first one
+    // minutes until its next run; one that is due now or ran a minute ago still counts, so the strip is not handed the
+    // next schedule in the very minute it should act on this one
+    long nowMin = lt.tm_hour * 60L + lt.tm_min - 2, in = -1;
+    for (int d = 0; d < 8 && in < 0; d++) {
+      if (!(c.days & (1 << ((lt.tm_wday + d) % 7)))) continue;
+      long t = d * 1440L + c.hh * 60L + c.mm - nowMin;
+      if (t > 0) in = t;
+    }
+    if (in > 0 && (best < 0 || in < bestIn)) { best = i; bestIn = in; }
   }
-  sendLine(s, "up:sched:0:0:0:0");
+  return best;
+}
+
+uint32_t stripSchedKey(int i) {
+  if (i < 0) return 1;                           // "none" is also something the strip was told
+  const Sched& c = scheds[i];
+  return ((c.id << 1) ^ ((uint32_t)c.days << 24) ^ ((uint32_t)c.hh << 16) ^ ((uint32_t)c.mm << 8) ^ ((uint32_t)c.outlet << 4) ^ (c.on ? 2U : 0U)) | 0x80000000UL;
+}
+
+void sendStripOfflineSched(Strip& s) {
+  if (stripFwNum(s.fw) < 90) return;
+  int i = stripSchedPick(s);
+  s.schedKey = stripSchedKey(i);
+  if (i < 0) { sendLine(s, "up:sched:0:0:0:0"); return; }
+  const Sched& c = scheds[i];
+  uint8_t days = c.days & 0x7F;                  // bit 0 = Sunday, as tm_wday (the strip uses the same bits)
+  uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
+  sendLine(s, "up:sched:" + String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm));
+}
+
+// once a minute: a strip whose next schedule changed (the one it held has run, or one was added) gets the new one
+void stripSchedTick() {
+  static uint32_t last = 0;
+  if (millis() - last < 60000) return;
+  last = millis();
+  for (int i = 0; i < MAX_STRIPS; i++) {
+    Strip& s = strips[i];
+    if (!s.used || !s.identified || stripFwNum(s.fw) < 90 || s.cfgSyncStep || s.txq.length()) continue;
+    if (stripSchedKey(stripSchedPick(s)) != s.schedKey) sendStripOfflineSched(s);
+  }
 }
 
 void pollStrips() {
@@ -323,7 +364,7 @@ void pollStrips() {
     sendLine(s, "up:getinfo:all");
     if (pollCount % DIAG_EVERY == 0) { s.pwrKind = 1; s.pwrCh = 1; s.pwrAt = millis(); sendLine(s, "up:power_report:1:vol"); sendLine(s, "up:query:wifirssi"); }
     else if (pollCount % DIAG_EVERY == 2) askCurrent(s);
-    else if (stripFwNum(s.fw) >= 90 && (pollCount % 3600 == 0) && timeOk() && !s.txq.length()) {
+    else if (stripFwNum(s.fw) >= 90 && (pollCount % 3600 == 0 || !s.timeSyncAt) && timeOk() && !s.txq.length()) {
       sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
       s.timeSyncAt = millis();
     }

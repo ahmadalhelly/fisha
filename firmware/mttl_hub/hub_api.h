@@ -424,7 +424,7 @@ ApiRes api(String path, const String& b) {
     c.enabled = jsonHas(b, "enabled") ? jsonBool(b, "enabled") : 1;
     strlcpy(c.label, jsonValue(b, "label").c_str(), sizeof c.label);
     saveScheds();
-    if (idx >= 0 && stripFwNum(strips[idx].fw) >= 90) strips[idx].cfgSyncStep = 4;
+    if (idx >= 0 && stripFwNum(strips[idx].fw) >= 90) strips[idx].cfgSyncStep = 1;   // tz, time, limits, then the schedule
     return okRes("{\"sid\":" + String(c.id) + "}");
   }
   if (path == "schedule_skip") {                 // {"sid","skip":true|false} skip only the next run
@@ -446,7 +446,7 @@ ApiRes api(String path, const String& b) {
       schedCount--;
       saveScheds();
       int sIdx = findStrip(delMac);
-      if (sIdx >= 0 && stripFwNum(strips[sIdx].fw) >= 90) strips[sIdx].cfgSyncStep = 4;
+      if (sIdx >= 0 && stripFwNum(strips[sIdx].fw) >= 90) strips[sIdx].cfgSyncStep = 1;
       return okRes();
     }
     return errRes("no such schedule");
@@ -583,7 +583,7 @@ ApiRes api(String path, const String& b) {
       z0.trim();
       if (z0.length() && !tzPosixFor(z0.c_str())) return errRes("unknown zone");
     }
-    if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 40, 95); cfg.putUChar("tmax", tempMax); }   // the strip accepts 40..95
+    if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 25, 95); cfg.putUChar("tmax", tempMax); }   // the strip accepts 40..95
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
     if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }

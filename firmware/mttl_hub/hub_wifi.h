@@ -551,6 +551,7 @@ void loop() {
   outletLogTick();
   stg("scen");
   scenTick();
+  stripSchedTick();
   stg("mqtt");
   mqttHealth();
   mqttMemTick();
