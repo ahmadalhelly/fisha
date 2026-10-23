@@ -237,6 +237,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               max: 1800,
               step: 10,
               unit: Tr.isAr ? 'ث' : 's',
+              enabled: s.vProtect,
               onChanged: (v) => s.setStripProtection(vBackSeconds: v.round()),
             ),
             // the window needs room between the two limits
@@ -247,9 +248,9 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             Row(children: [
               Expanded(
                 child: ValueStepper(
-                  value: (s.vBackLo == 0 ? s.vMin + 5 : s.vBackLo).toDouble().clamp(s.vMin + 1.0, s.vMax - 2.0),
+                  value: _backLo(),
                   min: s.vMin + 1.0,
-                  max: s.vMax - 2.0,
+                  max: _backHi() - 1, // under the upper end, or the window is empty and the strips never come back
                   step: 1,
                   unit: 'V',
                   enabled: s.vProtect,
@@ -259,11 +260,12 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(Tr.isAr ? 'و' : 'and', style: TextStyle(color: C.muted))),
               Expanded(
                 child: ValueStepper(
-                  value: (s.vBackHi == 0 ? s.vMax - 5 : s.vBackHi).toDouble().clamp(s.vMin + 2.0, s.vMax - 1.0),
-                  min: s.vMin + 2.0,
+                  value: _backHi(),
+                  min: _backLo() + 1,
                   max: s.vMax - 1.0,
                   step: 1,
                   unit: 'V',
+                  enabled: s.vProtect,
                   onChanged: (v) => s.setStripProtection(vBackHigh: v.round()),
                 ),
               ),
@@ -430,6 +432,10 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
         await s.deleteAutomation(a.aid);
     }
   }
+
+  // the steady window after a voltage cut as shown (0 = 5 V inside the limits), the low end always under the high one
+  double _backHi() => (s.vBackHi == 0 ? s.vMax - 5 : s.vBackHi).toDouble().clamp(s.vMin + 2.0, s.vMax - 1.0);
+  double _backLo() => (s.vBackLo == 0 ? s.vMin + 5 : s.vBackLo).toDouble().clamp(s.vMin + 1.0, _backHi() - 1);
 
   Widget _sectionHead(IconData icon, String title, String sub) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),

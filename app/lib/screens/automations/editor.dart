@@ -144,7 +144,10 @@ class _AutomationEditorState extends State<AutomationEditor> {
                     _roomId = null;
                     _allOutlet = int.parse(v.substring(4));
                     a.outlet = _allOutlet!;
-                    if (a.isVoltage) a.metric = 0;
+                    if (a.isVoltage) {
+                      a.metric = 0;
+                      _watts.text = '1500';
+                    }
                   });
                   return;
                 }
@@ -164,7 +167,10 @@ class _AutomationEditorState extends State<AutomationEditor> {
                 setState(() {
                   a.mac = p[0];
                   a.outlet = int.parse(p[1]);
-                  if (a.outlet != 0 && a.isVoltage) a.metric = 0;
+                  if (a.outlet != 0 && a.isVoltage) {
+                    a.metric = 0;
+                    _watts.text = '1500'; // not the volts as watts
+                  }
                 });
               },
             ),

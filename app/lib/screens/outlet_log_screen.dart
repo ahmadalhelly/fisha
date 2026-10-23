@@ -403,7 +403,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
               final l = List.of(order);
               final x = l.removeAt(from);
               l.insert(to > from ? to - 1 : to, x);
-              _order = l;
+              _order = [...l, ..._order.where((n) => !l.contains(n))]; // outlets not in this period keep their place after
             });
             _saveSort();
           },
@@ -599,6 +599,7 @@ class _DayBand extends CustomPainter {
   @override
   void paint(Canvas c, Size size) {
     c.drawRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(3)), Paint()..color = back);
+    if (size.width < 4) return; // the clamps below need room for a 2 px piece
     for (final p in pieces) {
       // at least 2 px wide and inside the band, also for a cycle in the last minute of the day
       final x1 = (p.$1 / 86400 * size.width).clamp(0.0, size.width - 2);
