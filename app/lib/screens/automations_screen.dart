@@ -207,6 +207,54 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             title: Text(t('vprot_restore'), style: const TextStyle(fontSize: 13)),
             onChanged: (v) => s.setStripProtection(vBack: v),
           ),
+          if (s.vRestore) ...[
+            Text(Tr.isAr ? 'يرجّع بعد ما الفولت يستقر لمدة' : 'Back after the voltage is steady for', style: TextStyle(color: C.textSoft, fontSize: 13)),
+            const SizedBox(height: 8),
+            ValueStepper(
+              value: s.vBackS.toDouble(),
+              min: 10,
+              max: 1800,
+              step: 10,
+              unit: Tr.isAr ? 'ث' : 's',
+              onChanged: (v) => s.setStripProtection(vBackSeconds: v.round()),
+            ),
+            // the window needs room between the two limits
+            if (s.vMax - s.vMin >= 4) ...[
+            const SizedBox(height: 10),
+            Text(Tr.isAr ? 'الفولت يعتبر مستقر لما يبقى بين' : 'Steady means between', style: TextStyle(color: C.textSoft, fontSize: 13)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: ValueStepper(
+                  value: (s.vBackLo == 0 ? s.vMin + 5 : s.vBackLo).toDouble().clamp(s.vMin + 1.0, s.vMax - 2.0),
+                  min: s.vMin + 1.0,
+                  max: s.vMax - 2.0,
+                  step: 1,
+                  unit: 'V',
+                  enabled: s.vProtect,
+                  onChanged: (v) => s.setStripProtection(vBackLow: v.round()),
+                ),
+              ),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(Tr.isAr ? 'و' : 'and', style: TextStyle(color: C.muted))),
+              Expanded(
+                child: ValueStepper(
+                  value: (s.vBackHi == 0 ? s.vMax - 5 : s.vBackHi).toDouble().clamp(s.vMin + 2.0, s.vMax - 1.0),
+                  min: s.vMin + 2.0,
+                  max: s.vMax - 1.0,
+                  step: 1,
+                  unit: 'V',
+                  onChanged: (v) => s.setStripProtection(vBackHigh: v.round()),
+                ),
+              ),
+            ]),
+            ],
+            const SizedBox(height: 4),
+            Text(
+                Tr.isAr
+                    ? 'ده للهاب. المشترك نفسه لو فصل على الفولت وهو بعيد عن الهاب بيرجع بعد 30 ثانية من الاستقرار.'
+                    : 'This is the hub\'s. A strip that cut on voltage by itself, away from the hub, comes back 30 s after it is steady.',
+                style: TextStyle(color: C.muted, fontSize: 11.5, height: 1.4)),
+          ],
           Divider(height: 22, color: C.border),
           Row(children: [
             Icon(Icons.electric_meter_outlined, color: C.danger),

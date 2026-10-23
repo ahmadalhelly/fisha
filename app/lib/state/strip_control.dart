@@ -204,6 +204,9 @@ extension AppStateStripControl on AppState {
   Future<void> setStripProtection({
     bool? vOn,
     bool? vBack,
+    int? vBackSeconds,
+    int? vBackLow,
+    int? vBackHigh,
     int? vLimit,
     int? vMinLimit,
     bool? aOn,
@@ -214,6 +217,9 @@ extension AppStateStripControl on AppState {
   }) async {
     if (vOn != null) vProtect = vOn;
     if (vBack != null) vRestore = vBack;
+    if (vBackSeconds != null) vBackS = vBackSeconds;
+    if (vBackLow != null) vBackLo = vBackLow;
+    if (vBackHigh != null) vBackHi = vBackHigh;
     if (vLimit != null) vMax = vLimit;
     if (vMinLimit != null) vMin = vMinLimit;
     if (aOn != null) aProtect = aOn;
@@ -225,6 +231,9 @@ extension AppStateStripControl on AppState {
     _fail(await api('config', {
       'v_protect': vProtect,
       'v_restore': vRestore,
+      'v_back_s': vBackS,
+      'v_back_lo': vBackLo,
+      'v_back_hi': vBackHi,
       'v_max': vMax,
       'v_min': vMin,
       'a_protect': aProtect,

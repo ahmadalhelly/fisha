@@ -220,6 +220,9 @@ extension AppStateCloudLink on AppState {
           hubHasStripProt = true;
           vProtect = cfg['v_protect'] != false;
           vRestore = cfg['v_restore'] != false;
+          vBackS = (cfg['v_back_s'] as num?)?.toInt() ?? vBackS;
+          vBackLo = (cfg['v_back_lo'] as num?)?.toInt() ?? vBackLo;
+          vBackHi = (cfg['v_back_hi'] as num?)?.toInt() ?? vBackHi;
           vMax = (cfg['v_max'] as num?)?.toInt() ?? vMax;
           vMin = (cfg['v_min'] as num?)?.toInt() ?? vMin;
           aProtect = cfg['a_protect'] != false;

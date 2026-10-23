@@ -166,10 +166,12 @@ void voltCheck(Strip& s) {
   }
   s.ovCount = 0;
   if (!s.vCutMask) return;
-  // back inside the safe window with a 5 V hysteresis
-  if (s.voltage > vMax - 5 || (underOn && s.voltage < vMin + 5)) { s.vOkSince = 0; return; }
+  // back inside the window the owner chose (5 V inside the limits by default), for as long as the owner chose
+  int hi = vBackHi ? ((int)vBackHi < (int)vMax - 1 ? (int)vBackHi : (int)vMax - 1) : (int)vMax - 5;
+  int lo = vBackLo ? ((int)vBackLo > (int)vMin + 1 ? (int)vBackLo : (int)vMin + 1) : (int)vMin + 5;
+  if (s.voltage > hi || (underOn && s.voltage < lo)) { s.vOkSince = 0; return; }
   if (!s.vOkSince) { s.vOkSince = now ? now : 1; return; }
-  if (now - s.vOkSince < 60000) return;
+  if (now - s.vOkSince < (uint32_t)vBackS * 1000UL) return;
   if (vRestore)
     for (int k = 0; k < 4; k++) if (s.vCutMask & (1 << k)) sendOnOff(s, k + 1, true);
   addEvent("voltage", s.mac, 0, String(s.voltage, 0) + " V ok");

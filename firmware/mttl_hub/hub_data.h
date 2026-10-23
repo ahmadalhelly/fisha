@@ -113,6 +113,8 @@ uint8_t tempMax = 80;
 bool tempProtect = true;
 // whole-strip protections
 bool vProt = true, vRestore = true, aProt = true;
+// after a voltage cut: how long the mains must stay inside the window, and the window (0 = 5 V inside the limits)
+uint16_t vBackS = 60, vBackLo = 0, vBackHi = 0;
 uint16_t vMax = 260;
 uint16_t vMin = 180;                               // under-voltage limit (170..260)
 float aMax = 16.0f;

@@ -587,6 +587,9 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
     if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
+    if (jsonHas(b, "v_back_s")) { vBackS = (uint16_t)constrain((int)jsonValue(b, "v_back_s").toInt(), 10, 1800); cfg.putUShort("vbacks", vBackS); }
+    if (jsonHas(b, "v_back_lo")) { vBackLo = (uint16_t)constrain((int)jsonValue(b, "v_back_lo").toInt(), 0, 280); cfg.putUShort("vbacklo", vBackLo); }
+    if (jsonHas(b, "v_back_hi")) { vBackHi = (uint16_t)constrain((int)jsonValue(b, "v_back_hi").toInt(), 0, 280); cfg.putUShort("vbackhi", vBackHi); }
     if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 220, 280); cfg.putUShort("vmax", vMax); }
     if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 100, 220); cfg.putUShort("vmin", vMin); }   // the ranges are the strip's own
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }

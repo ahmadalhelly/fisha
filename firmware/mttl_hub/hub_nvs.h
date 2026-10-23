@@ -182,6 +182,9 @@ void loadGlobals() {
   tempProtect = cfg.getBool("tprot", true);
   vProt = cfg.getBool("vprot", true);
   vRestore = cfg.getBool("vrest", true);
+  vBackS = (uint16_t)constrain((int)cfg.getUShort("vbacks", 60), 10, 1800);
+  vBackLo = cfg.getUShort("vbacklo", 0);
+  vBackHi = cfg.getUShort("vbackhi", 0);
   vMax = cfg.getUShort("vmax", 260);
   vMin = cfg.getUShort("vmin", 180);
   aProt = cfg.getBool("aprot", true);

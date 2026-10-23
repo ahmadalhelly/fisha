@@ -83,6 +83,9 @@ extension AppStateBackup on AppState {
           if (hubHasStripProt) ...{
             'v_protect': vProtect,
             'v_restore': vRestore,
+            'v_back_s': vBackS,
+            'v_back_lo': vBackLo,
+            'v_back_hi': vBackHi,
             'v_max': vMax,
             'v_min': vMin,
             'a_protect': aProtect,

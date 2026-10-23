@@ -215,6 +215,8 @@ class AppState extends ChangeNotifier {
 
   // whole-strip protections (/ F1.0.90+)
   bool vProtect = true, vRestore = true, aProtect = true;
+  // after a voltage cut: seconds the mains must stay steady, and the window (0 = 5 V inside the limits)
+  int vBackS = 60, vBackLo = 0, vBackHi = 0;
 
   int vMax = 260;
 
