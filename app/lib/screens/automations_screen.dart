@@ -171,8 +171,8 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 8),
           ValueStepper(
             value: s.vMax.toDouble(),
-            min: 225,
-            max: 270,
+            min: 220,
+            max: 280,
             step: 1,
             unit: 'V',
             onChanged: (v) => s.setStripProtection(vLimit: v.round()),
@@ -191,7 +191,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 8),
           ValueStepper(
             value: s.vMin.toDouble(),
-            min: 170,
+            min: 100,
             max: 220,
             step: 1,
             unit: 'V',
@@ -220,8 +220,8 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 8),
           ValueStepper(
             value: s.aMax,
-            min: 1,
-            max: 16,
+            min: 0.5,
+            max: 16.5,
             step: 0.5,
             decimals: 1,
             unit: 'A',
@@ -242,7 +242,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 8),
           ValueStepper(
             value: s.wMax.toDouble(),
-            min: 500,
+            min: 50,
             max: 3680,
             step: 50,
             unit: 'W',

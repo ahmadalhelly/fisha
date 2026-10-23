@@ -587,11 +587,11 @@ ApiRes api(String path, const String& b) {
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
     if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
-    if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 225, 270); cfg.putUShort("vmax", vMax); }
-    if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 170, 220); cfg.putUShort("vmin", vMin); }   // the strip accepts 100..220
+    if (jsonHas(b, "v_max")) { vMax = constrain((int)jsonValue(b, "v_max").toInt(), 220, 280); cfg.putUShort("vmax", vMax); }
+    if (jsonHas(b, "v_min")) { vMin = constrain((int)jsonValue(b, "v_min").toInt(), 100, 220); cfg.putUShort("vmin", vMin); }   // the ranges are the strip's own
     if (jsonHas(b, "a_protect")) { aProt = jsonBool(b, "a_protect"); cfg.putBool("aprot", aProt); }
-    if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 1.0f, 16.0f); cfg.putFloat("amax", aMax); }
-    if (jsonHas(b, "w_max")) { STRIP_MAX_W = (float)constrain((int)jsonValue(b, "w_max").toInt(), 500, 3680); cfg.putUShort("wmax", (uint16_t)STRIP_MAX_W); }
+    if (jsonHas(b, "a_max")) { aMax = constrain(jsonValue(b, "a_max").toFloat(), 0.5f, 16.5f); cfg.putFloat("amax", aMax); }
+    if (jsonHas(b, "w_max")) { STRIP_MAX_W = (float)constrain((int)jsonValue(b, "w_max").toInt(), 50, 3680); cfg.putUShort("wmax", (uint16_t)STRIP_MAX_W); }
     if (jsonHas(b, "hold_s")) { protHoldS = (uint16_t)constrain((int)jsonValue(b, "hold_s").toInt(), 1, 600); cfg.putUShort("phold2", protHoldS); }
     if (jsonHas(b, "tz_zone")) {                 // a zone from the app's list ("" = back to the fixed offset)
       String z = jsonValue(b, "tz_zone");
