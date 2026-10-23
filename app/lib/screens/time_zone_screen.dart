@@ -244,10 +244,31 @@ class _TimeZoneScreenState extends State<TimeZoneScreen> {
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text(s.stripName(st), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                          Text(st.tsyncS < 0 ? _tr('لسه ما اتبعتلوش الوقت', 'Time not sent yet') : _tr('آخر مزامنة من ${_ago(st.tsyncS)}', 'Last sync ${_ago(st.tsyncS)} ago'),
+                          Text(
+                              st.tackS >= 0
+                                  ? _tr('آخر مزامنة ناجحة من ${_ago(st.tackS)}', 'Last confirmed sync ${_ago(st.tackS)} ago')
+                                  : st.tsyncS < 0
+                                      ? _tr('لسه ما اتبعتلوش الوقت', 'Time not sent yet')
+                                      : _tr('آخر إرسال من ${_ago(st.tsyncS)}', 'Last sent ${_ago(st.tsyncS)} ago'),
                               style: TextStyle(color: C.muted, fontSize: 11.5)),
                         ]),
                       ),
+                      // did the strip take the time it was sent last
+                      if (st.tsyncSt.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: (st.tsyncSt == 'ok' ? C.green : st.tsyncSt == 'fail' ? C.danger : C.accent).withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            if (st.tsyncSt == 'wait') SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.6, color: C.accent)),
+                            if (st.tsyncSt != 'wait') Icon(st.tsyncSt == 'ok' ? Icons.check_circle : Icons.error_outline, size: 14, color: st.tsyncSt == 'ok' ? C.green : C.danger),
+                            const SizedBox(width: 4),
+                            Text(st.tsyncSt == 'ok' ? _tr('نجحت', 'Done') : st.tsyncSt == 'fail' ? _tr('ماوصلش رد', 'No answer') : _tr('بيزامن', 'Syncing'),
+                                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: st.tsyncSt == 'ok' ? C.green : st.tsyncSt == 'fail' ? C.danger : C.accent)),
+                          ]),
+                        ),
                     ]),
                   ),
                 const SizedBox(height: 8),

@@ -40,7 +40,10 @@ String stripJson(int i) {
   }
   outs += "]";
   return "{\"mac\":\"" + s.mac + "\",\"name\":\"MTTL " + s.mac.substring(5) + "\",\"label\":\"" + jsonEsc(s.label) +
-         "\",\"model\":\"" + s.model + "\",\"fw\":\"" + s.fw + "\",\"tsync_s\":" + (s.timeSyncAt ? String((millis() - s.timeSyncAt) / 1000) : String("-1")) + ",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
+         "\",\"model\":\"" + s.model + "\",\"fw\":\"" + s.fw + "\",\"tsync_s\":" + (s.timeSyncAt ? String((millis() - s.timeSyncAt) / 1000) : String("-1")) +
+         // the last time sent: answered ("ok"), still waiting ("wait", up to 15 s) or not answered ("fail")
+         ",\"tsync_st\":\"" + String(!s.timeSyncAt ? "" : (!s.timePend && s.timeAckAt >= s.timeSyncAt) ? "ok" : (millis() - s.timeSyncAt < 15000 ? "wait" : "fail")) +
+         "\",\"tack_s\":" + (s.timeAckAt ? String((millis() - s.timeAckAt) / 1000) : String("-1")) + ",\"ip\":\"" + s.ip + "\",\"online\":true,\"on\":" + (any ? "true" : "false") +
          ",\"power_w\":" + String(pw, 2) + ",\"energy_kwh\":" + String(en, 3) +
          ",\"voltage\":" + (isnan(s.voltage) ? String("null") : String(s.voltage, 1)) +
          ",\"current_a\":" + (anyReal ? String(ampsSum, 2) : (isnan(s.voltage) || s.voltage <= 0 ? String("0") : String(pw / s.voltage, 2))) +

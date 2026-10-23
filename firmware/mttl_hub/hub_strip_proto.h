@@ -144,6 +144,11 @@ void handleLine(int i, const String& line) {
   if (line.startsWith("up:power_report:")) { handlePowerReport(s, line); return; }
   if (line.indexOf("connect_ok") >= 0) {          // reply to a Wi-Fi handover or F1.0.90 config command
     s.connOk = true;
+    if (s.timePend && millis() - s.timeSyncAt < 15000) {   // the answer to the time just sent: the strip has the clock
+      s.timePend = false;
+      s.timeAckAt = millis();
+      stateDirty = true;
+    }
     if (wifiTestState == "moving" || s.wifiHandoverSent) {
       s.wifiHandoverSent = false;
       if (wifiTestState == "moving" && wifiOkMacs.indexOf(s.mac) < 0) wifiOkMacs += s.mac + ",";
@@ -348,7 +353,7 @@ void pollStrips() {
         s.cfgSyncStep = 2;
         continue;
       } else if (s.cfgSyncStep == 2) {
-        if (timeOk()) { sendLine(s, "up:time:" + String((unsigned long)time(nullptr))); s.timeSyncAt = millis(); }
+        if (timeOk()) { sendLine(s, "up:time:" + String((unsigned long)time(nullptr))); s.timeSyncAt = millis(); s.timePend = true; }
         s.cfgSyncStep = 3;
         continue;
       } else if (s.cfgSyncStep == 3) {
@@ -367,6 +372,7 @@ void pollStrips() {
     else if (stripFwNum(s.fw) >= 90 && (pollCount % 3600 == 0 || !s.timeSyncAt) && timeOk() && !s.txq.length()) {
       sendLine(s, "up:time:" + String((unsigned long)time(nullptr)));
       s.timeSyncAt = millis();
+      s.timePend = true;
     }
   }
 }

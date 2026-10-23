@@ -112,6 +112,8 @@ class Strip {
   final bool hasRule; // whole-strip rule
   final bool masterLock; // child lock on the strip's own physical master button (strip fw F1.0.82)
   final int tsyncS; // seconds since the hub last sent this strip the time (-1 = never)
+  final String tsyncSt; // that time: 'ok' (the strip answered), 'wait', 'fail', '' (never sent / older hub)
+  final int tackS; // seconds since the strip last confirmed the time (-1 = never)
 
   const Strip({
     required this.mac,
@@ -128,6 +130,8 @@ class Strip {
     this.hasRule = false,
     this.masterLock = false,
     this.tsyncS = -1,
+    this.tsyncSt = '',
+    this.tackS = -1,
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -154,6 +158,8 @@ class Strip {
       hasRule: j['rule'] == true,
       masterLock: j['mlock'] == true,
       tsyncS: _i(j['tsync_s'], -1),
+      tsyncSt: _s(j['tsync_st']),
+      tackS: _i(j['tack_s'], -1),
     );
   }
 
@@ -179,6 +185,9 @@ class Strip {
         hasSchedule: hasSchedule,
         hasRule: hasRule,
         masterLock: masterLock ?? this.masterLock,
+        tsyncS: tsyncS,
+        tsyncSt: tsyncSt,
+        tackS: tackS,
       );
 
   Strip withOutlets(int n, bool on) =>
