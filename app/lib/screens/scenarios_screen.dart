@@ -376,6 +376,12 @@ class _ScenarioEditorState extends State<ScenarioEditor> {
 
   String _macOf(Strip st) => st.mac.toUpperCase().replaceAll(':', '');
 
+  /// the outlet's own name from the account ("Bedroom lamp"), the plain number only when the strip is not known
+  String _outletLabel(String mac, int n) {
+    final l = _strips.where((x) => _macOf(x) == mac.toUpperCase().replaceAll(':', ''));
+    return l.isEmpty ? '${_tr('مخرج', 'Outlet')} $n' : s.outletName(l.first, n);
+  }
+
   Widget _stripPicker(String mac, void Function(String) onPick, {bool outletZero = false, int? outlet, void Function(int)? onOutlet}) {
     final macs = [for (final x in _strips) _macOf(x)];
     final cur = macs.contains(mac.toUpperCase().replaceAll(':', '')) ? mac.toUpperCase().replaceAll(':', '') : null;
@@ -394,16 +400,20 @@ class _ScenarioEditorState extends State<ScenarioEditor> {
       ),
       if (onOutlet != null) ...[
         const SizedBox(width: 10),
-        DropdownButton<int>(
-          value: outlet,
-          dropdownColor: C.surface2,
-          items: [
-            if (outletZero) DropdownMenuItem(value: 0, child: Text(_tr('كله', 'All'))),
-            for (var i = 1; i <= 4; i++) DropdownMenuItem(value: i, child: Text('${_tr('مخرج', 'Outlet')} $i')),
-          ],
-          onChanged: (v) {
-            if (v != null) setState(() => onOutlet(v));
-          },
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 150),
+          child: DropdownButton<int>(
+            isExpanded: true,
+            value: outlet,
+            dropdownColor: C.surface2,
+            items: [
+              if (outletZero) DropdownMenuItem(value: 0, child: Text(_tr('كله', 'All'))),
+              for (var i = 1; i <= 4; i++) DropdownMenuItem(value: i, child: Text(_outletLabel(mac, i), overflow: TextOverflow.ellipsis)),
+            ],
+            onChanged: (v) {
+              if (v != null) setState(() => onOutlet(v));
+            },
+          ),
         ),
       ],
     ]);
@@ -595,7 +605,7 @@ class _ScenarioEditorState extends State<ScenarioEditor> {
   }
 
   String _actionText(ScenAction a) {
-    final where = a.mac.isEmpty ? '' : ' · ${_stripLabel(a.mac)}${a.outlet == 0 ? '' : ' ${_tr('مخرج', 'outlet')} ${a.outlet}'}';
+    final where = a.mac.isEmpty ? '' : ' · ${_stripLabel(a.mac)}${a.outlet == 0 ? '' : ' · ${_outletLabel(a.mac, a.outlet)}'}';
     switch (a.type) {
       case 'on':
         return '${_tr('شغّل', 'Switch on')}$where';
@@ -655,11 +665,15 @@ class _ScenarioEditorState extends State<ScenarioEditor> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  DropdownButton<int>(
-                    value: outlet,
-                    dropdownColor: C.surface2,
-                    items: [for (var i = 0; i <= 4; i++) DropdownMenuItem(value: i, child: Text(i == 0 ? _tr('كله', 'All') : '${_tr('مخرج', 'Outlet')} $i'))],
-                    onChanged: (v) => setD(() => outlet = v ?? outlet),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: DropdownButton<int>(
+                      isExpanded: true,
+                      value: outlet,
+                      dropdownColor: C.surface2,
+                      items: [for (var i = 0; i <= 4; i++) DropdownMenuItem(value: i, child: Text(i == 0 ? _tr('كله', 'All') : _outletLabel(mac, i), overflow: TextOverflow.ellipsis))],
+                      onChanged: (v) => setD(() => outlet = v ?? outlet),
+                    ),
                   ),
                 ]),
               if (type == 'delay' || type == 'cycle')
