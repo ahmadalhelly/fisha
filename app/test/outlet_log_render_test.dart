@@ -38,6 +38,7 @@ void main() {
     await tester.runAsync(() async {
       img = await b.toImage(pixelRatio: 1);
       final png = await img.toByteData(format: ui.ImageByteFormat.png);
+      Directory('test/shots').createSync(recursive: true);
       File('test/shots/outlet_log.png').writeAsBytesSync(png!.buffer.asUint8List());
     });
   });
