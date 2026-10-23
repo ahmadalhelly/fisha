@@ -84,6 +84,10 @@ Future<bool?> _bioAllChoice(BuildContext context, AppState state, Strip s, List<
   );
 }
 
+/// "the whole strip" in one command only when no outlet is child-locked: the strip applies a whole-strip command to its
+/// free outlets only, so a locked outlet stayed as it was. With a lock each outlet gets its own command.
+bool _wholeStripOk(Strip s) => !s.masterLock && s.outlets.every((o) => !o.locked);
+
 Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
   if (!s.online) return;
   if (state.requiresBio(s.mac, 0)) {
@@ -97,11 +101,11 @@ Future<void> guardedAllOn(BuildContext context, AppState state, Strip s) async {
     if (c == null) return;
     bioOk = c;
   }
-  if (bioOk) {
+  if (bioOk && _wholeStripOk(s)) {
     await state.setOutlet(s.mac, 0, true);
   } else {
     for (final o in s.outlets) {
-      if (!o.on && !state.requiresBio(s.mac, o.n)) {
+      if (!o.on && (bioOk || !state.requiresBio(s.mac, o.n))) {
         await state.setOutlet(s.mac, o.n, true);
       }
     }
@@ -126,7 +130,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
 
   final protectedOn = targets.where((o) => o.protected).toList();
   if (protectedOn.isEmpty) {
-    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
+    if (bioOk && _wholeStripOk(s) && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       return state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
@@ -159,7 +163,7 @@ Future<void> guardedAllOff(BuildContext context, AppState state, Strip s) async 
       if (!o.protected) await state.setOutlet(s.mac, o.n, false);
     }
   } else if (choice == 2) {
-    if (bioOk && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
+    if (bioOk && _wholeStripOk(s) && targets.length == s.onCount && s.outlets.every((o) => !o.keepOn)) {
       await state.setOutlet(s.mac, 0, false);
     } else {
       for (final o in targets) {
