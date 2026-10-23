@@ -245,31 +245,30 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
             const SizedBox(height: 10),
             Text(Tr.isAr ? 'الفولت يعتبر مستقر لما يبقى بين' : 'Steady means between', style: TextStyle(color: C.textSoft, fontSize: 13)),
             const SizedBox(height: 8),
-            Row(children: [
-              Expanded(
-                child: ValueStepper(
-                  value: _backLo(),
-                  min: s.vMin + 1.0,
-                  max: _backHi() - 1, // under the upper end, or the window is empty and the strips never come back
-                  step: 1,
-                  unit: 'V',
-                  enabled: s.vProtect,
-                  onChanged: (v) => s.setStripProtection(vBackLow: v.round()),
-                ),
-              ),
-              Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text(Tr.isAr ? 'و' : 'and', style: TextStyle(color: C.muted))),
-              Expanded(
-                child: ValueStepper(
-                  value: _backHi(),
-                  min: _backLo() + 1,
-                  max: s.vMax - 1.0,
-                  step: 1,
-                  unit: 'V',
-                  enabled: s.vProtect,
-                  onChanged: (v) => s.setStripProtection(vBackHigh: v.round()),
-                ),
-              ),
-            ]),
+            // one under the other, each as wide as the page: side by side the number wrapped a digit per line
+            Text(Tr.isAr ? 'من' : 'From', style: TextStyle(color: C.muted, fontSize: 12)),
+            const SizedBox(height: 4),
+            ValueStepper(
+              value: _backLo(),
+              min: s.vMin + 1.0,
+              max: _backHi() - 1, // under the upper end, or the window is empty and the strips never come back
+              step: 1,
+              unit: 'V',
+              enabled: s.vProtect,
+              onChanged: (v) => s.setStripProtection(vBackLow: v.round()),
+            ),
+            const SizedBox(height: 10),
+            Text(Tr.isAr ? 'إلى' : 'To', style: TextStyle(color: C.muted, fontSize: 12)),
+            const SizedBox(height: 4),
+            ValueStepper(
+              value: _backHi(),
+              min: _backLo() + 1,
+              max: s.vMax - 1.0,
+              step: 1,
+              unit: 'V',
+              enabled: s.vProtect,
+              onChanged: (v) => s.setStripProtection(vBackHigh: v.round()),
+            ),
             ],
             const SizedBox(height: 4),
             Text(
