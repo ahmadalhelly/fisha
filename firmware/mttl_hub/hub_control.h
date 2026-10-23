@@ -331,10 +331,14 @@ void evalStrip(int i) {
     if (r.metric == 2) { clear = pw < r.watts && tc < r.limit2; if (tc >= r.limit2) p = tc; }   // either limit (watts or temp)
     else clear = r.above ? p < r.watts : p > r.watts;
     if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; autoFiredAt[a] = 0; continue; }
-    // a rule fires once per crossing. If the condition is still there a while after it fired (a notify-only rule, an
-    // outlet that is locked or protected, a whole-strip rule whose protected outlets keep the load up), it fires again
-    // every few minutes instead of waiting for the owner to switch the rule off and on.
-    if (!autoArmed[a] && autoFiredAt[a] && now - autoFiredAt[a] > (uint32_t)max((int)r.holdS * 1000, 300000)) { autoArmed[a] = true; autoSince[a] = 0; }
+    // a rule fires once per crossing. If the condition is still there after it fired (the outlet is locked or protected,
+    // a whole-strip rule whose protected outlets keep the load up, a notify-only rule), it fires again by itself, so the
+    // owner never has to switch the rule off and on: a rule that cuts retries after its hold time (at least 30 s), a
+    // notify-only one reminds every 5 minutes.
+    if (!autoArmed[a] && autoFiredAt[a]) {
+      uint32_t again = (r.act & 2) ? (uint32_t)max((int)r.holdS * 1000, 30000) : 300000UL;
+      if (now - autoFiredAt[a] > again) { autoArmed[a] = true; autoSince[a] = 0; }
+    }
     bool cond = autoArmed[a];
     // near-threshold warning (color-code alert) before the countdown trips
     if (r.above && autoArmed[a] && on && !autoWarned[a]) {
