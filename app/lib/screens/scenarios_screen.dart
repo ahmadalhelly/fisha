@@ -219,13 +219,23 @@ class _ScenariosScreenState extends State<ScenariosScreen> {
     }
   }
 
+  /// the outlet (or strip, for 0) the way the account names it
+  String _watched(Scenario sc) {
+    final l = s.allStrips.where((x) => x.mac.toUpperCase() == sc.tmac.toUpperCase().replaceAll(':', ''));
+    if (l.isEmpty) return '';
+    return sc.tn == 0 ? s.stripName(l.first) : s.outletName(l.first, sc.tn);
+  }
+
   String _summary(Scenario sc) {
     switch (sc.tt) {
       case 1:
         const m = ['W', 'A', '°C', 'V'];
-        return '${m[sc.tmet.clamp(0, 3)]} ${sc.top == 0 ? '<' : '>'} ${sc.tv} · ${sc.th ~/ 60} ${_tr('د', 'min')}';
+        final w = _watched(sc);
+        return '${w.isEmpty ? '' : '$w · '}${m[sc.tmet.clamp(0, 3)]} ${sc.top == 0 ? '<' : '>'} ${sc.tv} · ${sc.th ~/ 60} ${_tr('د', 'min')}';
       case 2:
-        return sc.tv == 1 ? _tr('لما المخرج يشتغل', 'when an outlet goes on') : _tr('لما المخرج يفصل', 'when an outlet goes off');
+        final w = _watched(sc);
+        if (w.isEmpty) return sc.tv == 1 ? _tr('لما المخرج يشتغل', 'when an outlet goes on') : _tr('لما المخرج يفصل', 'when an outlet goes off');
+        return sc.tv == 1 ? _tr('لما $w يشتغل', 'when $w goes on') : _tr('لما $w يفصل', 'when $w goes off');
       case 3:
         return '${sc.thh.toString().padLeft(2, '0')}:${sc.tmm.toString().padLeft(2, '0')}';
       case 4:
