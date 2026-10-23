@@ -329,11 +329,12 @@ void evalStrip(int i) {
     bool clear;
     if (r.metric == 2) { clear = pw < r.watts && tc < r.limit2; if (tc >= r.limit2) p = tc; }   // either limit (watts or temp)
     else clear = r.above ? p < r.watts : p > r.watts;
-    if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; autoFiredAt[a] = 0; continue; }
-    // a rule keeps acting for as long as its condition holds, with no need to switch it off and on: after it fired it
-    // is armed again once its hold time has passed (at least 10 s), so a cut that did not take (a locked or protected
-    // outlet, protected outlets that keep a whole-strip load up) is tried again and a notify-only rule repeats.
-    if (!autoArmed[a] && autoFiredAt[a] && now - autoFiredAt[a] > (uint32_t)max((int)r.holdS * 1000, 10000)) { autoArmed[a] = true; autoSince[a] = 0; }
+    if (clear || !on) { autoArmed[a] = true; autoWarned[a] = false; autoSince[a] = 0; autoFiredAt[a] = 0; autoSaid[a] = false; continue; }
+    // a rule that switches off keeps acting for as long as its condition holds, with no need to switch it off and on:
+    // after it fired it is armed again once its hold time has passed (at least 10 s), so a cut that did not take (a locked
+    // or protected outlet, protected outlets that keep a whole-strip load up) is tried again. The alert goes out once per
+    // crossing, with the first run; a notify-only rule has nothing to retry and stays once per crossing.
+    if (!autoArmed[a] && autoFiredAt[a] && (r.act & 2) && now - autoFiredAt[a] > (uint32_t)max((int)r.holdS * 1000, 10000)) { autoArmed[a] = true; autoSince[a] = 0; }
     bool cond = autoArmed[a];
     // near-threshold warning (color-code alert) before the countdown trips
     if (r.above && autoArmed[a] && on && !autoWarned[a]) {
@@ -362,7 +363,8 @@ void evalStrip(int i) {
       String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : (r.metric == 4 ? " V" : " W"));
       // what was read and the limit it passed ("692 W > 500 W"), the rule's name in front when it has one
       String what = String(p, (unit == " C" || unit == " V") ? 0 : 1) + unit + (r.above ? " > " : " < ") + String(r.metric == 1 ? r.watts : (r.metric == 2 && p == tc ? r.limit2 : r.watts), unit == " A" ? 1 : 0) + unit;
-      addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
+      if (!autoSaid[a]) addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
+      autoSaid[a] = true;
     }
   }
 }

@@ -109,6 +109,7 @@ uint8_t autoCount = 0;
 bool autoArmed[MAX_AUTO];
 bool autoWarned[MAX_AUTO];                         // near-limit warning sent for this crossing
 uint32_t autoSince[MAX_AUTO];
+bool autoSaid[MAX_AUTO];                               // the alert for this crossing was already sent (a retry does not repeat it)
 uint32_t autoFiredAt[MAX_AUTO];                        // when the rule last fired (0 = since it was armed)
 Ev events[MAX_EVENTS];
 uint8_t evHead = 0, evCount = 0;
