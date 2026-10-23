@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
@@ -38,7 +39,9 @@ class OutletLogScreen extends StatefulWidget {
   final AppState state;
   final String mac;
   final int outlet; // 0 = every outlet of the strip
-  const OutletLogScreen({super.key, required this.state, required this.mac, required this.outlet});
+  /// tests hand the log in without a hub
+  final Future<CmdResult> Function(Map<String, dynamic> body)? loader;
+  const OutletLogScreen({super.key, required this.state, required this.mac, required this.outlet, this.loader});
 
   @override
   State<OutletLogScreen> createState() => _OutletLogScreenState();
@@ -56,6 +59,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
   @override
   void initState() {
     super.initState();
+    _loadSort();
     _load();
   }
 
@@ -67,7 +71,8 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
       _loading = true;
       _failed = false;
     });
-    final r = await s.api('outlet_log', {'mac': widget.mac, 'outlet': widget.outlet, 'days': _days});
+    final body = {'mac': widget.mac, 'outlet': widget.outlet, 'days': _days};
+    final r = widget.loader != null ? await widget.loader!(body) : await s.api('outlet_log', body);
     final l = r.data?['cycles'];
     if (!mounted || seq != _loadSeq) return;
     setState(() {
@@ -243,6 +248,223 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
         ]),
       );
 
+  // ---- the cycles, one card per outlet --------------------------------------------------------------------------
+  static const _sorts = ['recent', 'time', 'energy', 'count', 'longest', 'shortest', 'name', 'manual'];
+  String _sort = 'recent';
+  List<int> _order = const []; // the hand-made order (outlet numbers), for "manual"
+  final Set<int> _open = {};
+
+  String _sortLabel(String k) => switch (k) {
+        'recent' => _tr('الأحدث', 'Most recent'),
+        'time' => _tr('الأطول تشغيلاً', 'Longest on'),
+        'energy' => _tr('الأكثر استهلاكاً', 'Most energy'),
+        'count' => _tr('الأكثر تشغيلاً (عدد المرات)', 'Most cycles'),
+        'longest' => _tr('أطول دورة', 'Longest cycle'),
+        'shortest' => _tr('أقصر دورة', 'Shortest cycle'),
+        'name' => _tr('بالاسم', 'By name'),
+        _ => _tr('ترتيبي (اسحب وأفلت)', 'My order (drag)'),
+      };
+
+  Future<void> _loadSort() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final k = p.getString('olog_sort') ?? 'recent';
+      final o = p.getStringList('olog_order_${widget.mac.toUpperCase()}') ?? const [];
+      if (!mounted) return;
+      setState(() {
+        _sort = _sorts.contains(k) ? k : 'recent';
+        _order = [for (final x in o) int.tryParse(x) ?? 0];
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveSort() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('olog_sort', _sort);
+      await p.setStringList('olog_order_${widget.mac.toUpperCase()}', [for (final n in _order) '$n']);
+    } catch (_) {}
+  }
+
+  /// the outlets of the log in the chosen order
+  List<int> _sortedOutlets(Map<int, List<OutletCycle>> by, DateTime now) {
+    int mins(int n) => by[n]!.fold<int>(0, (a, c) => a + c.duration(now).inMinutes);
+    int wh(int n) => by[n]!.fold<int>(0, (a, c) => a + c.wh);
+    Duration longest(int n) => by[n]!.map((c) => c.duration(now)).reduce((a, b) => a > b ? a : b);
+    Duration shortest(int n) => by[n]!.map((c) => c.duration(now)).reduce((a, b) => a < b ? a : b);
+    DateTime last(int n) => by[n]!.map((c) => c.on).reduce((a, b) => a.isAfter(b) ? a : b);
+    final l = by.keys.toList()..sort();
+    switch (_sort) {
+      case 'time':
+        l.sort((a, b) => mins(b).compareTo(mins(a)));
+      case 'energy':
+        l.sort((a, b) => wh(b).compareTo(wh(a)));
+      case 'count':
+        l.sort((a, b) => by[b]!.length.compareTo(by[a]!.length));
+      case 'longest':
+        l.sort((a, b) => longest(b).compareTo(longest(a)));
+      case 'shortest':
+        l.sort((a, b) => shortest(a).compareTo(shortest(b)));
+      case 'name':
+        l.sort((a, b) => _outletOf(a).compareTo(_outletOf(b)));
+      case 'manual':
+        int pos(int n) {
+          final i = _order.indexOf(n);
+          return i < 0 ? 100 + n : i;
+        }
+        l.sort((a, b) => pos(a).compareTo(pos(b)));
+      default:
+        l.sort((a, b) => last(b).compareTo(last(a)));
+    }
+    return l;
+  }
+
+  List<Widget> _outletCards(DateTime now) {
+    final by = <int, List<OutletCycle>>{};
+    for (final c in _cycles) {
+      by.putIfAbsent(c.outlet, () => []).add(c);
+    }
+    final order = _sortedOutlets(by, now);
+    Widget card(int n, {Widget? handle}) {
+      final list = by[n]!;
+      final mins = list.fold<int>(0, (a, c) => a + c.duration(now).inMinutes);
+      final wh = list.fold<int>(0, (a, c) => a + c.wh);
+      final open = _open.contains(n);
+      return Container(
+        key: ValueKey('o$n'),
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: cardBox(radius: 16),
+        clipBehavior: Clip.antiAlias,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            onTap: () => setState(() => open ? _open.remove(n) : _open.add(n)),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+              child: Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(_outletOf(n), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                    const SizedBox(height: 2),
+                    Text(
+                        '${_durLong(Duration(minutes: mins))} · ${list.length == 1 ? _tr('دورة واحدة', '1 cycle') : _tr('${list.length} دورات', '${list.length} cycles')} · $wh Wh',
+                        style: TextStyle(color: C.muted, fontSize: 12)),
+                  ]),
+                ),
+                if (list.any((c) => c.off == null))
+                  Padding(padding: const EdgeInsetsDirectional.only(end: 6), child: Icon(Icons.circle, size: 9, color: C.green)),
+                if (handle != null) handle,
+                Icon(open ? Icons.expand_less : Icons.expand_more, color: C.muted),
+              ]),
+            ),
+          ),
+          if (open) ...[
+            Divider(height: 1, color: C.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _dayList(list, now, boxed: false)),
+            ),
+          ],
+        ]),
+      );
+    }
+
+    return [
+      Row(children: [
+        Expanded(child: Text(_tr('المخارج', 'Outlets'), style: TextStyle(color: C.muted, fontSize: 12.5, fontWeight: FontWeight.w700))),
+        PopupMenuButton<String>(
+          initialValue: _sort,
+          color: C.surface2,
+          onSelected: (k) {
+            setState(() {
+              _sort = k;
+              if (k == 'manual' && _order.isEmpty) _order = List.of(order);
+            });
+            _saveSort();
+          },
+          itemBuilder: (_) => [for (final k in _sorts) PopupMenuItem(value: k, child: Text(_sortLabel(k)))],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.sort, size: 18, color: C.accent),
+              const SizedBox(width: 6),
+              Text(_sortLabel(_sort), style: TextStyle(color: C.accent, fontSize: 12.5, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      if (_sort == 'manual')
+        ReorderableListView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          onReorder: (from, to) {
+            setState(() {
+              final l = List.of(order);
+              final x = l.removeAt(from);
+              l.insert(to > from ? to - 1 : to, x);
+              _order = l;
+            });
+            _saveSort();
+          },
+          children: [
+            for (var i = 0; i < order.length; i++)
+              card(order[i], handle: ReorderableDragStartListener(index: i, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.drag_indicator, color: C.muted)))),
+          ],
+        )
+      else
+        for (final n in order) card(n),
+    ];
+  }
+
+  /// cycles by day, newest day first; [boxed] puts each day in its own card (one outlet's page)
+  List<Widget> _dayList(List<OutletCycle> list, DateTime now, {bool boxed = true}) {
+    final byDay = <DateTime, List<OutletCycle>>{};
+    for (final c in list) {
+      byDay.putIfAbsent(DateTime(c.on.year, c.on.month, c.on.day), () => []).add(c);
+    }
+    final days = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
+    Widget row(OutletCycle c) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(children: [
+            Icon(c.src == 1 ? Icons.phone_android : Icons.touch_app_outlined, size: 18, color: C.muted),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                    c.off == null
+                        ? _tr('من ${_hm(c.on)} · شغال دلوقتي', 'From ${_hm(c.on)} · on now')
+                        : _tr('من ${_hm(c.on)} إلى ${_hm(c.off!)}', '${_hm(c.on)} to ${_hm(c.off!)}'),
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: c.off == null ? C.green : null)),
+                Text('${_durLong(c.duration(now))} · ${c.src == 1 ? _tr('من التطبيق أو الجدولة', 'app or schedule') : _tr('من زرار المشترك', 'strip button')}',
+                    style: TextStyle(color: C.muted, fontSize: 11.5)),
+              ]),
+            ),
+            Text('${c.wh} Wh', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          ]),
+        );
+    final out = <Widget>[];
+    for (final d in days) {
+      final l = byDay[d]!..sort((a, b) => b.on.compareTo(a.on));
+      final wh = l.fold<int>(0, (a, c) => a + c.wh);
+      out.add(Padding(
+        padding: EdgeInsets.fromLTRB(boxed ? 4 : 0, boxed ? 8 : 10, boxed ? 4 : 0, boxed ? 6 : 2),
+        child: Row(children: [
+          Expanded(child: Text(_dayLabel(d), style: TextStyle(fontWeight: FontWeight.w800, color: C.textSoft, fontSize: boxed ? 14 : 13))),
+          Text('$wh Wh · ${(wh / 1000 * s.tariff).toStringAsFixed(2)} ${t('egp')}', style: TextStyle(color: C.muted, fontSize: 12)),
+        ]),
+      ));
+      final rows = Column(children: [
+        for (var i = 0; i < l.length; i++) ...[
+          if (i > 0) Divider(height: 1, color: C.border.withValues(alpha: 0.5)),
+          row(l[i]),
+        ],
+      ]);
+      out.add(boxed ? Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2), margin: const EdgeInsets.only(bottom: 4), decoration: cardBox(radius: 16), child: rows) : rows);
+    }
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
@@ -292,21 +514,23 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
                   child: Text(_tr('فيه دورات أقدم ما اتعرضتش. اختار فترة أقصر عشان الأرقام تبقى كاملة.', 'Older cycles are not shown. Pick a shorter period for complete numbers.'),
                       style: TextStyle(color: C.warn, fontSize: 12)),
                 ),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: 10,
-                crossAxisSpacing: 10,
-                childAspectRatio: 1.75,
-                children: [
+              for (final row in [
+                [
                   _kpi(_tr('مدة التشغيل', 'Time on'), _durLong(Duration(minutes: totalMin)), _tr('مجموع كل الدورات', 'all cycles together')),
                   _kpi(_tr('عدد الدورات', 'Cycles'), _cycles.length == 1 ? _tr('دورة واحدة', '1 cycle') : _tr('${_cycles.length} دورات', '${_cycles.length} cycles'),
                       '${_tr('أطولها', 'longest')} ${_durLong(longest)}'),
+                ],
+                [
                   _kpi(_tr('الاستهلاك', 'Energy'), '${(totalWh / 1000).toStringAsFixed(2)} kWh', _tr('في الفترة دي', 'in this period')),
                   _kpi(_tr('التكلفة', 'Cost'), '${(totalWh / 1000 * s.tariff).toStringAsFixed(2)} ${t('egp')}', _tr('حسب سعر الكيلو', 'at your tariff')),
                 ],
-              ),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: IntrinsicHeight(
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [Expanded(child: row[0]), const SizedBox(width: 10), Expanded(child: row[1])]),
+                  ),
+                ),
               const SizedBox(height: 14),
               RepaintBoundary(
                 key: _chartKey,
@@ -357,46 +581,7 @@ class _OutletLogScreenState extends State<OutletLogScreen> {
                 ),
               ),
               const SizedBox(height: 18),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 4, 2),
-                child: Text(_tr('الدورات', 'Cycles'), style: TextStyle(color: C.muted, fontSize: 12.5, fontWeight: FontWeight.w700)),
-              ),
-              for (final d in days) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Text(_dayLabel(d), style: TextStyle(fontWeight: FontWeight.w800, color: C.textSoft, fontSize: 14)),
-                    Text('${((kwh[d] ?? 0) * 1000).round()} Wh · ${((kwh[d] ?? 0) * s.tariff).toStringAsFixed(2)} ${t('egp')}', textDirection: TextDirection.ltr, style: TextStyle(color: C.muted, fontSize: 12)),
-                  ]),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                  decoration: cardBox(radius: 16),
-                  child: Column(children: [
-                    for (final c in _cycles.where((c) => c.on.year == d.year && c.on.month == d.month && c.on.day == d.day))
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 9),
-                        child: Row(children: [
-                          Icon(c.src == 1 ? Icons.phone_android : Icons.touch_app_outlined, size: 18, color: C.muted),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              if (widget.outlet == 0) Text(_outletOf(c.outlet), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                              Text(
-                                  c.off == null
-                                      ? _tr('من ${_hm(c.on)} · شغال دلوقتي', 'From ${_hm(c.on)} · on now')
-                                      : _tr('من ${_hm(c.on)} إلى ${_hm(c.off!)}', '${_hm(c.on)} to ${_hm(c.off!)}'),
-                                  style: TextStyle(fontWeight: widget.outlet == 0 ? FontWeight.w500 : FontWeight.w700, fontSize: 13.5, color: c.off == null ? C.green : null)),
-                              Text('${_durLong(c.duration(now))} · ${c.src == 1 ? _tr('من التطبيق أو الجدولة', 'app or schedule') : _tr('من زرار المشترك', 'strip button')}',
-                                  style: TextStyle(color: C.muted, fontSize: 11.5)),
-                            ]),
-                          ),
-                          Text('${c.wh} Wh', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                        ]),
-                      ),
-                  ]),
-                ),
-              ],
+              if (widget.outlet == 0) ..._outletCards(now) else ..._dayList(_cycles, now),
             ],
           ]),
         ),
@@ -415,7 +600,9 @@ class _DayBand extends CustomPainter {
   void paint(Canvas c, Size size) {
     c.drawRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(3)), Paint()..color = back);
     for (final p in pieces) {
-      final x1 = p.$1 / 86400 * size.width, x2 = (p.$2 / 86400 * size.width).clamp(x1 + 2, size.width);
+      // at least 2 px wide and inside the band, also for a cycle in the last minute of the day
+      final x1 = (p.$1 / 86400 * size.width).clamp(0.0, size.width - 2);
+      final x2 = (p.$2 / 86400 * size.width).clamp(x1 + 2, size.width);
       c.drawRRect(RRect.fromRectAndRadius(Rect.fromLTRB(x1, 0, x2, size.height), const Radius.circular(2)), Paint()..color = fill);
     }
   }
