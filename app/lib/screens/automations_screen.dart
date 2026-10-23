@@ -22,10 +22,13 @@ class AutomationsScreen extends StatefulWidget {
 class _AutomationsScreenState extends State<AutomationsScreen> {
   AppState get s => widget.state;
   bool _loading = true;
+  int _focus = 0; // the rule opened from a strip or outlet card: scrolled to and flashed once
 
   @override
   void initState() {
     super.initState();
+    _focus = s.focusAid;
+    s.focusAid = 0;
     _load();
   }
 
@@ -44,7 +47,6 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
-        if (s.focusAid != 0) WidgetsBinding.instance.addPostFrameCallback((_) => s.focusAid = 0);
         final grouped = <String, List<Automation>>{};
         for (final a in s.automations) {
           grouped.putIfAbsent(a.mac, () => []).add(a);
@@ -79,9 +81,27 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               onRefresh: _load,
               child: ListView(cacheExtent: 4000, padding: const EdgeInsets.fromLTRB(18, 8, 18, 96), children: [
                 if (!s.hubV2) emptyCard(t('err_old_fw')) else ...[
-                  _tempCard(),
-                  if (s.hubHasStripProt) ...[const SizedBox(height: 14), _stripProtCard()],
-                  const SizedBox(height: 14),
+                  _sectionHead(Icons.public, Tr.isAr ? 'الحماية العامة' : 'General protection',
+                      Tr.isAr
+                          ? 'إلزامية على كل المشتركات والمخارج. لو مشترك أو مخرج ليه قاعدة خاصة تحت، هي اللي بتتطبق عليه بدالها.'
+                          : 'Applies to every strip and outlet. A strip or outlet with its own rule below follows that rule instead.'),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: C.accent.withValues(alpha: 0.35)),
+                      color: C.accent.withValues(alpha: 0.04),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      _tempCard(),
+                      if (s.hubHasStripProt) ...[const SizedBox(height: 8), _stripProtCard()],
+                    ]),
+                  ),
+                  const SizedBox(height: 22),
+                  _sectionHead(Icons.electrical_services, Tr.isAr ? 'أتمتة المشتركات والمخارج' : 'Strip and outlet rules',
+                      Tr.isAr ? 'قواعد لمشترك أو مخرج معيّن. قواعد المشترك كله فوق، وقواعد كل مخرج تحتها.' : 'Rules for one strip or outlet. Whole-strip rules come first, outlet rules under them.'),
+                  const SizedBox(height: 10),
                   if (_loading) Center(child: CircularProgressIndicator(color: C.accent)),
                   if (!_loading && s.automations.isEmpty) emptyCard(t('auto_empty'), icon: Icons.bolt),
                   for (final mac in macs) ...[
@@ -98,6 +118,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
   }
 
   Widget _stripGroup(String mac, List<Automation> rules) {
+    rules = [...rules.where((a) => a.outlet == 0), ...rules.where((a) => a.outlet != 0)];
     final strip = s.live(mac);
     final stripName = strip != null ? s.stripName(strip) : (Tr.isAr ? 'مشترك غير معروف' : 'Unknown strip') + (mac.length >= 4 ? ' · ${mac.substring(mac.length - 4)}' : '');
     return Container(
@@ -129,7 +150,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           Divider(height: 1, color: C.border),
           for (var i = 0; i < rules.length; i++) ...[
             if (i > 0) Divider(height: 1, color: C.border.withValues(alpha: 0.5), indent: 70),
-            FocusFlash(active: s.focusAid != 0 && s.focusAid == rules[i].aid, radius: 14, child: _ruleRow(rules[i])),
+            FocusFlash(active: !_loading && _focus != 0 && _focus == rules[i].aid, radius: 14, child: _ruleRow(rules[i])),
           ],
         ],
       ),
@@ -410,6 +431,32 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
     }
   }
 
+  Widget _sectionHead(IconData icon, String title, String sub) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, size: 20, color: C.accent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+              const SizedBox(height: 2),
+              Text(sub, style: TextStyle(color: C.muted, fontSize: 12, height: 1.45)),
+            ]),
+          ),
+        ]),
+      );
+
+  /// "whole strip" or "outlet", so the two kinds of rule read apart at a glance
+  Widget _scopeChip(bool wholeStrip) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: wholeStrip ? C.accent.withValues(alpha: 0.16) : C.surface2,
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: Text(wholeStrip ? (Tr.isAr ? 'المشترك كله' : 'Whole strip') : (Tr.isAr ? 'مخرج' : 'Outlet'),
+            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: wholeStrip ? C.accent : C.muted)),
+      );
+
   Widget _ruleRow(Automation a) => Material(
         color: Colors.transparent,
         child: InkWell(
@@ -435,8 +482,14 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(a.label.isNotEmpty ? a.label : s.nameForMac(a.mac, a.outlet),
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Row(children: [
+                    Flexible(
+                      child: Text(a.label.isNotEmpty ? a.label : s.nameForMac(a.mac, a.outlet),
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                    const SizedBox(width: 6),
+                    _scopeChip(a.outlet == 0),
+                  ]),
                   const SizedBox(height: 3),
                   Text(
                     automationCondText(a),

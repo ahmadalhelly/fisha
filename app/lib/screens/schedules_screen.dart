@@ -122,8 +122,20 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
             const SizedBox(width: 14),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(sc.label.isNotEmpty ? sc.label : s.nameForMac(sc.mac, sc.outlet),
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                Row(children: [
+                  Flexible(
+                    child: Text(sc.label.isNotEmpty ? sc.label : s.nameForMac(sc.mac, sc.outlet),
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(width: 6),
+                  // the whole strip or one outlet, readable at a glance
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: sc.outlet == 0 ? C.accent.withValues(alpha: 0.16) : C.surface2, borderRadius: BorderRadius.circular(99)),
+                    child: Text(sc.outlet == 0 ? (Tr.isAr ? 'المشترك كله' : 'Whole strip') : (Tr.isAr ? 'مخرج' : 'Outlet'),
+                        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: sc.outlet == 0 ? C.accent : C.muted)),
+                  ),
+                ]),
                 if (sc.label.isNotEmpty)
                   Text(s.nameForMac(sc.mac, sc.outlet), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: C.muted)),
                 const SizedBox(height: 4),
