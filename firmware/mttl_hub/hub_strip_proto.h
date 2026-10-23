@@ -321,11 +321,13 @@ void sendStripOfflineSched(Strip& s) {
   if (stripFwNum(s.fw) < 90) return;
   int i = stripSchedPick(s);
   s.schedKey = stripSchedKey(i);
-  if (i < 0) { sendLine(s, "up:sched:0:0:0:0"); return; }
+  if (i < 0) { sendLine(s, "up:sched:0:0:0:0"); strlcpy(s.schedSent, "0:0:0:0", sizeof s.schedSent); return; }
   const Sched& c = scheds[i];
   uint8_t days = c.days & 0x7F;                  // bit 0 = Sunday, as tm_wday (the strip uses the same bits)
   uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
-  sendLine(s, "up:sched:" + String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm));
+  String v = String(en_ch) + ":" + String(days) + ":" + String(c.hh) + ":" + String(c.mm);
+  sendLine(s, "up:sched:" + v);
+  strlcpy(s.schedSent, v.c_str(), sizeof s.schedSent);
 }
 
 // once a minute: a strip whose next schedule changed (the one it held has run, or one was added) gets the new one

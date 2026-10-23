@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../models.dart';
 import '../i18n.dart';
 import '../services/tz_zones.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'schedules_screen.dart' show daysText;
 
 String _tr(String ar, String en) => Tr.isAr ? ar : en;
 
@@ -251,6 +253,8 @@ class _TimeZoneScreenState extends State<TimeZoneScreen> {
                                       ? _tr('لسه ما اتبعتلوش الوقت', 'Time not sent yet')
                                       : _tr('آخر إرسال من ${_ago(st.tsyncS)}', 'Last sent ${_ago(st.tsyncS)} ago'),
                               style: TextStyle(color: C.muted, fontSize: 11.5)),
+                          if (st.osched.isNotEmpty)
+                            Text(_oschedText(st), style: TextStyle(color: C.textSoft, fontSize: 11.5)),
                         ]),
                       ),
                       // did the strip take the time it was sent last
@@ -288,6 +292,16 @@ class _TimeZoneScreenState extends State<TimeZoneScreen> {
         );
       },
     );
+  }
+
+  /// the schedule the strip holds by itself ("386:20:18:30" = on, outlet 2, Tue and Thu, 18:30)
+  String _oschedText(Strip st) {
+    final p = st.osched.split(':').map((x) => int.tryParse(x) ?? 0).toList();
+    if (p.length < 4 || (p[0] >> 8) == 0) return _tr('مفيش ميعاد جوه المشترك', 'No schedule inside the strip');
+    final on = (p[0] >> 7) & 1 == 1, n = p[0] & 7;
+    final what = on ? _tr('تشغيل', 'on') : _tr('إيقاف', 'off');
+    final who = n == 0 ? _tr('المشترك كله', 'whole strip') : s.outletName(st, n);
+    return _tr('جوه المشترك: ${fmtTime12(p[2], p[3])} $what · $who · ${daysText(p[1])}', 'In the strip: ${fmtTime12(p[2], p[3])} $what · $who · ${daysText(p[1])}');
   }
 
   Widget _clock(String label, String time, String sub) => Container(

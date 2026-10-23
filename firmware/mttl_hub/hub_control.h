@@ -322,6 +322,7 @@ void evalStrip(int i) {
     else { Outlet& o = s.o[r.outlet - 1]; pw = o.on ? o.powerW : 0; tc = o.tempC; cur = r.above ? max(outletAmps(s, r.outlet - 1, volts, now), outletAmpsMax(s, r.outlet - 1, volts, now)) : outletAmps(s, r.outlet - 1, volts, now); on = o.on; }
     float p = r.metric == 1 ? tc : (r.metric == 3 ? cur : (r.metric == 4 ? s.voltage : pw));
     if (r.metric == 4 && (isnan(s.voltage) || s.voltage < 50)) continue;   // no reading yet (NAN until the first one)
+    if (r.metric == 4) on = true;                  // the mains, not the load: it may notify with every outlet off
     // a rule is armed from the moment it is saved (and after every reboot), so a load that is already
     // past the limit counts. It fires once, then re-arms when the condition clears or the outlet is switched off.
     // Before, it only armed after the load crossed back first: a heater already above, or an outlet already in

@@ -56,6 +56,7 @@ struct Strip {
   uint32_t timeSyncAt = 0;                       // millis() when up:time was last sent (0 = never)
   uint32_t timeAckAt = 0;                        // millis() when the strip answered that up:time (0 = never)
   bool timePend = false;                         // up:time sent, no answer yet
+  char schedSent[24] = "";                      // the up:sched values last sent ("386:20:18:30"), shown in the app
   uint32_t schedKey = 0;                         // the schedule the strip holds (see stripSchedKey), 0 = none sent yet
   uint8_t cfgSyncStep = 0;                       // paced F1.0.90 sync: 1=tz, 2=time, 3=limits, 4=sched, 0=done
   uint32_t cmdAt[4] = {0, 0, 0, 0};              // when the hub last switched each outlet (to tell button presses apart)

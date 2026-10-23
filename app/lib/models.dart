@@ -114,6 +114,7 @@ class Strip {
   final int tsyncS; // seconds since the hub last sent this strip the time (-1 = never)
   final String tsyncSt; // that time: 'ok' (the strip answered), 'wait', 'fail', '' (never sent / older hub)
   final int tackS; // seconds since the strip last confirmed the time (-1 = never)
+  final String osched; // the schedule the hub last gave the strip itself, as sent ("386:20:18:30", "0:0:0:0" = none, '' = unknown)
 
   const Strip({
     required this.mac,
@@ -132,6 +133,7 @@ class Strip {
     this.tsyncS = -1,
     this.tsyncSt = '',
     this.tackS = -1,
+    this.osched = '',
   });
 
   factory Strip.fromJson(Map<String, dynamic> j) {
@@ -160,6 +162,7 @@ class Strip {
       tsyncS: _i(j['tsync_s'], -1),
       tsyncSt: _s(j['tsync_st']),
       tackS: _i(j['tack_s'], -1),
+      osched: _s(j['osched']),
     );
   }
 
@@ -188,6 +191,7 @@ class Strip {
         tsyncS: tsyncS,
         tsyncSt: tsyncSt,
         tackS: tackS,
+        osched: osched,
       );
 
   Strip withOutlets(int n, bool on) =>
