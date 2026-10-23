@@ -107,6 +107,8 @@ void openStripSheet(BuildContext context, AppState state, String mac) {
                 _tile(Icons.history, Tr.isAr ? 'سجل التشغيل' : 'On/off history', Tr.isAr ? 'كل الدورات واستهلاكها' : 'Every cycle and its energy', !state.hubV2 ? null : () => _openLog(ctx, state, s.mac, 0)),
                 if (state.can(Perm.auto))
                 _tile(Icons.bolt, t('rule_cut'), t('rule_cut_strip_sub'), !state.hubV2 ? null : () => _openRule(ctx, state, s.mac, 0)),
+                // the schedules and rules on the whole strip, like an outlet lists its own
+                ..._linkedRules(ctx, state, s.mac, 0, s.hasSchedule, s.hasRule),
                 _switchTile(
                     Icons.fingerprint,
                     Tr.isAr ? 'بصمة للمفتاح الرئيسي' : 'Fingerprint for master switch',

@@ -28,7 +28,6 @@ class StripCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = strip;
     final online = s.online;
-    final stripBadges = badgesFor(state, s, null);
     final stripIcon = state.stripIcon(s.mac);
     final stripLevel = s.maxTemp >= 60 ? 3 : loadLevel(s.livePower, kStripMaxW);
     final stripTone = stripLevel == 0 ? C.accent : levelColor(stripLevel);
@@ -104,7 +103,6 @@ class StripCard extends StatelessWidget {
                       const SizedBox(width: 6),
                       Text('${s.voltage!.toStringAsFixed(0)} V', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 11.5, color: voltColor(s.voltage!), fontWeight: FontWeight.w600)),
                     ],
-                    if (stripBadges.isNotEmpty) ...[const SizedBox(width: 6), ...stripBadges],
                   ]),
                 ]),
               ),

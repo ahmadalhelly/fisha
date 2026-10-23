@@ -154,13 +154,15 @@ class _MasterSocketState extends State<_MasterSocket> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
         child: Column(children: [
-          // protections set on the whole strip show on the master, like the outlets show theirs
-          if (state.requiresBio(s.mac, 0) || s.masterLock)
+          // what is set on the whole strip (schedules, rules, timers, fingerprint, child lock) shows on the master,
+          // like the outlets show theirs
+          if (state.requiresBio(s.mac, 0) || s.masterLock || badgesFor(state, s, null, size: 12).isNotEmpty)
             SizedBox(
               height: 14,
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  ...badgesFor(state, s, null, size: 12),
                   if (state.requiresBio(s.mac, 0))
                     Tooltip(
                       message: Tr.isAr ? 'يحتاج بصمة' : 'Biometric protected',
