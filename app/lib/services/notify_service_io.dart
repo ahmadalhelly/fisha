@@ -303,7 +303,7 @@ class _NotifyHandler extends TaskHandler {
       }
     } else if (type == 'automation') {
       final defaultTitle = isAr ? 'أتمتة' : 'Automation';
-      title = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? msg : defaultTitle;
+      title = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? _outletNames(strip, msg, isAr) : defaultTitle;
       final who = [
         if (stripName.isNotEmpty) stripName,
         if (outletName.isNotEmpty) outletName,
@@ -326,7 +326,7 @@ class _NotifyHandler extends TaskHandler {
         'overvolt' => isAr ? 'فولت عالي: المشترك اتقفل' : 'High voltage: strip turned off',
         'undervolt' => isAr ? 'فولت واطي: المشترك اتقفل' : 'Low voltage: strip turned off',
         'overcurrent' => isAr ? 'تيار عالي: اتقفل' : 'Over current: turned off',
-        'overload' => isAr ? 'الحمل عدّى 3500 واط' : 'Load over 3500 W',
+        'overload' => isAr ? 'الحمل عدّى الحد: المشترك قفل مخارج' : 'Load over the limit: outlets turned off',
         'trip_fail' => isAr ? 'أمر القفل ماتأكدش' : 'Safety cut not confirmed',
         'pair' => isAr ? 'تليفون جديد طالب يدخل على الـ Hub' : 'A new phone wants access to the hub',
         'test' => 'Fisha ✓',
@@ -336,7 +336,7 @@ class _NotifyHandler extends TaskHandler {
         if (stripName.isNotEmpty) stripName,
         if (outletName.isNotEmpty) outletName,
       ].join(' · ');
-      final extraMsg = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? msg : '';
+      final extraMsg = (msg.isNotEmpty && msg != 'on' && msg != 'off' && msg != '1' && msg != '0') ? _outletNames(strip, msg, isAr) : '';
       if (who.isNotEmpty) {
         body = extraMsg.isNotEmpty ? '$who — $extraMsg' : who;
       } else {
@@ -380,4 +380,22 @@ class _NotifyHandler extends TaskHandler {
     _client?.autoReconnect = false;
     _client?.disconnect();
   }
+}
+
+/// " · o:2,4" at the end of a hub message (the outlets it cut) becomes the outlets' names from the saved strip
+String _outletNames(Map<String, dynamic>? strip, String msg, bool isAr) {
+  final m = RegExp(r' · o:([\d,]+)$').firstMatch(msg);
+  if (m == null) return msg;
+  final outs = strip?['outlets'];
+  String name(int n) {
+    if (outs is List) {
+      for (final o in outs) {
+        if (o is Map && (o['n'] as num?)?.toInt() == n && (o['label'] ?? '').toString().isNotEmpty) return o['label'].toString();
+      }
+    }
+    return t('default_outlet', {'n': n});
+  }
+
+  final names = [for (final n in m.group(1)!.split(',').map(int.tryParse).whereType<int>()) name(n)];
+  return '${msg.substring(0, m.start)} · ${isAr ? 'اتقفل' : 'off'}: ${names.join(isAr ? '، ' : ', ')}';
 }

@@ -6,9 +6,21 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
+/// " · o:2,4" at the end of a message (the outlets the hub cut) becomes the outlets' own names
+String withOutletNames(AppState s, String mac, String msg) {
+  final m = RegExp(r' · o:([\d,]+)$').firstMatch(msg);
+  if (m == null) return msg;
+  final st = s.live(mac);
+  final names = [
+    for (final n in m.group(1)!.split(',').map(int.tryParse).whereType<int>())
+      st == null ? t('default_outlet', {'n': n}) : s.outletName(st, n)
+  ];
+  return '${msg.substring(0, m.start)} · ${Tr.isAr ? 'اتقفل' : 'off'}: ${names.join(Tr.isAr ? '، ' : ', ')}';
+}
+
 String eventText(AppState s, HubEvent e) {
   final who = e.mac.isEmpty ? '' : s.nameForMac(e.mac, e.outlet);
-  final m = e.msg;
+  final m = withOutletNames(s, e.mac, e.msg);
   final body = switch (e.type) {
     'temp' => t('ev_temp', {'x': m}),
     'load' => t('ev_load', {'x': m}),
@@ -29,7 +41,8 @@ String eventText(AppState s, HubEvent e) {
     'voltage' => t('ev_voltage', {'x': m}),
     'overvolt' => t('ev_overvolt', {'x': m}),
     'overcurrent' => t('ev_overcurrent', {'x': m}),
-    'overload' => t('ev_overload', {'x': m}),
+    // a hub that sends the limit ("692 W > 500 W") says which outlets went off; an older one only the load
+    'overload' => m.contains('>') ? t('ev_overload2', {'x': m}) : t('ev_overload', {'x': m}),
     'trip_fail' => t('ev_trip_fail', {'x': m}),
     'test' => t('ev_test'),
     'stall' => t('ev_stall', {'x': m}),

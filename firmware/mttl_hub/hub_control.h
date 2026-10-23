@@ -285,6 +285,7 @@ void evalStrip(int i) {
     if (!s.olSince) s.olSince = now ? now : 1;
     if (total > STRIP_MAX_W * 1.15f || now - s.olSince > (uint32_t)protHoldS * 1000UL) {
       float left = 0;                              // what is still on now (the current cut above may have run)
+      String cuts;                                 // the outlets cut, for the event ("2,4")
       for (int k = 0; k < 4; k++) left += s.o[k].on ? s.o[k].powerW : 0;
       for (int pass = 0; pass < 2 && left > STRIP_MAX_W; pass++)
         while (left > STRIP_MAX_W) {
@@ -294,8 +295,9 @@ void evalStrip(int i) {
           if (big < 0) break;
           left -= s.o[big].powerW;
           protectCut(s, big);
+          cuts += (cuts.length() ? "," : "") + String(big + 1);
         }
-      addEvent("overload", s.mac, 0, String((int)total) + " W");
+      addEvent("overload", s.mac, 0, String((int)total) + " W > " + String((int)STRIP_MAX_W) + " W" + (cuts.length() ? " · o:" + cuts : String("")));
       s.olSince = 0;
     }
   } else s.olSince = 0;
@@ -340,13 +342,17 @@ void evalStrip(int i) {
       autoArmed[a] = false;
       autoWarned[a] = false;
       autoSince[a] = 0;
+      String cuts;                                 // whole strip: the outlets it switched off ("1,3")
       if (r.act & 2) {
         if (r.outlet == 0) {                       // whole strip: never cut protected outlets (router)
-          for (int k = 0; k < 4; k++) if (s.o[k].on && !(s.protMask & (1 << k))) sendOnOffF(s, k + 1, false, true);
+          for (int k = 0; k < 4; k++)
+            if (s.o[k].on && !(s.protMask & (1 << k))) { sendOnOffF(s, k + 1, false, true); cuts += (cuts.length() ? "," : "") + String(k + 1); }
         } else sendOnOffF(s, r.outlet, false, true);
       }
       String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : " W");
-      addEvent("automation", s.mac, r.outlet, String(r.label).length() ? String(r.label) : String(p, (unit == " C") ? 0 : 1) + unit);
+      // what was read and the limit it passed ("692 W > 500 W"), the rule's name in front when it has one
+      String what = String(p, (unit == " C") ? 0 : 1) + unit + (r.above ? " > " : " < ") + String(r.metric == 1 ? r.watts : (r.metric == 2 && p == tc ? r.limit2 : r.watts), unit == " A" ? 1 : 0) + unit;
+      addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
     }
   }
 }
