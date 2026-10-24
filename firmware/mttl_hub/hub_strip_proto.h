@@ -418,7 +418,8 @@ void sendStripOfflineSched(Strip& s) {
     int pick[4];
     int n = stripSchedPickN(s, pick, 4);
     s.schedKey = stripSchedKeyN(pick, n);
-    if (n == 0) { sendLine(s, "up:sched:0:0:0:0"); strlcpy(s.schedSent, "0:0:0:0", sizeof s.schedSent); return; }
+    if (n < 4) sendLine(s, "up:sched:0:0:0:0");   // empty all four first, so a slot not filled below keeps no old schedule
+    if (n == 0) { strlcpy(s.schedSent, "0:0:0:0", sizeof s.schedSent); return; }
     String all;
     for (int k = 0; k < n; k++) {
       const Sched& c = scheds[pick[k]];

@@ -281,7 +281,7 @@ void sendLine(Strip& s, const String& line) {
   }
   s.txq += line + "\r\n";
   // another config command answers connect_ok too: from now on a connect_ok is not the answer to the time
-  if (s.timePend && (line.startsWith("up:tz:") || line.startsWith("up:limits:") || line.startsWith("up:sched:") || line.startsWith("up:childlock:"))) s.timePend = false;
+  if (s.timePend && (line.startsWith("up:tz:") || line.startsWith("up:limits:") || line.startsWith("up:olimits:") || line.startsWith("up:sched:") || line.startsWith("up:childlock:"))) s.timePend = false;
   if (!flushTx(s, 150) && !s.dead)
     Serial.printf("[tx %s] slow, %u bytes waiting\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), s.txq.length());
   Serial.printf("[tx %s] %s\n", s.mac.length() ? s.mac.c_str() : s.ip.c_str(), line.c_str());
