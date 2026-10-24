@@ -274,7 +274,10 @@ void sendStripLimits(Strip& s) {
   uint16_t hs = (uint16_t)constrain((int)protHoldS, 1, 600);
   // The strip enforces its own limits when the hub is off, so the whole-strip rules that switch off (act 2 = off, 3 = both)
   // go to it too: the strip has one limit per kind, for the whole strip, so a rule on a single outlet stays with the hub.
-  // (This used to take the notify-only rules, act 1, and skip the ones that cut.)
+  // The protection page is the master for every strip: a kind (watts, degrees, amps, volts) that this strip has a whole-strip
+  // rule for leaves the master and uses the rule's value instead (the smallest, if it has several), and the strip then waits
+  // the rule's own hold time, so the hub cuts first and sends its alert.
+  bool fpw = false, ftp = false, fma = false, fov = false, fuv = false, fhs = false;
   for (int i = 0; i < autoCount; i++) {
     const Autom& r = autos[i];
     if (!r.enabled || !(r.act & 2) || r.outlet != 0) continue;
@@ -283,24 +286,24 @@ void sendStripLimits(Strip& s) {
     float v = r.watts;
     switch (r.metric) {
       case 0:                                                  // watts of the whole strip
-        if (r.above && v >= 50.0f && (uint16_t)v < pw) { pw = (uint16_t)v; used = true; }
+        if (r.above && v >= 50.0f && (!fpw || (uint16_t)v < pw)) { pw = (uint16_t)constrain((int)v, 50, 3680); fpw = used = true; }
         break;
       case 1:                                                  // degrees
-        if (r.above && v >= 15.0f && (uint8_t)v < tp) { tp = (uint8_t)constrain((int)v, 15, 95); used = true; }
+        if (r.above && v >= 15.0f && (!ftp || (uint8_t)constrain((int)v, 15, 95) < tp)) { tp = (uint8_t)constrain((int)v, 15, 95); ftp = used = true; }
         break;
       case 2:                                                  // watts or degrees
-        if (v >= 50.0f && (uint16_t)v < pw) { pw = (uint16_t)v; used = true; }
-        if (r.limit2 >= 15.0f && (uint8_t)r.limit2 < tp) { tp = (uint8_t)constrain((int)r.limit2, 15, 95); used = true; }
+        if (v >= 50.0f && (!fpw || (uint16_t)v < pw)) { pw = (uint16_t)constrain((int)v, 50, 3680); fpw = used = true; }
+        if (r.limit2 >= 15.0f && (!ftp || (uint8_t)constrain((int)r.limit2, 15, 95) < tp)) { tp = (uint8_t)constrain((int)r.limit2, 15, 95); ftp = used = true; }
         break;
       case 3:                                                  // amps
-        if (r.above && v >= 0.5f && (uint16_t)(v * 1000.0f) < ma) { ma = (uint16_t)constrain((int)(v * 1000.0f), 500, 16500); used = true; }
+        if (r.above && v >= 0.5f && (!fma || (uint16_t)constrain((int)(v * 1000.0f), 500, 16500) < ma)) { ma = (uint16_t)constrain((int)(v * 1000.0f), 500, 16500); fma = used = true; }
         break;
       case 4:                                                  // volts: above = the high limit, below = the low limit
-        if (r.above) { if ((uint16_t)v < ov) { ov = (uint16_t)constrain((int)v, 220, 280); used = true; } }
-        else if ((uint16_t)v > uv) { uv = (uint16_t)constrain((int)v, 100, 220); used = true; }
+        if (r.above) { if (!fov || (uint16_t)constrain((int)v, 220, 280) < ov) { ov = (uint16_t)constrain((int)v, 220, 280); fov = used = true; } }
+        else if (!fuv || (uint16_t)constrain((int)v, 100, 220) > uv) { uv = (uint16_t)constrain((int)v, 100, 220); fuv = used = true; }
         break;
     }
-    if (used && r.holdS >= 1 && r.holdS <= 600 && r.holdS < hs) hs = r.holdS;
+    if (used && r.holdS >= 1 && r.holdS <= 600 && (!fhs || r.holdS < hs)) { hs = r.holdS; fhs = true; }
   }
   sendLine(s, "up:limits:" + String(uv) + ":" + String(ov) + ":" + String(ma) + ":" +
               String(pw) + ":" + String(tp) + ":" + String(hs));
