@@ -282,9 +282,6 @@ void sendStripLimits(Strip& s) {
     const Autom& r = autos[i];
     if (!r.enabled || !(r.act & 2) || r.outlet != 0) continue;
     if (strlen(r.mac) && !s.mac.equalsIgnoreCase(r.mac)) continue;
-    // a strip that has protected outlets (router) keeps its load rules with the hub: the strip would cut those outlets too,
-    // while only the mains (volts) is a reason to cut them
-    if (s.protMask && r.metric != 4) continue;
     bool used = false;
     float v = r.watts;
     switch (r.metric) {
@@ -308,6 +305,9 @@ void sendStripLimits(Strip& s) {
     }
     if (used && r.holdS >= 1 && r.holdS <= 600 && (!fhs || r.holdS < hs)) { hs = r.holdS; fhs = true; }
   }
+  // with the hub on, the hub acts on the rule at its hold time (cutting only the outlet with the load, sparing protected
+  // ones, and sending the alert); the strip waits 5 s longer, so it acts only when the hub is off and cuts the whole strip
+  if (fhs) hs = (uint16_t)min((int)hs + 5, 600);
   sendLine(s, "up:limits:" + String(uv) + ":" + String(ov) + ":" + String(ma) + ":" +
               String(pw) + ":" + String(tp) + ":" + String(hs));
 }
