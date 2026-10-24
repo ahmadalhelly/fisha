@@ -28,10 +28,10 @@ class AutomationMsg {
   }
 
   String _what(bool ar) => switch (metric) {
-        'W' => ar ? 'القدرة' : 'power',
-        'A' => ar ? 'التيار' : 'current',
-        'C' => ar ? 'الحرارة' : 'temperature',
-        _ => ar ? 'الجهد' : 'voltage',
+        'W' => ar ? 'القدرة' : 'Power',
+        'A' => ar ? 'التيار' : 'Current',
+        'C' => ar ? 'الحرارة' : 'Temperature',
+        _ => ar ? 'الجهد' : 'Voltage',
       };
 
   String _unit(bool ar) => switch (metric) {
@@ -41,7 +41,7 @@ class AutomationMsg {
         _ => ar ? 'فولت' : 'V',
       };
 
-  /// "الجهد 231 فولت أعلى من الحد 190 فولت" / "voltage 231 V is above the limit 190 V"
+  /// "الجهد 231 فولت أعلى من الحد 190 فولت" / "Voltage 231 V is above the limit 190 V"
   String reading_(bool ar) => ar
       ? '${_what(true)} $reading ${_unit(true)} ${above ? 'أعلى' : 'أقل'} من الحد $limit ${_unit(true)}'
       : '${_what(false)} $reading ${_unit(false)} is ${above ? 'above' : 'below'} the limit $limit ${_unit(false)}';

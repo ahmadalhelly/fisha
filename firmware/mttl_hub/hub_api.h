@@ -503,7 +503,7 @@ ApiRes api(String path, const String& b) {
     uint32_t id = (uint32_t)jsonValue(b, "aid").toInt();
     for (int i = 0; i < autoCount; i++) {
       if (autos[i].id != id) continue;
-      for (int j = i; j < autoCount - 1; j++) { autos[j] = autos[j + 1]; autoArmed[j] = autoArmed[j + 1]; autoSince[j] = autoSince[j + 1]; autoFiredAt[j] = autoFiredAt[j + 1]; autoSaid[j] = autoSaid[j + 1]; }
+      for (int j = i; j < autoCount - 1; j++) { autos[j] = autos[j + 1]; autoArmed[j] = autoArmed[j + 1]; autoWarned[j] = autoWarned[j + 1]; autoSince[j] = autoSince[j + 1]; autoFiredAt[j] = autoFiredAt[j + 1]; autoSaid[j] = autoSaid[j + 1]; }
       autoCount--;
       saveAutos();
       for (int k = 0; k < MAX_STRIPS; k++) {

@@ -363,7 +363,7 @@ void evalStrip(int i) {
       String unit = (r.metric == 1 || (r.metric == 2 && p == tc)) ? " C" : (r.metric == 3 ? " A" : (r.metric == 4 ? " V" : " W"));
       // what was read and the limit it passed ("692 W > 500 W"), the rule's name in front when it has one
       String what = String(p, (unit == " C" || unit == " V") ? 0 : 1) + unit + (r.above ? " > " : " < ") + String(r.metric == 1 ? r.watts : (r.metric == 2 && p == tc ? r.limit2 : r.watts), unit == " A" ? 1 : 0) + unit;
-      if (!autoSaid[a]) addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
+      if (!autoSaid[a]) addEvent("automation", s.mac, r.outlet, (String(r.label).length() ? String(r.label) + " · " : String("")) + what + (cuts.length() ? " · o:" + cuts : String("")));
       autoSaid[a] = true;
     }
   }

@@ -407,7 +407,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
         ]),
       );
 
-  /// Long-press on a rule: edit, duplicate or delete.
+  /// the strip's switch: all of its rules on or off
   Future<void> _setAll(List<Automation> rules, bool on) async {
     for (final r in rules) {
       if (r.enabled == on) continue;
@@ -474,6 +474,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Tr.isAr ? 'اتنسخت ${rules.length} قاعدة' : 'Copied ${rules.length} rules')));
   }
 
+  /// Long-press on a rule: edit, duplicate or delete.
   Future<void> _ruleMenu(Automation a) async {
     final name = a.label.isNotEmpty ? a.label : s.nameForMac(a.mac, a.outlet);
     final act = await showModalBottomSheet<String>(
