@@ -386,7 +386,7 @@ int needRole(const String& p) {
   if (p == "state" || p == "events" || p == "energy" || p == "link" || p == "schedules" || p == "automations" || p == "profile" || p == "outlet_log") return 0;
   if (p == "onoff" || p == "refresh" || p == "timer" || p == "timer_cancel" || p == "schedule_save" || p == "schedule_delete" || p == "schedule_skip") return 1;
   if (p == "label" || p == "lock" || p == "protect" || p == "autooff" || p == "keepon" || p == "amplimit" || p == "automation_save" || p == "automation_delete" || p == "scen_list" || p == "scen_save" || p == "scen_delete") return 2;
-  if (p == "wifi" || p == "strip_wifi_test" || p == "reboot" || p == "time_sync") return 2;
+  if (p == "wifi" || p == "strip_wifi_test" || p == "reboot" || p == "time_sync" || p == "set_time") return 2;
   return -1;
 }
 // the extra permission that lets a lower role do an admin action anyway (0 = none)
@@ -396,7 +396,7 @@ uint8_t grantFor(const String& p) {
   if (p == "wifi" || p == "strip_wifi_test") return P_WIFI;
   return 0;
 }
-bool globalAction(const String& p) { return p == "wifi" || p == "strip_wifi_test" || p == "reboot" || p == "profile" || p == "time_sync"; }
+bool globalAction(const String& p) { return p == "wifi" || p == "strip_wifi_test" || p == "reboot" || p == "profile" || p == "time_sync" || p == "set_time"; }
 // the mac an action touches ("" = none / global)
 String actionMac(const String& p, const String& b) {
   if (p == "timer_cancel") {

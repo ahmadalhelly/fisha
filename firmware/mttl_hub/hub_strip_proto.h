@@ -270,7 +270,7 @@ void sendStripLimits(Strip& s) {
   uint16_t ov = (uint16_t)constrain((int)vMax, 220, 280);
   uint16_t ma = aProt ? (uint16_t)constrain((int)round(aMax * 1000.0f), 500, 16500) : 16500;
   uint16_t pw = (uint16_t)constrain((int)STRIP_MAX_W, 50, 3680);
-  uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 25, 95) : 95;
+  uint8_t  tp = tempProtect ? (uint8_t)constrain((int)tempMax, 15, 95) : 95;
   uint16_t hs = (uint16_t)constrain((int)protHoldS, 1, 600);
   // The strip enforces its own limits when the hub is off, so the whole-strip rules that switch off (act 2 = off, 3 = both)
   // go to it too: the strip has one limit per kind, for the whole strip, so a rule on a single outlet stays with the hub.
@@ -286,11 +286,11 @@ void sendStripLimits(Strip& s) {
         if (r.above && v >= 50.0f && (uint16_t)v < pw) { pw = (uint16_t)v; used = true; }
         break;
       case 1:                                                  // degrees
-        if (r.above && v >= 25.0f && (uint8_t)v < tp) { tp = (uint8_t)constrain((int)v, 25, 95); used = true; }
+        if (r.above && v >= 15.0f && (uint8_t)v < tp) { tp = (uint8_t)constrain((int)v, 15, 95); used = true; }
         break;
       case 2:                                                  // watts or degrees
         if (v >= 50.0f && (uint16_t)v < pw) { pw = (uint16_t)v; used = true; }
-        if (r.limit2 >= 25.0f && (uint8_t)r.limit2 < tp) { tp = (uint8_t)constrain((int)r.limit2, 25, 95); used = true; }
+        if (r.limit2 >= 15.0f && (uint8_t)r.limit2 < tp) { tp = (uint8_t)constrain((int)r.limit2, 15, 95); used = true; }
         break;
       case 3:                                                  // amps
         if (r.above && v >= 0.5f && (uint16_t)(v * 1000.0f) < ma) { ma = (uint16_t)constrain((int)(v * 1000.0f), 500, 16500); used = true; }
@@ -304,6 +304,43 @@ void sendStripLimits(Strip& s) {
   }
   sendLine(s, "up:limits:" + String(uv) + ":" + String(ov) + ":" + String(ma) + ":" +
               String(pw) + ":" + String(tp) + ":" + String(hs));
+}
+
+// F1.0.95 keeps limits per outlet: up:olimits:<ch>:<mA>:<W>:<degC>:<hold s>. An outlet's own limit is the smallest of its
+// current limit (the amp limit set on the outlet) and the enabled rules of that outlet that switch it off; a kind with no
+// limit goes to the top of its range, so the strip never cuts on it.
+void sendOutletLimit(Strip& s, int ch) {
+  if (ch < 1 || ch > 4) return;
+  uint16_t ma = 16500, pw = 3680;
+  uint8_t tp = 95;
+  uint16_t hs = (uint16_t)constrain((int)protHoldS, 1, 600);
+  bool ruleHold = false;
+  float a = s.ampX2[ch - 1] / 2.0f;                       // the outlet's own amp limit (0 = none)
+  if (a >= 0.5f) ma = (uint16_t)constrain((int)round(a * 1000.0f), 500, 16500);
+  for (int i = 0; i < autoCount; i++) {
+    const Autom& r = autos[i];
+    if (!r.enabled || !(r.act & 2) || r.outlet != ch) continue;
+    if (strlen(r.mac) && !s.mac.equalsIgnoreCase(r.mac)) continue;
+    bool used = false;
+    float v = r.watts;
+    switch (r.metric) {
+      case 0:
+        if (r.above && v >= 1.0f && (uint16_t)v < pw) { pw = (uint16_t)constrain((int)v, 1, 3680); used = true; }
+        break;
+      case 1:
+        if (r.above && v >= 15.0f && (uint8_t)v < tp) { tp = (uint8_t)constrain((int)v, 15, 95); used = true; }
+        break;
+      case 2:
+        if (v >= 1.0f && (uint16_t)v < pw) { pw = (uint16_t)constrain((int)v, 1, 3680); used = true; }
+        if (r.limit2 >= 15.0f && (uint8_t)r.limit2 < tp) { tp = (uint8_t)constrain((int)r.limit2, 15, 95); used = true; }
+        break;
+      case 3:
+        if (r.above && v >= 0.5f && (uint16_t)(v * 1000.0f) < ma) { ma = (uint16_t)constrain((int)(v * 1000.0f), 500, 16500); used = true; }
+        break;
+    }
+    if (used && r.holdS >= 1 && r.holdS <= 600 && (!ruleHold || r.holdS < hs)) { hs = r.holdS; ruleHold = true; }
+  }
+  sendLine(s, "up:olimits:" + String(ch) + ":" + String(ma) + ":" + String(pw) + ":" + String(tp) + ":" + String(hs));
 }
 
 // The strip keeps one schedule. It gets the weekday schedule of this strip that comes next from now, so a new one is
@@ -338,8 +375,61 @@ uint32_t stripSchedKey(int i) {
   return ((c.id << 1) ^ ((uint32_t)c.days << 24) ^ ((uint32_t)c.hh << 16) ^ ((uint32_t)c.mm << 8) ^ ((uint32_t)c.outlet << 4) ^ (c.on ? 2U : 0U)) | 0x80000000UL;
 }
 
+// F1.0.95 holds four schedules: the weekday schedules of this strip that come next, nearest first (at most [maxN])
+int stripSchedPickN(const Strip& s, int* out, int maxN) {
+  long ins[MAX_SCHED];
+  int idx[MAX_SCHED], n = 0;
+  struct tm lt;
+  bool tOk = timeOk();
+  if (tOk) { time_t now = time(nullptr); localtime_r(&now, &lt); }
+  for (int i = 0; i < schedCount && n < MAX_SCHED; i++) {
+    const Sched& c = scheds[i];
+    if (!c.enabled || !c.days || !s.mac.equalsIgnoreCase(c.mac)) continue;
+    long in = 1;
+    if (tOk) {
+      long nowMin = lt.tm_hour * 60L + lt.tm_min - 2;
+      in = -1;
+      for (int d = 0; d < 8 && in < 0; d++) {
+        if (!(c.days & (1 << ((lt.tm_wday + d) % 7)))) continue;
+        long t = d * 1440L + c.hh * 60L + c.mm - nowMin;
+        if (t > 0) in = t;
+      }
+      if (in <= 0) continue;
+    }
+    ins[n] = in; idx[n] = i; n++;
+  }
+  for (int a = 1; a < n; a++)                    // nearest first (insertion sort, n <= 20)
+    for (int b = a; b > 0 && ins[b] < ins[b - 1]; b--) { long t = ins[b]; ins[b] = ins[b - 1]; ins[b - 1] = t; int u = idx[b]; idx[b] = idx[b - 1]; idx[b - 1] = u; }
+  if (n > maxN) n = maxN;
+  for (int k = 0; k < n; k++) out[k] = idx[k];
+  return n;
+}
+
+uint32_t stripSchedKeyN(const int* pick, int n) {
+  if (n <= 0) return 1;
+  uint32_t k = 0x9E3779B1UL;
+  for (int i = 0; i < n; i++) k = (k << 5 | k >> 27) ^ stripSchedKey(pick[i]);
+  return k | 0x80000000UL;
+}
+
 void sendStripOfflineSched(Strip& s) {
   if (stripFwNum(s.fw) < 90) return;
+  if (stripFwNum(s.fw) >= 95) {                  // four slots: up:sched:<v>:<slot>; "none" clears all four
+    int pick[4];
+    int n = stripSchedPickN(s, pick, 4);
+    s.schedKey = stripSchedKeyN(pick, n);
+    if (n == 0) { sendLine(s, "up:sched:0:0:0:0"); strlcpy(s.schedSent, "0:0:0:0", sizeof s.schedSent); return; }
+    String all;
+    for (int k = 0; k < n; k++) {
+      const Sched& c = scheds[pick[k]];
+      uint16_t en_ch = (1U << 8) | ((c.on ? 1U : 0U) << 7) | (c.outlet & 0x07U);
+      String v = String(en_ch) + ":" + String(c.days & 0x7F) + ":" + String(c.hh) + ":" + String(c.mm);
+      sendLine(s, "up:sched:" + v + ":" + String(k));
+      all += (k ? "|" : "") + v;
+    }
+    strlcpy(s.schedSent, all.c_str(), sizeof s.schedSent);
+    return;
+  }
   int i = stripSchedPick(s);
   s.schedKey = stripSchedKey(i);
   if (i < 0) { sendLine(s, "up:sched:0:0:0:0"); strlcpy(s.schedSent, "0:0:0:0", sizeof s.schedSent); return; }
@@ -359,7 +449,10 @@ void stripSchedTick() {
   for (int i = 0; i < MAX_STRIPS; i++) {
     Strip& s = strips[i];
     if (!s.used || !s.identified || stripFwNum(s.fw) < 90 || s.cfgSyncStep || s.txq.length()) continue;
-    if (stripSchedKey(stripSchedPick(s)) != s.schedKey) sendStripOfflineSched(s);
+    bool changed;
+    if (stripFwNum(s.fw) >= 95) { int pick[4]; int n = stripSchedPickN(s, pick, 4); changed = stripSchedKeyN(pick, n) != s.schedKey; }
+    else changed = stripSchedKey(stripSchedPick(s)) != s.schedKey;
+    if (changed) sendStripOfflineSched(s);
   }
 }
 
@@ -381,7 +474,11 @@ void pollStrips() {
         continue;
       } else if (s.cfgSyncStep == 3) {
         sendStripLimits(s);
-        s.cfgSyncStep = 4;
+        s.cfgSyncStep = stripFwNum(s.fw) >= 95 ? 5 : 4;
+        continue;
+      } else if (s.cfgSyncStep >= 5 && s.cfgSyncStep <= 8) {   // F1.0.95: one outlet's limits per pass
+        sendOutletLimit(s, s.cfgSyncStep - 4);
+        s.cfgSyncStep = s.cfgSyncStep == 8 ? 4 : s.cfgSyncStep + 1;
         continue;
       } else if (s.cfgSyncStep == 4) {
         sendStripOfflineSched(s);

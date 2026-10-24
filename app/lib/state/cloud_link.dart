@@ -206,6 +206,7 @@ extension AppStateCloudLink on AppState {
       hubBuild = (j['hub_build'] as num?)?.toInt() ?? hubBuild;
       _noteHubVersion();
       hubTimeOk = j['time_ok'] == true;
+      if (!hubTimeOk && j.containsKey('time_ok')) pushPhoneTime();   // a hub with no clock takes the phone's
       if (j.containsKey('uptime_s')) hubUptimeS = (j['uptime_s'] as num?)?.toInt() ?? hubUptimeS;
       final pv = j['provision'];
       if (pv is Map) {

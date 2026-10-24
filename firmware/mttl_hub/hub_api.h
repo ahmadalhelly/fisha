@@ -577,6 +577,7 @@ ApiRes api(String path, const String& b) {
     strips[idx].ampX2[outlet - 1] = (uint8_t)round(maxA * 2.0f);
     cfg.putBytes(("x" + strips[idx].mac).c_str(), strips[idx].ampX2, sizeof(strips[idx].ampX2));
     refreshKnown(strips[idx].mac);
+    if (stripFwNum(strips[idx].fw) >= 95) strips[idx].cfgSyncStep = 3;   // the strip keeps the outlet's limit itself (F1.0.95)
     stateDirty = true;
     return okRes();
   }
@@ -586,7 +587,7 @@ ApiRes api(String path, const String& b) {
       z0.trim();
       if (z0.length() && !tzPosixFor(z0.c_str())) return errRes("unknown zone");
     }
-    if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 25, 95); cfg.putUChar("tmax", tempMax); }   // the strip accepts 40..95
+    if (jsonHas(b, "temp_max")) { tempMax = constrain(jsonValue(b, "temp_max").toInt(), 15, 95); cfg.putUChar("tmax", tempMax); }   // the strip accepts 40..95
     if (jsonHas(b, "temp_protect")) { tempProtect = jsonBool(b, "temp_protect"); cfg.putBool("tprot", tempProtect); }
     if (jsonHas(b, "v_protect")) { vProt = jsonBool(b, "v_protect"); cfg.putBool("vprot", vProt); }
     if (jsonHas(b, "v_restore")) { vRestore = jsonBool(b, "v_restore"); cfg.putBool("vrest", vRestore); }
@@ -632,6 +633,22 @@ ApiRes api(String path, const String& b) {
   if (path == "scen_list") return okRes(scenListJson());
   if (path == "scen_save") return scenSave(b);
   if (path == "scen_delete") return scenDelete((uint16_t)jsonValue(b, "id").toInt());
+  if (path == "set_time") {                      // {"ts": UTC epoch, "tz_min"}: the phone gives the hub the time when it has none yet
+    if (timeOk()) return okRes("{\"set\":false}");
+    uint32_t ts = (uint32_t)jsonValue(b, "ts").toInt();
+    if (ts < 1700000000UL) return errRes("bad time");
+    struct timeval tv = { (time_t)ts, 0 };
+    settimeofday(&tv, nullptr);
+    if (jsonHas(b, "tz_min") && !tzZone[0]) {
+      tzOffsetMin = (int16_t)constrain((int)jsonValue(b, "tz_min").toInt(), -720, 840);
+      cfg.putShort("tzmin3", tzOffsetMin);
+      applyHubTimezone();
+    }
+    for (int i = 0; i < MAX_STRIPS; i++)
+      if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) strips[i].cfgSyncStep = 1;
+    stateDirty = true;
+    return okRes("{\"set\":true}");
+  }
   if (path == "time_sync") {                     // send every strip the time and the offset again now
     for (int i = 0; i < MAX_STRIPS; i++)
       if (strips[i].used && strips[i].identified && stripFwNum(strips[i].fw) >= 90) strips[i].cfgSyncStep = 1;

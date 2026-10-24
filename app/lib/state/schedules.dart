@@ -19,6 +19,7 @@ extension AppStateSchedules on AppState {
   /// as soon as the hub is back (a time that passed meanwhile runs at once), so the save still counts.
   Future<bool> saveSchedule(Schedule s) async {
     if (s.sid < 0) return _queueEdit('schedule', 'sid', s.sid, s.toJson());
+    if (!hubTimeOk) await pushPhoneTime();           // the strip runs its schedule by the clock the hub gives it
     final r = await api('schedule_save', s.toJson());
     if (_isConnErr(r)) return _queueEdit('schedule', 'sid', s.sid, s.toJson());
     _fail(r);

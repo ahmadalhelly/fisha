@@ -296,12 +296,17 @@ class _TimeZoneScreenState extends State<TimeZoneScreen> {
 
   /// the schedule the strip holds by itself ("386:20:18:30" = on, outlet 2, Tue and Thu, 18:30)
   String _oschedText(Strip st) {
-    final p = st.osched.split(':').map((x) => int.tryParse(x) ?? 0).toList();
-    if (p.length < 4 || (p[0] >> 8) == 0) return _tr('مفيش ميعاد جوه المشترك', 'No schedule inside the strip');
-    final on = (p[0] >> 7) & 1 == 1, n = p[0] & 7;
-    final what = on ? _tr('تشغيل', 'on') : _tr('إيقاف', 'off');
-    final who = n == 0 ? _tr('المشترك كله', 'whole strip') : s.outletName(st, n);
-    return _tr('جوه المشترك: ${fmtTime12(p[2], p[3])} $what · $who · ${daysText(p[1])}', 'In the strip: ${fmtTime12(p[2], p[3])} $what · $who · ${daysText(p[1])}');
+    final lines = <String>[];
+    for (final one in st.osched.split('|')) {
+      final p = one.split(':').map((x) => int.tryParse(x) ?? 0).toList();
+      if (p.length < 4 || (p[0] >> 8) == 0) continue;
+      final on = (p[0] >> 7) & 1 == 1, n = p[0] & 7;
+      final what = on ? _tr('تشغيل', 'on') : _tr('إيقاف', 'off');
+      final who = n == 0 ? _tr('المشترك كله', 'whole strip') : s.outletName(st, n);
+      lines.add('${fmtTime12(p[2], p[3])} $what · $who · ${daysText(p[1])}');
+    }
+    if (lines.isEmpty) return _tr('مفيش ميعاد جوه المشترك', 'No schedule inside the strip');
+    return (_tr('جوه المشترك:', 'In the strip:')) + '\n' + lines.join('\n');
   }
 
   Widget _clock(String label, String time, String sub) => Container(

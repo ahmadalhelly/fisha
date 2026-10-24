@@ -259,6 +259,14 @@ extension AppStateStripControl on AppState {
     _fail(await api('config', {'tz_min': minutes}));
   }
 
+  /// the hub has no time yet (no internet): give it the phone's, so schedules run exactly even without a router connection
+  Future<void> pushPhoneTime() async {
+    final now = DateTime.now();
+    if (_phoneTimeAt != null && now.difference(_phoneTimeAt!) < const Duration(seconds: 45)) return;
+    _phoneTimeAt = now;
+    await api('set_time', {'ts': now.millisecondsSinceEpoch ~/ 1000, 'tz_min': now.timeZoneOffset.inMinutes});
+  }
+
   /// sends every strip the time and the offset again now
   Future<void> syncTimeNow() async {
     _fail(await api('time_sync'));

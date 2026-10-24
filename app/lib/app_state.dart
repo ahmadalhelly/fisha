@@ -217,6 +217,7 @@ class AppState extends ChangeNotifier {
   bool vProtect = true, vRestore = true, aProtect = true;
   // after a voltage cut: seconds the mains must stay steady, and the window (0 = 5 V inside the limits)
   int vBackS = 60, vBackLo = 0, vBackHi = 0;
+  DateTime? _phoneTimeAt; // when the phone last gave the hub its time
 
   int vMax = 260;
 

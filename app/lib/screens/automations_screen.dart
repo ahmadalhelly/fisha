@@ -396,7 +396,7 @@ class _AutomationsScreenState extends State<AutomationsScreen> {
           const SizedBox(height: 8),
           ValueStepper(
             value: s.tempMax.toDouble(),
-            min: 25,
+            min: 15,
             max: 95,
             step: 1,
             unit: '°C',
